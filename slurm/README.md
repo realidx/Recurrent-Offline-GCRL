@@ -24,3 +24,8 @@ sbatch \
   --export=ALL,WANDB_MODE=online,CONDA_ENV=recurrent,DATASET_DIR=/scratch/$USER/ogbench_data,LOG_ROOT=/scratch/$USER/logs/phase_0 \
   slurm/repro_crl_antmaze_stitch_array.slurm
 ```
+
+If your compute nodes say `conda: command not found`, either:
+
+- Add your cluster’s `module load anaconda` / `module load miniconda` near the top of the `.slurm` file, or
+- Submit with `--export=ALL,CONDA_EXE=/full/path/to/conda,...` (e.g., `$HOME/miniconda3/bin/conda`).

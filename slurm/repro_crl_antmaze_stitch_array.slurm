@@ -1,12 +1,12 @@
 #!/bin/bash
 #SBATCH --job-name=crl_stitch
-#SBATCH --time=5:00:00
+#SBATCH --time=24:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=24G
 #SBATCH --gpus=1
 #SBATCH --output=logs/phase_0/slurm-%x-%A_%a.out
 #SBATCH --error=logs/phase_0/slurm-%x-%A_%a.err
-#SBATCH --array=0-11
+#SBATCH --array=0-19
 
 set -euo pipefail
 
@@ -18,12 +18,15 @@ if [[ ! -f "third_party/ogbench/impls/main.py" ]]; then
   exit 2
 fi
 
+IMPL_DIR="${SLURM_SUBMIT_DIR}/third_party/ogbench/impls"
+
 # ---- User knobs ----
 CONDA_ENV="${CONDA_ENV:-recurrent}"
+CONDA_EXE="${CONDA_EXE:-conda}"               # e.g., /home/$USER/miniconda3/bin/conda
 WANDB_MODE="${WANDB_MODE:-offline}"           # set online if compute nodes can reach wandb and you have WANDB_API_KEY
 RUN_GROUP="${RUN_GROUP:-P0_CRL_AntMazeStitch}"
 LOG_ROOT="${LOG_ROOT:-${SLURM_SUBMIT_DIR}/logs/phase_0}"
-SAVE_DIR="${SAVE_DIR:-${SLURM_SUBMIT_DIR}/exp}"
+SAVE_DIR="${SAVE_DIR:-${LOG_ROOT}/exp}"
 DATASET_DIR="${DATASET_DIR:-${SLURM_SUBMIT_DIR}/.ogbench_data}"
 
 TRAIN_STEPS="${TRAIN_STEPS:-1000000}"
@@ -46,7 +49,7 @@ ENVS=(
   "antmaze-giant-stitch-v0"
   "antmaze-teleport-stitch-v0"
 )
-SEEDS=(0 1 2)
+SEEDS=(0 1 2 3 4)
 
 idx="${SLURM_ARRAY_TASK_ID}"
 env_idx=$(( idx % ${#ENVS[@]} ))
@@ -65,7 +68,7 @@ if [[ "${ENV_NAME}" == "antmaze-giant-stitch-v0" ]]; then
 fi
 
 cmd=(
-  python third_party/ogbench/impls/main.py
+  python main.py
   "--run_group=${RUN_GROUP}"
   "--save_dir=${SAVE_DIR}"
   "--seed=${SEED}"
@@ -80,5 +83,27 @@ cmd=(
   "${EXTRA_AGENT_FLAGS[@]}"
 )
 
-echo "WANDB_MODE=${WANDB_MODE} OGBENCH_DATASET_DIR=${OGBENCH_DATASET_DIR} ${cmd[*]}"
-conda run -n "${CONDA_ENV}" env WANDB_MODE="${WANDB_MODE}" "${cmd[@]}"
+cd "${IMPL_DIR}"
+echo "cwd=$(pwd) WANDB_MODE=${WANDB_MODE} OGBENCH_DATASET_DIR=${OGBENCH_DATASET_DIR} ${cmd[*]}"
+if ! command -v "${CONDA_EXE}" >/dev/null 2>&1; then
+  # Non-interactive SLURM jobs often don't have conda initialized; try common conda.sh locations.
+  for conda_sh in \
+    "${HOME}/miniconda3/etc/profile.d/conda.sh" \
+    "${HOME}/anaconda3/etc/profile.d/conda.sh" \
+    "/opt/conda/etc/profile.d/conda.sh" \
+    "/opt/anaconda3/etc/profile.d/conda.sh"; do
+    if [[ -f "${conda_sh}" ]]; then
+      # shellcheck source=/dev/null
+      source "${conda_sh}"
+      break
+    fi
+  done
+fi
+
+if ! command -v "${CONDA_EXE}" >/dev/null 2>&1; then
+  echo "Error: 'conda' not found in this job environment." >&2
+  echo "Fix: load your anaconda/miniconda module, or pass CONDA_EXE=/full/path/to/conda via --export." >&2
+  exit 3
+fi
+
+"${CONDA_EXE}" run -n "${CONDA_ENV}" env WANDB_MODE="${WANDB_MODE}" "${cmd[@]}"
