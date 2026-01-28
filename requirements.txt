@@ -1,0 +1,5 @@
+# Local CPU dev / sanity checks.
+-r requirements-base.txt
+
+# CPU JAX (use `requirements-cuda12.txt` on an NVIDIA/CUDA server).
+jax >= 0.4.26

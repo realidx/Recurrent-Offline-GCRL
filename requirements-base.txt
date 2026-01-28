@@ -1,0 +1,11 @@
+-e ./third_party/ogbench
+
+# Training deps for OGBench reference implementations.
+flax >= 0.8.4
+distrax >= 0.1.5
+ml_collections
+absl-py
+tqdm
+wandb
+matplotlib
+moviepy
