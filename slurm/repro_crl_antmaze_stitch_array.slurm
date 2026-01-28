@@ -4,7 +4,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=24G
 #SBATCH --gpus=1
-#SBATCH --output=slurm-%x-%A_%a.out
+#SBATCH --output=logs/phase_0/slurm-%x-%A_%a.out
+#SBATCH --error=logs/phase_0/slurm-%x-%A_%a.err
 #SBATCH --array=0-11
 
 set -euo pipefail
@@ -21,6 +22,7 @@ fi
 CONDA_ENV="${CONDA_ENV:-recurrent}"
 WANDB_MODE="${WANDB_MODE:-offline}"           # set online if compute nodes can reach wandb and you have WANDB_API_KEY
 RUN_GROUP="${RUN_GROUP:-P0_CRL_AntMazeStitch}"
+LOG_ROOT="${LOG_ROOT:-${SLURM_SUBMIT_DIR}/logs/phase_0}"
 SAVE_DIR="${SAVE_DIR:-${SLURM_SUBMIT_DIR}/exp}"
 DATASET_DIR="${DATASET_DIR:-${SLURM_SUBMIT_DIR}/.ogbench_data}"
 
