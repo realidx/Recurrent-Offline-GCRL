@@ -2,7 +2,7 @@
 #SBATCH --job-name=crl_stitch
 #SBATCH --time=5:00:00
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=32G
+#SBATCH --mem=24G
 #SBATCH --gpus=1
 #SBATCH --output=slurm-%x-%A_%a.out
 #SBATCH --array=0-11
@@ -10,6 +10,12 @@
 set -euo pipefail
 
 cd "${SLURM_SUBMIT_DIR}"
+
+# The training script lives under `third_party/ogbench/impls`. Ensure it exists before submitting jobs.
+if [[ ! -f "third_party/ogbench/impls/main.py" ]]; then
+  echo "Error: missing third_party/ogbench/impls/main.py. Run ./scripts/bootstrap_ogbench.sh on the login node first." >&2
+  exit 2
+fi
 
 # ---- User knobs ----
 CONDA_ENV="${CONDA_ENV:-recurrent}"
@@ -74,4 +80,3 @@ cmd=(
 
 echo "WANDB_MODE=${WANDB_MODE} OGBENCH_DATASET_DIR=${OGBENCH_DATASET_DIR} ${cmd[*]}"
 conda run -n "${CONDA_ENV}" env WANDB_MODE="${WANDB_MODE}" "${cmd[@]}"
-

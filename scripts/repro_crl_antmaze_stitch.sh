@@ -37,6 +37,11 @@ DATASETS=(
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+if [[ ! -f "${REPO_ROOT}/third_party/ogbench/impls/main.py" ]]; then
+  echo "Missing third_party/ogbench/impls; bootstrapping OGBench checkout..." >&2
+  "${REPO_ROOT}/scripts/bootstrap_ogbench.sh"
+fi
+
 if [[ "${SAVE_DIR}" == "exp/" ]]; then
   # Default to a repo-root output directory even though we run from `third_party/ogbench/impls`.
   SAVE_DIR="${REPO_ROOT}/exp/"

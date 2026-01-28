@@ -1,0 +1,37 @@
+diff --git a/impls/utils/env_utils.py b/impls/utils/env_utils.py
+index 6b17e11..00ef632 100644
+--- a/impls/utils/env_utils.py
++++ b/impls/utils/env_utils.py
+@@ -87,7 +87,13 @@ def make_env_and_datasets(dataset_name, frame_stack=None):
+         A tuple of the environment, training dataset, and validation dataset.
+     """
+     # Use compact dataset to save memory.
+-    env, train_dataset, val_dataset = ogbench.make_env_and_datasets(dataset_name, compact_dataset=True)
++    dataset_dir = os.environ.get('OGBENCH_DATASET_DIR', None)
++    if dataset_dir is None or dataset_dir == '':
++        env, train_dataset, val_dataset = ogbench.make_env_and_datasets(dataset_name, compact_dataset=True)
++    else:
++        env, train_dataset, val_dataset = ogbench.make_env_and_datasets(
++            dataset_name, compact_dataset=True, dataset_dir=dataset_dir
++        )
+     train_dataset = Dataset.create(**train_dataset)
+     val_dataset = Dataset.create(**val_dataset)
+ 
+diff --git a/impls/utils/log_utils.py b/impls/utils/log_utils.py
+index 9c421dd..18a88c4 100644
+--- a/impls/utils/log_utils.py
++++ b/impls/utils/log_utils.py
+@@ -64,9 +64,12 @@ def setup_wandb(
+     project='project',
+     group=None,
+     name=None,
+-    mode='online',
++    mode=None,
+ ):
+     """Set up Weights & Biases for logging."""
++    if mode is None:
++        mode = os.environ.get('WANDB_MODE', 'online')
++
+     wandb_output_dir = tempfile.mkdtemp()
+     tags = [group] if group is not None else None
+
