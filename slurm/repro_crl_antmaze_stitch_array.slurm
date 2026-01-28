@@ -6,7 +6,7 @@
 #SBATCH --gpus=1
 #SBATCH --output=logs/phase_0/slurm-%x-%A_%a.out
 #SBATCH --error=logs/phase_0/slurm-%x-%A_%a.err
-#SBATCH --array=0-19
+#SBATCH --array=0-11
 
 set -euo pipefail
 
@@ -49,7 +49,7 @@ ENVS=(
   "antmaze-giant-stitch-v0"
   "antmaze-teleport-stitch-v0"
 )
-SEEDS=(0 1 2 3 4)
+SEEDS=(0 1 2)
 
 idx="${SLURM_ARRAY_TASK_ID}"
 env_idx=$(( idx % ${#ENVS[@]} ))
