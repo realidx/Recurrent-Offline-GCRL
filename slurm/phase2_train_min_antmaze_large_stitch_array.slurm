@@ -1,6 +1,6 @@
 #!/bin/bash
-#SBATCH --job-name=p2_min
-#SBATCH --time=24:00:00
+#SBATCH --job-name=p2_train_min
+#SBATCH --time=05:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
 #SBATCH --gpus=1
@@ -31,19 +31,21 @@ CONDA_EXE="${CONDA_EXE:-conda}"
 WANDB_MODE="${WANDB_MODE:-offline}"
 
 ENV_NAME="${ENV_NAME:-antmaze-large-stitch-v0}"
-RUN_GROUP="${RUN_GROUP:-P2_Min_Depth6}"
+RUN_GROUP="${RUN_GROUP:-P2_TrainOnly_Depth6}"
 SAVE_DIR="${SAVE_DIR:-${SLURM_SUBMIT_DIR}/exp}"
 DATASET_DIR="${DATASET_DIR:-${SLURM_SUBMIT_DIR}/.ogbench_data}"
-CRITIC_EVAL_NUM_ITERS="${CRITIC_EVAL_NUM_ITERS:-}"
 
+# Train settings.
 TRAIN_STEPS="${TRAIN_STEPS:-1000000}"
 LOG_INTERVAL="${LOG_INTERVAL:-20000}"
 VALIDATION_LOG_INTERVAL="${VALIDATION_LOG_INTERVAL:-100000}"
-EVAL_INTERVAL="${EVAL_INTERVAL:-200000}"
-SAVE_INTERVAL="${SAVE_INTERVAL:-1000000}"
-EVAL_EPISODES="${EVAL_EPISODES:-50}"
-VIDEO_EPISODES="${VIDEO_EPISODES:-0}"
+SAVE_INTERVAL="${SAVE_INTERVAL:-200000}"
 DISABLE_TQDM="${DISABLE_TQDM:-1}"
+
+# Disable evaluation during training to maximize training throughput (important on 5h jobs).
+EVAL_INTERVAL="${EVAL_INTERVAL:-0}"
+EVAL_EPISODES="${EVAL_EPISODES:-0}"
+VIDEO_EPISODES="${VIDEO_EPISODES:-0}"
 
 export MUJOCO_GL="${MUJOCO_GL:-egl}"
 export WANDB_SILENT="${WANDB_SILENT:-true}"
@@ -85,10 +87,6 @@ AGENT_FLAGS=(
   "--agent.critic_layerscale_init=1e-2"
 )
 
-if [[ -n "${CRITIC_EVAL_NUM_ITERS}" ]]; then
-  AGENT_FLAGS+=("--agent.critic_eval_num_iters=${CRITIC_EVAL_NUM_ITERS}")
-fi
-
 if [[ "${CRITIC_BACKBONE}" == "resnet" ]]; then
   AGENT_FLAGS+=(
     "--agent.critic_backbone=resnet"
@@ -127,9 +125,9 @@ cmd=(
   "--log_interval=${LOG_INTERVAL}"
   "--validation_log_interval=${VALIDATION_LOG_INTERVAL}"
   "--eval_interval=${EVAL_INTERVAL}"
-  "--save_interval=${SAVE_INTERVAL}"
   "--eval_episodes=${EVAL_EPISODES}"
   "--video_episodes=${VIDEO_EPISODES}"
+  "--save_interval=${SAVE_INTERVAL}"
   "--disable_tqdm=${DISABLE_TQDM}"
   "--agent=agents/crl.py"
   "${AGENT_FLAGS[@]}"

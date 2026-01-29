@@ -100,10 +100,10 @@ index 53109ab..9c80cd3 100644
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
 diff --git a/impls/main.py b/impls/main.py
-index 3660e03..da8f641 100644
+index 3660e03..74292b6 100644
 --- a/impls/main.py
 +++ b/impls/main.py
-@@ -28,13 +28,22 @@ flags.DEFINE_integer('restore_epoch', None, 'Restore epoch.')
+@@ -28,16 +28,26 @@ flags.DEFINE_integer('restore_epoch', None, 'Restore epoch.')
  
  flags.DEFINE_integer('train_steps', 1000000, 'Number of training steps.')
  flags.DEFINE_integer('log_interval', 5000, 'Logging interval.')
@@ -126,12 +126,95 @@ index 3660e03..da8f641 100644
  flags.DEFINE_integer('video_episodes', 1, 'Number of video episodes for each task.')
  flags.DEFINE_integer('video_frame_skip', 3, 'Frame skip for videos.')
  flags.DEFINE_integer('eval_on_cpu', 1, 'Whether to evaluate on CPU.')
-@@ -91,7 +100,13 @@ def main(_):
++flags.DEFINE_bool('eval_only', False, 'Skip training and run evaluation only (requires --restore_path).')
+ 
+ config_flags.DEFINE_config_file('agent', 'agents/gciql.py', lock_config=False)
+ 
+@@ -85,13 +95,92 @@ def main(_):
+     # Restore agent.
+     if FLAGS.restore_path is not None:
+         agent = restore_agent(agent, FLAGS.restore_path, FLAGS.restore_epoch)
++    elif FLAGS.eval_only:
++        raise ValueError('--eval_only requires --restore_path and --restore_epoch.')
++
++    def run_evaluation(*, step: int, eval_agent):
++        eval_start = time.time()
++        renders = []
++        eval_metrics = {}
++        overall_metrics = defaultdict(list)
++        task_infos = env.unwrapped.task_infos if hasattr(env.unwrapped, 'task_infos') else env.task_infos
++        num_tasks = FLAGS.eval_tasks if FLAGS.eval_tasks is not None else len(task_infos)
++        for task_id in tqdm.trange(1, num_tasks + 1, disable=FLAGS.disable_tqdm):
++            task_name = task_infos[task_id - 1]['task_name']
++            eval_info, trajs, cur_renders = evaluate(
++                agent=eval_agent,
++                env=env,
++                task_id=task_id,
++                config=config,
++                num_eval_episodes=FLAGS.eval_episodes,
++                num_video_episodes=FLAGS.video_episodes,
++                video_frame_skip=FLAGS.video_frame_skip,
++                eval_temperature=FLAGS.eval_temperature,
++                eval_gaussian=FLAGS.eval_gaussian,
++                refine_steps=FLAGS.eval_refine_steps,
++                refine_lr=FLAGS.eval_refine_lr,
++                refine_l2=FLAGS.eval_refine_l2,
++            )
++            renders.extend(cur_renders)
++            metric_names = ['success', 'episode.return']
++            if FLAGS.eval_refine_steps and FLAGS.eval_refine_steps > 0:
++                metric_names += ['refine.q_pre', 'refine.q_post', 'refine.delta_a']
++            eval_metrics.update({f'evaluation/{task_name}_{k}': v for k, v in eval_info.items() if k in metric_names})
++            for k, v in eval_info.items():
++                if k in metric_names:
++                    overall_metrics[k].append(v)
++        for k, v in overall_metrics.items():
++            eval_metrics[f'evaluation/overall_{k}'] = np.mean(v)
++
++        if FLAGS.video_episodes > 0:
++            video = get_wandb_video(renders=renders, n_cols=num_tasks)
++            eval_metrics['video'] = video
++
++        # Log "critic score" stats on a fixed batch (debugging / drift detection).
++        eval_batch = train_dataset.sample(config['batch_size'])
++        if config['discrete']:
++            eval_batch['actions'] = np.full_like(eval_batch['actions'], env.action_space.n - 1)
++        critic_eval_num_iters = config.get('critic_eval_num_iters', None)
++        q_vals = eval_agent.network.select('critic')(
++            eval_batch['observations'],
++            eval_batch['value_goals'],
++            eval_batch['actions'],
++            num_iters=critic_eval_num_iters,
++        )
++        q_vals = np.asarray(q_vals)
++        eval_metrics['evaluation/Q_mean'] = float(q_vals.mean())
++        eval_metrics['evaluation/Q_std'] = float(q_vals.std())
++        eval_metrics['evaluation/Q_abs_max'] = float(np.abs(q_vals).max())
++
++        eval_metrics['time/eval_time'] = time.time() - eval_start
++        eval_metrics['time/total_time'] = time.time() - first_time
++        wandb.log(eval_metrics, step=step)
++        eval_logger.log(eval_metrics, step=step)
+ 
+     # Train agent.
+     train_logger = CsvLogger(os.path.join(FLAGS.save_dir, 'train.csv'))
      eval_logger = CsvLogger(os.path.join(FLAGS.save_dir, 'eval.csv'))
      first_time = time.time()
      last_time = time.time()
 -    for i in tqdm.tqdm(range(1, FLAGS.train_steps + 1), smoothing=0.1, dynamic_ncols=True):
 +    validation_log_interval = FLAGS.validation_log_interval or FLAGS.log_interval
++
++    if FLAGS.eval_only:
++        eval_step = int(FLAGS.restore_epoch) if FLAGS.restore_epoch is not None else 0
++        if FLAGS.eval_on_cpu:
++            eval_agent = jax.device_put(agent, device=jax.devices('cpu')[0])
++        else:
++            eval_agent = agent
++        run_evaluation(step=eval_step, eval_agent=eval_agent)
++        train_logger.close()
++        eval_logger.close()
++        return
++
 +    for i in tqdm.tqdm(
 +        range(1, FLAGS.train_steps + 1),
 +        smoothing=0.1,
@@ -141,7 +224,7 @@ index 3660e03..da8f641 100644
          # Update agent.
          batch = train_dataset.sample(config['batch_size'])
          agent, update_info = agent.update(batch)
-@@ -99,11 +114,12 @@ def main(_):
+@@ -99,57 +188,24 @@ def main(_):
          # Log metrics.
          if i % FLAGS.log_interval == 0:
              train_metrics = {f'training/{k}': v for k, v in update_info.items()}
@@ -155,64 +238,54 @@ index 3660e03..da8f641 100644
              train_metrics['time/total_time'] = time.time() - first_time
              last_time = time.time()
              wandb.log(train_metrics, step=i)
-@@ -111,6 +127,7 @@ def main(_):
+             train_logger.log(train_metrics, step=i)
  
          # Evaluate agent.
-         if i == 1 or i % FLAGS.eval_interval == 0:
-+            eval_start = time.time()
+-        if i == 1 or i % FLAGS.eval_interval == 0:
++        if FLAGS.eval_interval and (i == 1 or i % FLAGS.eval_interval == 0):
              if FLAGS.eval_on_cpu:
                  eval_agent = jax.device_put(agent, device=jax.devices('cpu')[0])
              else:
-@@ -120,7 +137,7 @@ def main(_):
-             overall_metrics = defaultdict(list)
-             task_infos = env.unwrapped.task_infos if hasattr(env.unwrapped, 'task_infos') else env.task_infos
-             num_tasks = FLAGS.eval_tasks if FLAGS.eval_tasks is not None else len(task_infos)
+                 eval_agent = agent
+-            renders = []
+-            eval_metrics = {}
+-            overall_metrics = defaultdict(list)
+-            task_infos = env.unwrapped.task_infos if hasattr(env.unwrapped, 'task_infos') else env.task_infos
+-            num_tasks = FLAGS.eval_tasks if FLAGS.eval_tasks is not None else len(task_infos)
 -            for task_id in tqdm.trange(1, num_tasks + 1):
-+            for task_id in tqdm.trange(1, num_tasks + 1, disable=FLAGS.disable_tqdm):
-                 task_name = task_infos[task_id - 1]['task_name']
-                 eval_info, trajs, cur_renders = evaluate(
-                     agent=eval_agent,
-@@ -132,9 +149,14 @@ def main(_):
-                     video_frame_skip=FLAGS.video_frame_skip,
-                     eval_temperature=FLAGS.eval_temperature,
-                     eval_gaussian=FLAGS.eval_gaussian,
-+                    refine_steps=FLAGS.eval_refine_steps,
-+                    refine_lr=FLAGS.eval_refine_lr,
-+                    refine_l2=FLAGS.eval_refine_l2,
-                 )
-                 renders.extend(cur_renders)
+-                task_name = task_infos[task_id - 1]['task_name']
+-                eval_info, trajs, cur_renders = evaluate(
+-                    agent=eval_agent,
+-                    env=env,
+-                    task_id=task_id,
+-                    config=config,
+-                    num_eval_episodes=FLAGS.eval_episodes,
+-                    num_video_episodes=FLAGS.video_episodes,
+-                    video_frame_skip=FLAGS.video_frame_skip,
+-                    eval_temperature=FLAGS.eval_temperature,
+-                    eval_gaussian=FLAGS.eval_gaussian,
+-                )
+-                renders.extend(cur_renders)
 -                metric_names = ['success']
-+                metric_names = ['success', 'episode.return']
-+                if FLAGS.eval_refine_steps and FLAGS.eval_refine_steps > 0:
-+                    metric_names += ['refine.q_pre', 'refine.q_post', 'refine.delta_a']
-                 eval_metrics.update(
-                     {f'evaluation/{task_name}_{k}': v for k, v in eval_info.items() if k in metric_names}
-                 )
-@@ -148,6 +170,24 @@ def main(_):
-                 video = get_wandb_video(renders=renders, n_cols=num_tasks)
-                 eval_metrics['video'] = video
+-                eval_metrics.update(
+-                    {f'evaluation/{task_name}_{k}': v for k, v in eval_info.items() if k in metric_names}
+-                )
+-                for k, v in eval_info.items():
+-                    if k in metric_names:
+-                        overall_metrics[k].append(v)
+-            for k, v in overall_metrics.items():
+-                eval_metrics[f'evaluation/overall_{k}'] = np.mean(v)
+-
+-            if FLAGS.video_episodes > 0:
+-                video = get_wandb_video(renders=renders, n_cols=num_tasks)
+-                eval_metrics['video'] = video
+-
+-            wandb.log(eval_metrics, step=i)
+-            eval_logger.log(eval_metrics, step=i)
++            run_evaluation(step=i, eval_agent=eval_agent)
  
-+            # Log "critic score" stats on a fixed batch (debugging / drift detection).
-+            eval_batch = train_dataset.sample(config['batch_size'])
-+            if config['discrete']:
-+                eval_batch['actions'] = np.full_like(eval_batch['actions'], env.action_space.n - 1)
-+            critic_eval_num_iters = config.get('critic_eval_num_iters', None)
-+            q_vals = eval_agent.network.select('critic')(
-+                eval_batch['observations'],
-+                eval_batch['value_goals'],
-+                eval_batch['actions'],
-+                num_iters=critic_eval_num_iters,
-+            )
-+            q_vals = np.asarray(q_vals)
-+            eval_metrics['evaluation/Q_mean'] = float(q_vals.mean())
-+            eval_metrics['evaluation/Q_std'] = float(q_vals.std())
-+            eval_metrics['evaluation/Q_abs_max'] = float(np.abs(q_vals).max())
-+
-+            eval_metrics['time/eval_time'] = time.time() - eval_start
-+            eval_metrics['time/total_time'] = time.time() - first_time
-             wandb.log(eval_metrics, step=i)
-             eval_logger.log(eval_metrics, step=i)
- 
+         # Save agent.
+         if i % FLAGS.save_interval == 0:
 diff --git a/impls/utils/env_utils.py b/impls/utils/env_utils.py
 index 6b17e11..00ef632 100644
 --- a/impls/utils/env_utils.py

@@ -99,3 +99,26 @@ sbatch --export=ALL,RECUR_MATCH_HIDDEN_DIM=### slurm/phase2_min_antmaze_large_st
 # Optional: more test-time iterations (tied-only).
 sbatch --export=ALL,RECUR_MATCH_HIDDEN_DIM=###,CRITIC_EVAL_NUM_ITERS=12 slurm/phase2_min_antmaze_large_stitch_array.slurm
 ```
+
+## If 5 hours isn’t enough: split Train vs Eval
+
+On multi-task environments (like AntMaze stitch), evaluation can dominate wall-clock because it runs
+`eval_tasks × eval_episodes` rollouts per eval interval. If your 5h GPU jobs don’t reach `train_steps`,
+use this split:
+
+- Train job: disable evaluation (`--eval_interval=0`) and save checkpoints frequently.
+- Eval job: load a checkpoint and run full evaluation once.
+
+Train-only (9 tasks, 5h default, saves every 200k steps):
+
+```bash
+mkdir -p logs/phase_2
+sbatch --export=ALL,RECUR_MATCH_HIDDEN_DIM=### slurm/phase2_train_min_antmaze_large_stitch_array.slurm
+```
+
+Eval-only (single job):
+
+```bash
+mkdir -p logs/phase_2
+sbatch --export=ALL,RESTORE_PATH='exp/OGBench/P2_TrainOnly_Depth6/sd000_*',RESTORE_EPOCH=1000000 slurm/phase2_eval_only.slurm
+```
