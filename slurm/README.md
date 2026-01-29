@@ -71,3 +71,31 @@ To test the tied model with more test-time compute (K_test), set `CRITIC_EVAL_NU
 ```bash
 sbatch --export=ALL,RECUR_MATCH_HIDDEN_DIM=###,CRITIC_EVAL_NUM_ITERS=12 slurm/phase1_min_antmaze_large_stitch_array.slurm
 ```
+
+## Phase 2: continue experiments (keep Phase 1 results intact)
+
+Phase 2 scripts are identical to Phase 1 scripts, but default to:
+
+- SLURM stdout/stderr: `logs/phase_2/`
+- `--run_group=P2_*` (so `exp/OGBench/P2_*/...` doesn’t collide with Phase 1)
+
+Full grid (21 tasks):
+
+```bash
+mkdir -p logs/phase_2
+sbatch slurm/phase2_critics_antmaze_large_stitch_array.slurm
+```
+
+Reduced (9 tasks) + optional `K_test` knob:
+
+```bash
+mkdir -p logs/phase_2
+
+OGBENCH_DATASET_DIR=.ogbench_data \
+  python scripts/match_recur_hidden_dim.py --dataset antmaze-large-stitch-v0 --resnet-depth 6 --recur-iters 6
+
+sbatch --export=ALL,RECUR_MATCH_HIDDEN_DIM=### slurm/phase2_min_antmaze_large_stitch_array.slurm
+
+# Optional: more test-time iterations (tied-only).
+sbatch --export=ALL,RECUR_MATCH_HIDDEN_DIM=###,CRITIC_EVAL_NUM_ITERS=12 slurm/phase2_min_antmaze_large_stitch_array.slurm
+```

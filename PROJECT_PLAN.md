@@ -190,6 +190,11 @@ Report:
 - success vs param count
 - success vs wall-clock (compute efficiency)
 
+Implementation note:
+
+- Use Phase 2 run groups (e.g., `P2_*`) so results are saved under `exp/OGBench/P2_*/...` and don’t collide with Phase 1.
+- Prefer SLURM scripts `slurm/phase2_min_antmaze_large_stitch_array.slurm` (reduced 9-task set) and `slurm/phase2_critics_antmaze_large_stitch_array.slurm` (full 21-task grid) for Phase 2 runs.
+
 ## Phase 3 — Type C experiments (test-time compute)
 1. Implement refinement (evaluation-only).
 2. Run refinement on baseline / deep untied / tied at the same `T, η`.
