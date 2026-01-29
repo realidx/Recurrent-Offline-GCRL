@@ -1,3 +1,211 @@
+diff --git a/impls/agents/crl.py b/impls/agents/crl.py
+index 53109ab..aa9d576 100644
+--- a/impls/agents/crl.py
++++ b/impls/agents/crl.py
+@@ -52,6 +52,7 @@ class CRLAgent(flax.struct.PyTreeNode):
+         # Compute additional statistics.
+         v = jnp.exp(v)
+         logits = jnp.mean(logits, axis=-1)
++        logits_diag = jnp.diag(logits)
+         correct = jnp.argmax(logits, axis=1) == jnp.argmax(I, axis=1)
+         logits_pos = jnp.sum(logits * I) / jnp.sum(I)
+         logits_neg = jnp.sum(logits * (1 - I)) / jnp.sum(1 - I)
+@@ -61,6 +62,13 @@ class CRLAgent(flax.struct.PyTreeNode):
+             'v_mean': v.mean(),
+             'v_max': v.max(),
+             'v_min': v.min(),
++            # "Q-like" score stats for debugging (diagonal = matched (s,a,g) pairs).
++            'q_mean': logits_diag.mean(),
++            'q_std': logits_diag.std(),
++            'q_abs_max': jnp.max(jnp.abs(logits_diag)),
++            # Full logits matrix stats (includes negatives).
++            'logits_std': logits.std(),
++            'logits_abs_max': jnp.max(jnp.abs(logits)),
+             'binary_accuracy': jnp.mean((logits > 0) == I),
+             'categorical_accuracy': jnp.mean(correct),
+             'logits_pos': logits_pos,
+@@ -104,6 +112,8 @@ class CRLAgent(flax.struct.PyTreeNode):
+             assert not self.config['discrete']
+ 
+             dist = self.network.select('actor')(batch['observations'], batch['actor_goals'], params=grad_params)
++            action_mode = dist.mode()
++            action_norm = jnp.linalg.norm(action_mode, axis=-1)
+             if self.config['const_std']:
+                 q_actions = jnp.clip(dist.mode(), -1, 1)
+             else:
+@@ -128,6 +138,11 @@ class CRLAgent(flax.struct.PyTreeNode):
+                 'bc_log_prob': log_prob.mean(),
+                 'mse': jnp.mean((dist.mode() - batch['actions']) ** 2),
+                 'std': jnp.mean(dist.scale_diag),
++                'action_mean': action_mode.mean(),
++                'action_std': action_mode.std(),
++                'action_norm': action_norm.mean(),
++                'action_abs_max': jnp.max(jnp.abs(action_mode)),
++                'action_saturation_frac': jnp.mean((jnp.abs(action_mode) > 0.99).astype(jnp.float32)),
+             }
+         else:
+             raise ValueError(f'Unsupported actor loss: {self.config["actor_loss"]}')
+@@ -231,6 +246,11 @@ class CRLAgent(flax.struct.PyTreeNode):
+                 state_encoder=encoders.get('critic_state'),
+                 goal_encoder=encoders.get('critic_goal'),
+                 action_dim=action_dim,
++                backbone=config['critic_backbone'],
++                resnet_num_blocks=config['critic_resnet_depth'],
++                recur_num_iters=config['critic_recur_iters'],
++                recur_max_iters=config['critic_recur_max_iters'],
++                layerscale_init=config['critic_layerscale_init'],
+             )
+         else:
+             critic_def = GCBilinearValue(
+@@ -241,6 +261,11 @@ class CRLAgent(flax.struct.PyTreeNode):
+                 value_exp=False,
+                 state_encoder=encoders.get('critic_state'),
+                 goal_encoder=encoders.get('critic_goal'),
++                backbone=config['critic_backbone'],
++                resnet_num_blocks=config['critic_resnet_depth'],
++                recur_num_iters=config['critic_recur_iters'],
++                recur_max_iters=config['critic_recur_max_iters'],
++                layerscale_init=config['critic_layerscale_init'],
+             )
+ 
+         if config['actor_loss'] == 'awr':
+@@ -253,6 +278,11 @@ class CRLAgent(flax.struct.PyTreeNode):
+                 value_exp=False,
+                 state_encoder=encoders.get('value_state'),
+                 goal_encoder=encoders.get('value_goal'),
++                backbone=config['critic_backbone'],
++                resnet_num_blocks=config['critic_resnet_depth'],
++                recur_num_iters=config['critic_recur_iters'],
++                recur_max_iters=config['critic_recur_max_iters'],
++                layerscale_init=config['critic_layerscale_init'],
+             )
+ 
+         if config['discrete']:
+@@ -306,6 +336,12 @@ def get_config():
+             const_std=True,  # Whether to use constant standard deviation for the actor.
+             discrete=False,  # Whether the action space is discrete.
+             encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
++            # Critic backbone (phi/psi) hyperparameters (architecture-only swap).
++            critic_backbone='mlp',  # 'mlp' | 'resnet' | 'recur_tied'
++            critic_resnet_depth=3,  # Untied ResNet blocks (used if critic_backbone='resnet').
++            critic_recur_iters=4,  # Tied iterations K_train (used if critic_backbone='recur_tied').
++            critic_recur_max_iters=32,  # Max step embedding table size.
++            critic_layerscale_init=1e-2,  # LayerScale init for resnet/recur.
+             # Dataset hyperparameters.
+             dataset_class='GCDataset',  # Dataset class name.
+             value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
+diff --git a/impls/main.py b/impls/main.py
+index 3660e03..bda4190 100644
+--- a/impls/main.py
++++ b/impls/main.py
+@@ -28,13 +28,22 @@ flags.DEFINE_integer('restore_epoch', None, 'Restore epoch.')
+ 
+ flags.DEFINE_integer('train_steps', 1000000, 'Number of training steps.')
+ flags.DEFINE_integer('log_interval', 5000, 'Logging interval.')
++flags.DEFINE_integer(
++    'validation_log_interval',
++    None,
++    'Validation logging interval (defaults to log_interval).',
++)
+ flags.DEFINE_integer('eval_interval', 100000, 'Evaluation interval.')
+ flags.DEFINE_integer('save_interval', 1000000, 'Saving interval.')
++flags.DEFINE_bool('disable_tqdm', False, 'Disable tqdm progress bars (reduces stderr spam).')
+ 
+ flags.DEFINE_integer('eval_tasks', None, 'Number of tasks to evaluate (None for all).')
+ flags.DEFINE_integer('eval_episodes', 20, 'Number of episodes for each task.')
+ flags.DEFINE_float('eval_temperature', 0, 'Actor temperature for evaluation.')
+ flags.DEFINE_float('eval_gaussian', None, 'Action Gaussian noise for evaluation.')
++flags.DEFINE_integer('eval_refine_steps', 0, 'Action refinement steps during evaluation (0 disables).')
++flags.DEFINE_float('eval_refine_lr', 0.05, 'Action refinement step size.')
++flags.DEFINE_float('eval_refine_l2', 0.0, 'Action refinement L2 penalty coefficient to keep actions near actor output.')
+ flags.DEFINE_integer('video_episodes', 1, 'Number of video episodes for each task.')
+ flags.DEFINE_integer('video_frame_skip', 3, 'Frame skip for videos.')
+ flags.DEFINE_integer('eval_on_cpu', 1, 'Whether to evaluate on CPU.')
+@@ -91,7 +100,13 @@ def main(_):
+     eval_logger = CsvLogger(os.path.join(FLAGS.save_dir, 'eval.csv'))
+     first_time = time.time()
+     last_time = time.time()
+-    for i in tqdm.tqdm(range(1, FLAGS.train_steps + 1), smoothing=0.1, dynamic_ncols=True):
++    validation_log_interval = FLAGS.validation_log_interval or FLAGS.log_interval
++    for i in tqdm.tqdm(
++        range(1, FLAGS.train_steps + 1),
++        smoothing=0.1,
++        dynamic_ncols=True,
++        disable=FLAGS.disable_tqdm,
++    ):
+         # Update agent.
+         batch = train_dataset.sample(config['batch_size'])
+         agent, update_info = agent.update(batch)
+@@ -99,11 +114,12 @@ def main(_):
+         # Log metrics.
+         if i % FLAGS.log_interval == 0:
+             train_metrics = {f'training/{k}': v for k, v in update_info.items()}
+-            if val_dataset is not None:
++            if val_dataset is not None and i % validation_log_interval == 0:
+                 val_batch = val_dataset.sample(config['batch_size'])
+                 _, val_info = agent.total_loss(val_batch, grad_params=None)
+                 train_metrics.update({f'validation/{k}': v for k, v in val_info.items()})
+             train_metrics['time/epoch_time'] = (time.time() - last_time) / FLAGS.log_interval
++            train_metrics['time/sps'] = FLAGS.log_interval / (train_metrics['time/epoch_time'] + 1e-8)
+             train_metrics['time/total_time'] = time.time() - first_time
+             last_time = time.time()
+             wandb.log(train_metrics, step=i)
+@@ -111,6 +127,7 @@ def main(_):
+ 
+         # Evaluate agent.
+         if i == 1 or i % FLAGS.eval_interval == 0:
++            eval_start = time.time()
+             if FLAGS.eval_on_cpu:
+                 eval_agent = jax.device_put(agent, device=jax.devices('cpu')[0])
+             else:
+@@ -120,7 +137,7 @@ def main(_):
+             overall_metrics = defaultdict(list)
+             task_infos = env.unwrapped.task_infos if hasattr(env.unwrapped, 'task_infos') else env.task_infos
+             num_tasks = FLAGS.eval_tasks if FLAGS.eval_tasks is not None else len(task_infos)
+-            for task_id in tqdm.trange(1, num_tasks + 1):
++            for task_id in tqdm.trange(1, num_tasks + 1, disable=FLAGS.disable_tqdm):
+                 task_name = task_infos[task_id - 1]['task_name']
+                 eval_info, trajs, cur_renders = evaluate(
+                     agent=eval_agent,
+@@ -132,9 +149,14 @@ def main(_):
+                     video_frame_skip=FLAGS.video_frame_skip,
+                     eval_temperature=FLAGS.eval_temperature,
+                     eval_gaussian=FLAGS.eval_gaussian,
++                    refine_steps=FLAGS.eval_refine_steps,
++                    refine_lr=FLAGS.eval_refine_lr,
++                    refine_l2=FLAGS.eval_refine_l2,
+                 )
+                 renders.extend(cur_renders)
+-                metric_names = ['success']
++                metric_names = ['success', 'episode.return']
++                if FLAGS.eval_refine_steps and FLAGS.eval_refine_steps > 0:
++                    metric_names += ['refine.q_pre', 'refine.q_post', 'refine.delta_a']
+                 eval_metrics.update(
+                     {f'evaluation/{task_name}_{k}': v for k, v in eval_info.items() if k in metric_names}
+                 )
+@@ -148,6 +170,22 @@ def main(_):
+                 video = get_wandb_video(renders=renders, n_cols=num_tasks)
+                 eval_metrics['video'] = video
+ 
++            # Log "critic score" stats on a fixed batch (debugging / drift detection).
++            eval_batch = train_dataset.sample(config['batch_size'])
++            if config['discrete']:
++                eval_batch['actions'] = np.full_like(eval_batch['actions'], env.action_space.n - 1)
++            q_vals = eval_agent.network.select('critic')(
++                eval_batch['observations'],
++                eval_batch['value_goals'],
++                eval_batch['actions'],
++            )
++            q_vals = np.asarray(q_vals)
++            eval_metrics['evaluation/Q_mean'] = float(q_vals.mean())
++            eval_metrics['evaluation/Q_std'] = float(q_vals.std())
++            eval_metrics['evaluation/Q_abs_max'] = float(np.abs(q_vals).max())
++
++            eval_metrics['time/eval_time'] = time.time() - eval_start
++            eval_metrics['time/total_time'] = time.time() - first_time
+             wandb.log(eval_metrics, step=i)
+             eval_logger.log(eval_metrics, step=i)
+ 
 diff --git a/impls/utils/env_utils.py b/impls/utils/env_utils.py
 index 6b17e11..00ef632 100644
 --- a/impls/utils/env_utils.py
@@ -17,6 +225,131 @@ index 6b17e11..00ef632 100644
      train_dataset = Dataset.create(**train_dataset)
      val_dataset = Dataset.create(**val_dataset)
  
+diff --git a/impls/utils/evaluation.py b/impls/utils/evaluation.py
+index a3a9944..c216eba 100644
+--- a/impls/utils/evaluation.py
++++ b/impls/utils/evaluation.py
+@@ -2,6 +2,7 @@ from collections import defaultdict
+ 
+ import jax
+ import numpy as np
++import jax.numpy as jnp
+ from tqdm import trange
+ 
+ 
+@@ -44,6 +45,9 @@ def evaluate(
+     video_frame_skip=3,
+     eval_temperature=0,
+     eval_gaussian=None,
++    refine_steps=0,
++    refine_lr=0.05,
++    refine_l2=0.0,
+ ):
+     """Evaluate the agent in the environment.
+ 
+@@ -65,6 +69,42 @@ def evaluate(
+     trajs = []
+     stats = defaultdict(list)
+ 
++    def _critic_score(ob, goal, action):
++        # CRL critic outputs an ensemble of bilinear scores; match actor loss aggregation (min over ensemble).
++        v = agent.network.select('critic')(ob[None, ...], goal[None, ...], action[None, ...])
++        if hasattr(v, 'ndim') and v.ndim >= 2:
++            # v shape: (E, B) or (B,). For B=1, take min over ensemble.
++            if v.ndim == 2:
++                return jnp.min(v[:, 0])
++            return v[0]
++        return jnp.asarray(v)
++
++    def _refine_action(ob_np, goal_np, action0_np):
++        if config.get('discrete') or refine_steps <= 0:
++            return action0_np, None
++
++        ob = jnp.asarray(ob_np)
++        goal = jnp.asarray(goal_np)
++        a0 = jnp.asarray(action0_np)
++
++        def objective(a):
++            score = _critic_score(ob, goal, a)
++            if refine_l2 and refine_l2 > 0:
++                score = score - refine_l2 * jnp.sum((a - a0) ** 2)
++            return score
++
++        q_pre = objective(a0)
++        a = a0
++        for _ in range(int(refine_steps)):
++            g = jax.grad(objective)(a)
++            g_norm = jnp.linalg.norm(g) + 1e-8
++            a = a + float(refine_lr) * (g / g_norm)
++            a = jnp.clip(a, -1.0, 1.0)
++        q_post = objective(a)
++        delta = jnp.linalg.norm(a - a0)
++
++        return np.array(a), dict(q_pre=float(q_pre), q_post=float(q_post), delta_a=float(delta))
++
+     renders = []
+     for i in trange(num_eval_episodes + num_video_episodes):
+         traj = defaultdict(list)
+@@ -76,13 +116,20 @@ def evaluate(
+         done = False
+         step = 0
+         render = []
++        refine_step_stats = []
+         while not done:
+-            action = actor_fn(observations=observation, goals=goal, temperature=eval_temperature)
+-            action = np.array(action)
++            action0 = actor_fn(observations=observation, goals=goal, temperature=eval_temperature)
++            action0 = np.array(action0)
+             if not config.get('discrete'):
+                 if eval_gaussian is not None:
+-                    action = np.random.normal(action, eval_gaussian)
+-                action = np.clip(action, -1, 1)
++                    action0 = np.random.normal(action0, eval_gaussian)
++                action0 = np.clip(action0, -1, 1)
++
++            action = action0
++            if refine_steps and refine_steps > 0:
++                action, refine_info = _refine_action(observation, goal, action0)
++                if refine_info is not None:
++                    refine_step_stats.append(refine_info)
+ 
+             next_observation, reward, terminated, truncated, info = env.step(action)
+             done = terminated or truncated
+@@ -106,6 +153,13 @@ def evaluate(
+             add_to(traj, transition)
+             observation = next_observation
+         if i < num_eval_episodes:
++            if refine_step_stats:
++                info = dict(info)
++                info['refine'] = dict(
++                    q_pre=float(np.mean([x['q_pre'] for x in refine_step_stats])),
++                    q_post=float(np.mean([x['q_post'] for x in refine_step_stats])),
++                    delta_a=float(np.mean([x['delta_a'] for x in refine_step_stats])),
++                )
+             add_to(stats, flatten(info))
+             trajs.append(traj)
+         else:
+diff --git a/impls/utils/flax_utils.py b/impls/utils/flax_utils.py
+index 48d8b11..0dd008f 100644
+--- a/impls/utils/flax_utils.py
++++ b/impls/utils/flax_utils.py
+@@ -153,9 +153,16 @@ class TrainState(flax.struct.PyTreeNode):
+                 'grad/max': final_grad_max,
+                 'grad/min': final_grad_min,
+                 'grad/norm': final_grad_norm,
++                'grad/global_norm': optax.global_norm(grads),
+             }
+         )
+ 
++        # Per-module gradient norms (useful when params come from a ModuleDict).
++        if isinstance(grads, Mapping):
++            for module_name in ['critic', 'actor', 'value']:
++                if module_name in grads:
++                    info[f'grad/{module_name}_global_norm'] = optax.global_norm(grads[module_name])
++
+         return self.apply_gradients(grads=grads), info
+ 
+ 
 diff --git a/impls/utils/log_utils.py b/impls/utils/log_utils.py
 index 9c421dd..18a88c4 100644
 --- a/impls/utils/log_utils.py
@@ -34,56 +367,110 @@ index 9c421dd..18a88c4 100644
 +
      wandb_output_dir = tempfile.mkdtemp()
      tags = [group] if group is not None else None
-
-diff --git a/impls/main.py b/impls/main.py
-index 3660e03..b1b20cc 100644
---- a/impls/main.py
-+++ b/impls/main.py
-@@ -28,8 +28,14 @@ flags.DEFINE_integer('restore_epoch', None, 'Restore epoch.')
  
- flags.DEFINE_integer('train_steps', 1000000, 'Number of training steps.')
- flags.DEFINE_integer('log_interval', 5000, 'Logging interval.')
-+flags.DEFINE_integer(
-+    'validation_log_interval',
-+    None,
-+    'Validation logging interval (defaults to log_interval).',
-+)
- flags.DEFINE_integer('eval_interval', 100000, 'Evaluation interval.')
- flags.DEFINE_integer('save_interval', 1000000, 'Saving interval.')
-+flags.DEFINE_bool('disable_tqdm', False, 'Disable tqdm progress bars (reduces stderr spam).')
+diff --git a/impls/utils/networks.py b/impls/utils/networks.py
+index 4ee2b26..cb79779 100644
+--- a/impls/utils/networks.py
++++ b/impls/utils/networks.py
+@@ -6,6 +6,8 @@ import flax.linen as nn
+ import jax
+ import jax.numpy as jnp
  
- flags.DEFINE_integer('eval_tasks', None, 'Number of tasks to evaluate (None for all).')
- flags.DEFINE_integer('eval_episodes', 20, 'Number of episodes for each task.')
-@@ -91,7 +97,13 @@ def main(_):
-     eval_logger = CsvLogger(os.path.join(FLAGS.save_dir, 'eval.csv'))
-     first_time = time.time()
-     last_time = time.time()
--    for i in tqdm.tqdm(range(1, FLAGS.train_steps + 1), smoothing=0.1, dynamic_ncols=True):
-+    validation_log_interval = FLAGS.validation_log_interval or FLAGS.log_interval
-+    for i in tqdm.tqdm(
-+        range(1, FLAGS.train_steps + 1),
-+        smoothing=0.1,
-+        dynamic_ncols=True,
-+        disable=FLAGS.disable_tqdm,
-+    ):
-         # Update agent.
-         batch = train_dataset.sample(config['batch_size'])
-         agent, update_info = agent.update(batch)
-@@ -99,7 +111,7 @@ def main(_):
-         # Log metrics.
-         if i % FLAGS.log_interval == 0:
-             train_metrics = {f'training/{k}': v for k, v in update_info.items()}
--            if val_dataset is not None:
-+            if val_dataset is not None and i % validation_log_interval == 0:
-                 val_batch = val_dataset.sample(config['batch_size'])
-                 _, val_info = agent.total_loss(val_batch, grad_params=None)
-                 train_metrics.update({f'validation/{k}': v for k, v in val_info.items()})
-@@ -120,7 +132,7 @@ def main(_):
-             overall_metrics = defaultdict(list)
-             task_infos = env.unwrapped.task_infos if hasattr(env.unwrapped, 'task_infos') else env.task_infos
-             num_tasks = FLAGS.eval_tasks if FLAGS.eval_tasks is not None else len(task_infos)
--            for task_id in tqdm.trange(1, num_tasks + 1):
-+            for task_id in tqdm.trange(1, num_tasks + 1, disable=FLAGS.disable_tqdm):
-                 task_name = task_infos[task_id - 1]['task_name']
-                 eval_info, trajs, cur_renders = evaluate(
-                     agent=eval_agent,
++from critics.bilinear_backbones import BaselineMLPBackbone, DeepResNetBackbone, RecurTiedBackbone
++
+ 
+ def default_init(scale=1.0):
+     """Default kernel initializer."""
+@@ -347,16 +349,64 @@ class GCBilinearValue(nn.Module):
+     value_exp: bool = False
+     state_encoder: nn.Module = None
+     goal_encoder: nn.Module = None
++    backbone: str = 'mlp'  # 'mlp' | 'resnet' | 'recur_tied'
++    resnet_num_blocks: int = 3
++    recur_num_iters: int = 4
++    recur_max_iters: int = 32
++    layerscale_init: float = 1e-2
+ 
+     def setup(self):
+-        mlp_module = MLP
++        backbone = self.backbone
++        if backbone == 'mlp':
++            module_cls = BaselineMLPBackbone
++            phi_kwargs = dict(hidden_dims=tuple(self.hidden_dims), out_dim=self.latent_dim, layer_norm=self.layer_norm)
++            psi_kwargs = dict(hidden_dims=tuple(self.hidden_dims), out_dim=self.latent_dim, layer_norm=self.layer_norm)
++        elif backbone == 'resnet':
++            hidden_dim = int(self.hidden_dims[-1])
++            module_cls = DeepResNetBackbone
++            phi_kwargs = dict(
++                hidden_dim=hidden_dim,
++                out_dim=self.latent_dim,
++                num_blocks=int(self.resnet_num_blocks),
++                layer_norm=self.layer_norm,
++                layerscale_init=self.layerscale_init,
++            )
++            psi_kwargs = dict(
++                hidden_dim=hidden_dim,
++                out_dim=self.latent_dim,
++                num_blocks=int(self.resnet_num_blocks),
++                layer_norm=self.layer_norm,
++                layerscale_init=self.layerscale_init,
++            )
++        elif backbone == 'recur_tied':
++            hidden_dim = int(self.hidden_dims[-1])
++            module_cls = RecurTiedBackbone
++            phi_kwargs = dict(
++                hidden_dim=hidden_dim,
++                out_dim=self.latent_dim,
++                num_iters=int(self.recur_num_iters),
++                max_iters=int(self.recur_max_iters),
++                layer_norm=self.layer_norm,
++                layerscale_init=self.layerscale_init,
++            )
++            psi_kwargs = dict(
++                hidden_dim=hidden_dim,
++                out_dim=self.latent_dim,
++                num_iters=int(self.recur_num_iters),
++                max_iters=int(self.recur_max_iters),
++                layer_norm=self.layer_norm,
++                layerscale_init=self.layerscale_init,
++            )
++        else:
++            raise ValueError(f'Unsupported backbone: {backbone}')
++
+         if self.ensemble:
+-            mlp_module = ensemblize(mlp_module, 2)
++            module_cls = ensemblize(module_cls, 2)
+ 
+-        self.phi = mlp_module((*self.hidden_dims, self.latent_dim), activate_final=False, layer_norm=self.layer_norm)
+-        self.psi = mlp_module((*self.hidden_dims, self.latent_dim), activate_final=False, layer_norm=self.layer_norm)
++        self.phi = module_cls(**phi_kwargs)
++        self.psi = module_cls(**psi_kwargs)
+ 
+-    def __call__(self, observations, goals, actions=None, info=False):
++    def __call__(self, observations, goals, actions=None, info=False, *, num_iters=None):
+         """Return the value/critic function.
+ 
+         Args:
+@@ -364,6 +414,7 @@ class GCBilinearValue(nn.Module):
+             goals: Goals.
+             actions: Actions (optional).
+             info: Whether to additionally return the representations phi and psi.
++            num_iters: Override iteration count (only for backbone='recur_tied').
+         """
+         if self.state_encoder is not None:
+             observations = self.state_encoder(observations)
+@@ -375,8 +426,12 @@ class GCBilinearValue(nn.Module):
+         else:
+             phi_inputs = jnp.concatenate([observations, actions], axis=-1)
+ 
+-        phi = self.phi(phi_inputs)
+-        psi = self.psi(goals)
++        if self.backbone == 'recur_tied':
++            phi = self.phi(phi_inputs, num_iters=num_iters)
++            psi = self.psi(goals, num_iters=num_iters)
++        else:
++            phi = self.phi(phi_inputs)
++            psi = self.psi(goals)
+ 
+         v = (phi * psi / jnp.sqrt(self.latent_dim)).sum(axis=-1)
+ 

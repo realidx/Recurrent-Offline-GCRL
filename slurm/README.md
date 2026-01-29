@@ -37,3 +37,12 @@ From the repo root:
 ```bash
 python scripts/summarize_ogbench_csvs.py --roots exp logs --aggregate --out runs.csv --print
 ```
+
+## Phase 1: critic-backbone variants (AntMaze large stitch, 3 seeds)
+
+One environment (`antmaze-large-stitch-v0`), 3 seeds, 7 configs = 21 array tasks.
+
+```bash
+mkdir -p logs/phase_1
+sbatch slurm/phase1_critics_antmaze_large_stitch_array.slurm
+```

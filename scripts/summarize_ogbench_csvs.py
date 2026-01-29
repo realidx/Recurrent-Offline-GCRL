@@ -105,6 +105,9 @@ class RunSummary:
     seed: Optional[int]
     run_group: Optional[str]
     agent_name: Optional[str]
+    critic_backbone: Optional[str]
+    critic_resnet_depth: Optional[int]
+    critic_recur_iters: Optional[int]
 
     train_last_step: Optional[int]
 
@@ -129,6 +132,10 @@ class RunSummary:
         seed = flags.get("seed") if isinstance(flags, dict) else None
         run_group = flags.get("run_group") if isinstance(flags, dict) else None
         agent_name = _get_nested(flags, ["agent", "agent_name"])
+
+        critic_backbone = _get_nested(flags, ["agent", "critic_backbone"])
+        critic_resnet_depth = _get_nested(flags, ["agent", "critic_resnet_depth"])
+        critic_recur_iters = _get_nested(flags, ["agent", "critic_recur_iters"])
 
         alpha = _get_nested(flags, ["agent", "alpha"])
         discount = _get_nested(flags, ["agent", "discount"])
@@ -171,6 +178,9 @@ class RunSummary:
             seed=int(seed) if seed is not None else None,
             run_group=run_group,
             agent_name=str(agent_name) if agent_name is not None else None,
+            critic_backbone=str(critic_backbone) if critic_backbone is not None else None,
+            critic_resnet_depth=int(critic_resnet_depth) if critic_resnet_depth is not None else None,
+            critic_recur_iters=int(critic_recur_iters) if critic_recur_iters is not None else None,
             train_last_step=train_last_step,
             eval_last_step=eval_last_step,
             eval_last_overall_success=eval_last_overall_success,
@@ -222,6 +232,9 @@ def main() -> None:
         "env_name",
         "seed",
         "agent_name",
+        "critic_backbone",
+        "critic_resnet_depth",
+        "critic_recur_iters",
         "alpha",
         "discount",
         "train_last_step",
@@ -297,4 +310,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

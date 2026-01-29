@@ -33,8 +33,8 @@ Use fixed seeds (e.g., 5) and report mean ± std.
 Define 3 critic families:
 
 1. **Baseline**: repo’s default MLP critic (untied, shallow).
-2. **Deep untied**: deeper MLP critic (same block repeated but with distinct parameters).
-3. **Tied iterated (“recurrent depth”)**: one block applied *K* times with shared parameters.
+2. **Deep untied**: residual-block backbone (untied), sweep depth `D ∈ {3, 6, 12}`.
+3. **Tied iterated (“recurrent depth”)**: one block applied *K* times with shared parameters (sweep `K_train`).
 
 Suggested comparisons:
 
@@ -72,6 +72,14 @@ Implementation notes (to keep results interpretable):
 - Use residual connections per step (recommended for stability).
 - Consider per-step normalization (LayerNorm) if Q blows up.
 - If using truncated BPTT or stop-gradient tricks, pre-register them as an ablation (don’t sneak them in).
+
+### What “depth” means in this project (avoid ambiguity)
+Because CRL uses a bilinear score `phi(s,a)^T psi(g)` rather than a scalar-Q TD critic, define depth in terms of the
+**phi/psi backbone**:
+
+- **Baseline MLP depth**: number of hidden layers in the MLP used for `phi` and `psi` (OGBench default is 3 hidden layers).
+- **Untied ResNet depth `D`**: number of residual blocks applied in `phi` and in `psi` (each block is LN → 2-layer MLP → residual).
+- **Tied iterated depth `K`**: number of iterations of the tied block applied in `phi` and in `psi` (shared weights across iterations).
 
 ### Critic-guided action refinement (evaluation-only)
 At each env step, given state `s`:
@@ -139,7 +147,13 @@ Also helpful:
 - fraction of NaNs/Infs in Q, targets, grads
 - `K_train` / `K_test` and refinement settings (so runs are self-describing)
 
-## Phase 1 — Architecture swap harness (make critic changes cheap)
+## Phase 1 — Critic-backbone variants inside CRL (architecture-only swap)
+In this project, the “critic” is CRL’s differentiable **score function**:
+
+- `score(s,a,g) = phi(s,a)^T psi(g) / sqrt(d)` (the same logit/energy used by CRL),
+
+so Phase 1 swaps only the **phi/psi backbones** while keeping the CRL loss, ensemble semantics, and call sites unchanged.
+
 1. Factor critic creation behind a single config switch (baseline / deep-untied / tied-iterated).
 2. Ensure optimizer groups and target-network update logic still match the baseline.
 3. Add a param-count logger for critic and actor separately.
@@ -154,7 +168,7 @@ Exit criteria:
 ### A: Beat baseline on stitch
 Grid (keep small):
 
-- `K_train ∈ {1, 2, 4, 8}` (tied)
+- `K_train ∈ {3, 6, 12}` (tied)
 - match baseline optimizer/lr; only adjust if clearly unstable
 
 Report:
@@ -162,9 +176,12 @@ Report:
 - best tied setting vs baseline under identical budget
 - seed robustness (mean ± std)
 
-### B: Match deep untied with fewer parameters
-Choose a deep untied depth `D` that improves over baseline.
-Then match *effective depth* with tied `K_train=D`, but tune width so:
+### B: Match the best untied depth with fewer parameters
+Do not assume “deeper is better” in offline RL. Instead, **sweep untied depth** and pick the best.
+
+1. Sweep deep untied ResNet depth `D ∈ {3, 6, 12}` (same width as baseline).
+2. Pick the best untied setting by mean success (with fixed budget).
+3. Compare tied iterated using `K_train ∈ {3, 6, 12}` (matched-depth set vs the untied ResNet sweep) and tune width only if needed so:
 
 - `params(tied) < params(deep_untied)`
 
