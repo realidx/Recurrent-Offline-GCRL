@@ -369,19 +369,96 @@ index 9c421dd..18a88c4 100644
      tags = [group] if group is not None else None
  
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..cb79779 100644
+index 4ee2b26..dd1974f 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
-@@ -6,6 +6,8 @@ import flax.linen as nn
- import jax
- import jax.numpy as jnp
+@@ -60,6 +60,85 @@ class MLP(nn.Module):
+         return x
  
-+from critics.bilinear_backbones import BaselineMLPBackbone, DeepResNetBackbone, RecurTiedBackbone
+ 
++class ResNetBlock(nn.Module):
++    hidden_dim: int
++    layer_norm: bool = True
++    layerscale_init: float = 1e-2
 +
++    @nn.compact
++    def __call__(self, h):
++        h1 = h
++        if self.layer_norm:
++            h1 = nn.LayerNorm()(h1)
++        u = nn.Dense(self.hidden_dim)(h1)
++        u = nn.silu(u)
++        u = nn.Dense(self.hidden_dim)(u)
++
++        scale = self.param('layerscale', nn.initializers.constant(self.layerscale_init), (self.hidden_dim,))
++        u = u * scale
++        return h + u
++
++
++class DeepResNetBackbone(nn.Module):
++    hidden_dim: int
++    out_dim: int
++    num_blocks: int
++    layer_norm: bool = True
++    layerscale_init: float = 1e-2
++
++    @nn.compact
++    def __call__(self, x):
++        h = nn.Dense(self.hidden_dim)(x)
++        for _ in range(int(self.num_blocks)):
++            h = ResNetBlock(self.hidden_dim, layer_norm=self.layer_norm, layerscale_init=self.layerscale_init)(h)
++        return nn.Dense(self.out_dim)(h)
++
++
++class RecurTiedBackbone(nn.Module):
++    hidden_dim: int
++    out_dim: int
++    num_iters: int
++    max_iters: int = 32
++    layer_norm: bool = True
++    layerscale_init: float = 1e-2
++
++    @nn.compact
++    def __call__(self, x, *, num_iters=None):
++        iters = self.num_iters if num_iters is None else int(num_iters)
++        if iters > self.max_iters:
++            raise ValueError(f'num_iters={iters} exceeds max_iters={self.max_iters}')
++
++        h = nn.Dense(self.hidden_dim)(x)
++
++        step_embed = self.param(
++            'step_embed',
++            nn.initializers.normal(stddev=0.02),
++            (self.max_iters, self.hidden_dim),
++        )
++        alpha = self.param('alpha', nn.initializers.constant(self.layerscale_init), (self.max_iters,))
++
++        film_fc1 = nn.Dense(self.hidden_dim)
++        film_fc2 = nn.Dense(2 * self.hidden_dim)
++
++        tied_fc1 = nn.Dense(self.hidden_dim)
++        tied_fc2 = nn.Dense(self.hidden_dim)
++
++        for k in range(iters):
++            h1 = h
++            if self.layer_norm:
++                h1 = nn.LayerNorm()(h1)
++
++            e = step_embed[k]
++            film = film_fc2(nn.silu(film_fc1(e)))
++            gamma, beta = jnp.split(film, 2, axis=-1)
++            h_film = (1.0 + gamma) * h1 + beta
++
++            u = tied_fc2(nn.silu(tied_fc1(h_film)))
++            h = h + alpha[k] * u
++
++        return nn.Dense(self.out_dim)(h)
++
++
+ class LengthNormalize(nn.Module):
+     """Length normalization layer.
  
- def default_init(scale=1.0):
-     """Default kernel initializer."""
-@@ -347,16 +349,64 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +426,64 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
@@ -395,9 +472,9 @@ index 4ee2b26..cb79779 100644
 -        mlp_module = MLP
 +        backbone = self.backbone
 +        if backbone == 'mlp':
-+            module_cls = BaselineMLPBackbone
-+            phi_kwargs = dict(hidden_dims=tuple(self.hidden_dims), out_dim=self.latent_dim, layer_norm=self.layer_norm)
-+            psi_kwargs = dict(hidden_dims=tuple(self.hidden_dims), out_dim=self.latent_dim, layer_norm=self.layer_norm)
++            module_cls = MLP
++            phi_kwargs = dict(hidden_dims=(*self.hidden_dims, self.latent_dim), activate_final=False, layer_norm=self.layer_norm)
++            psi_kwargs = dict(hidden_dims=(*self.hidden_dims, self.latent_dim), activate_final=False, layer_norm=self.layer_norm)
 +        elif backbone == 'resnet':
 +            hidden_dim = int(self.hidden_dims[-1])
 +            module_cls = DeepResNetBackbone
@@ -451,7 +528,7 @@ index 4ee2b26..cb79779 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +414,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +491,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -459,7 +536,7 @@ index 4ee2b26..cb79779 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,8 +426,12 @@ class GCBilinearValue(nn.Module):
+@@ -375,8 +503,12 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
