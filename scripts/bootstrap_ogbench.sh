@@ -10,6 +10,7 @@ OGBENCH_URL="${OGBENCH_URL:-https://github.com/seohongpark/ogbench.git}"
 OGBENCH_COMMIT="${OGBENCH_COMMIT:-1d4140997f60c52c6fb0702ec100dc988b18c548}"
 OGBENCH_DIR="${OGBENCH_DIR:-third_party/ogbench}"
 PATCH_FILE="${PATCH_FILE:-patches/ogbench_impls.patch}"
+CLEAN="${CLEAN:-1}"  # If 1, reset/clean the checkout to ensure patches apply cleanly.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -35,18 +36,18 @@ fi
 if [[ -d "${OGBENCH_DIR}/.git" ]]; then
   git -C "${OGBENCH_DIR}" fetch --all --tags --prune
   git -C "${OGBENCH_DIR}" checkout -q "${OGBENCH_COMMIT}"
+  if [[ "${CLEAN}" == "1" ]]; then
+    git -C "${OGBENCH_DIR}" reset --hard
+    git -C "${OGBENCH_DIR}" clean -fd
+  fi
 else
   echo "Error: ${OGBENCH_DIR} is not a git checkout." >&2
   exit 3
 fi
 
 if [[ -f "${PATCH_FILE}" ]]; then
-  if git -C "${OGBENCH_DIR}" apply --reverse --check "${REPO_ROOT}/${PATCH_FILE}" >/dev/null 2>&1; then
-    echo "Patch already applied: ${PATCH_FILE}"
-  else
-    git -C "${OGBENCH_DIR}" apply --whitespace=nowarn "${REPO_ROOT}/${PATCH_FILE}"
-    echo "Applied patch: ${PATCH_FILE}"
-  fi
+  git -C "${OGBENCH_DIR}" apply --whitespace=nowarn "${REPO_ROOT}/${PATCH_FILE}"
+  echo "Applied patch: ${PATCH_FILE}"
 fi
 
 echo "OK: OGBench ready at ${OGBENCH_DIR} ($(git -C "${OGBENCH_DIR}" rev-parse --short HEAD))"

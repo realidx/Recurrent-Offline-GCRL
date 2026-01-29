@@ -9,7 +9,7 @@ One run per array task: 4 envs × 5 seeds = 20 tasks.
 mkdir -p logs/phase_0
 
 # Ensure the upstream OGBench repo is present locally.
-./scripts/bootstrap_ogbench.sh
+./scripts/bootstrap_ogbench.sh CLEAN=1
 
 # (Optional) prefetch datasets on login node (recommended if compute nodes have no internet)
 conda run -n recurrent python scripts/prefetch_ogbench_datasets.py --dataset-dir .ogbench_data

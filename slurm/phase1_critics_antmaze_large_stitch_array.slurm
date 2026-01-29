@@ -17,6 +17,12 @@ if [[ ! -f "third_party/ogbench/impls/main.py" ]]; then
   exit 2
 fi
 
+if [[ ! -f "third_party/ogbench/impls/agents/crl.py" ]] || ! rg -q "critic_backbone" "third_party/ogbench/impls/agents/crl.py" 2>/dev/null; then
+  echo "Error: OGBench checkout is missing Phase 1 patches (agent.critic_backbone not found)." >&2
+  echo "Fix: run ./scripts/bootstrap_ogbench.sh (CLEAN=1) on the login node, then resubmit." >&2
+  exit 2
+fi
+
 IMPL_DIR="${SLURM_SUBMIT_DIR}/third_party/ogbench/impls"
 
 CONDA_ENV="${CONDA_ENV:-recurrent}"

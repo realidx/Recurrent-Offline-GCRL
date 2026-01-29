@@ -9,7 +9,7 @@ This repo vendors the official OGBench repo at `third_party/ogbench`.
 From the workspace root:
 
 ```bash
-./scripts/bootstrap_ogbench.sh
+./scripts/bootstrap_ogbench.sh CLEAN=1
 python -m pip install -r requirements.txt
 ```
 
@@ -23,7 +23,7 @@ Notes:
 On your remote NVIDIA/CUDA machine:
 
 ```bash
-./scripts/bootstrap_ogbench.sh
+./scripts/bootstrap_ogbench.sh CLEAN=1
 python -m pip install -r requirements-cuda12.txt
 ```
 
