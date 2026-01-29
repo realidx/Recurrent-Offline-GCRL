@@ -4,6 +4,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=24G
 #SBATCH --gpus=1
+#SBATCH --gres=gpu:1
 #SBATCH --output=logs/phase_0/slurm-%x-%A_%a.out
 #SBATCH --error=logs/phase_0/slurm-%x-%A_%a.err
 #SBATCH --array=0-11
@@ -117,5 +118,10 @@ if ! command -v "${CONDA_EXE}" >/dev/null 2>&1; then
   echo "Fix: load your anaconda/miniconda module, or pass CONDA_EXE=/full/path/to/conda via --export." >&2
   exit 3
 fi
+
+"${CONDA_EXE}" run -n "${CONDA_ENV}" python - <<'PY'
+import jax
+print("jax_devices:", jax.devices())
+PY
 
 "${CONDA_EXE}" run -n "${CONDA_ENV}" env WANDB_MODE="${WANDB_MODE}" "${cmd[@]}"

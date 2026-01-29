@@ -1,9 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name=p1_critics
-#SBATCH --time=24:00:00
+#SBATCH --time=5:00:00
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=32G
+#SBATCH --mem=24G
 #SBATCH --gpus=1
+#SBATCH --gres=gpu:1
 #SBATCH --output=logs/phase_1/slurm-%x-%A_%a.out
 #SBATCH --error=logs/phase_1/slurm-%x-%A_%a.err
 #SBATCH --array=0-20
@@ -132,5 +133,10 @@ if ! command -v "${CONDA_EXE}" >/dev/null 2>&1; then
   echo "Error: 'conda' not found in this job environment." >&2
   exit 3
 fi
+
+"${CONDA_EXE}" run -n "${CONDA_ENV}" python - <<'PY'
+import jax
+print("jax_devices:", jax.devices())
+PY
 
 "${CONDA_EXE}" run -n "${CONDA_ENV}" env WANDB_MODE="${WANDB_MODE}" "${cmd[@]}"
