@@ -50,4 +50,23 @@ if [[ -f "${PATCH_FILE}" ]]; then
   echo "Applied patch: ${PATCH_FILE}"
 fi
 
-echo "OK: OGBench ready at ${OGBENCH_DIR} ($(git -C "${OGBENCH_DIR}" rev-parse --short HEAD))"
+short_sha="$(git -C "${OGBENCH_DIR}" rev-parse --short HEAD)"
+
+# Basic sanity checks to catch "patch applied but repo didn't update" issues early.
+if [[ ! -f "${OGBENCH_DIR}/impls/main.py" ]]; then
+  echo "Error: expected ${OGBENCH_DIR}/impls/main.py after bootstrap." >&2
+  exit 4
+fi
+if [[ ! -f "${OGBENCH_DIR}/impls/agents/crl.py" ]]; then
+  echo "Error: expected ${OGBENCH_DIR}/impls/agents/crl.py after bootstrap." >&2
+  exit 4
+fi
+
+if ! grep -q "critic_backbone" "${OGBENCH_DIR}/impls/agents/crl.py"; then
+  echo "Error: bootstrap finished, but Phase 1 patch markers are missing (critic_backbone not found)." >&2
+  echo "Fix: make sure you ran 'git pull' on this repo so patches/ogbench_impls.patch is up to date, then re-run:" >&2
+  echo "  ./scripts/bootstrap_ogbench.sh CLEAN=1" >&2
+  exit 5
+fi
+
+echo "OK: OGBench ready at ${OGBENCH_DIR} (${short_sha})"

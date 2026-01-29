@@ -18,7 +18,7 @@ if [[ ! -f "third_party/ogbench/impls/main.py" ]]; then
   exit 2
 fi
 
-if [[ ! -f "third_party/ogbench/impls/utils/log_utils.py" ]] || ! rg -q "WANDB_MODE" "third_party/ogbench/impls/utils/log_utils.py" 2>/dev/null; then
+if [[ ! -f "third_party/ogbench/impls/utils/log_utils.py" ]] || ! grep -q "WANDB_MODE" "third_party/ogbench/impls/utils/log_utils.py" 2>/dev/null; then
   echo "Error: OGBench checkout is missing local patches (WANDB_MODE support not found)." >&2
   echo "Fix: run ./scripts/bootstrap_ogbench.sh (CLEAN=1) on the login node, then resubmit." >&2
   exit 2
