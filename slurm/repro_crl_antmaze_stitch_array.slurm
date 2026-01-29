@@ -26,15 +26,19 @@ CONDA_EXE="${CONDA_EXE:-conda}"               # e.g., /home/$USER/miniconda3/bin
 WANDB_MODE="${WANDB_MODE:-offline}"           # set online if compute nodes can reach wandb and you have WANDB_API_KEY
 RUN_GROUP="${RUN_GROUP:-P0_CRL_AntMazeStitch}"
 LOG_ROOT="${LOG_ROOT:-${SLURM_SUBMIT_DIR}/logs/phase_0}"
-SAVE_DIR="${SAVE_DIR:-${LOG_ROOT}/exp}"
+SAVE_DIR="${SAVE_DIR:-${SLURM_SUBMIT_DIR}/exp}"
 DATASET_DIR="${DATASET_DIR:-${SLURM_SUBMIT_DIR}/.ogbench_data}"
 
 TRAIN_STEPS="${TRAIN_STEPS:-1000000}"
-LOG_INTERVAL="${LOG_INTERVAL:-5000}"
-EVAL_INTERVAL="${EVAL_INTERVAL:-100000}"
+LOG_INTERVAL="${LOG_INTERVAL:-20000}"
+VALIDATION_LOG_INTERVAL="${VALIDATION_LOG_INTERVAL:-100000}"
+EVAL_INTERVAL="${EVAL_INTERVAL:-200000}"
 SAVE_INTERVAL="${SAVE_INTERVAL:-1000000}"
 EVAL_EPISODES="${EVAL_EPISODES:-50}"
 VIDEO_EPISODES="${VIDEO_EPISODES:-0}"
+DISABLE_TQDM="${DISABLE_TQDM:-1}"
+
+export WANDB_SILENT="${WANDB_SILENT:-true}"
 
 # Headless MuJoCo on servers is often more reliable with EGL.
 export MUJOCO_GL="${MUJOCO_GL:-egl}"
@@ -75,10 +79,12 @@ cmd=(
   "--env_name=${ENV_NAME}"
   "--train_steps=${TRAIN_STEPS}"
   "--log_interval=${LOG_INTERVAL}"
+  "--validation_log_interval=${VALIDATION_LOG_INTERVAL}"
   "--eval_interval=${EVAL_INTERVAL}"
   "--save_interval=${SAVE_INTERVAL}"
   "--eval_episodes=${EVAL_EPISODES}"
   "--video_episodes=${VIDEO_EPISODES}"
+  "--disable_tqdm=${DISABLE_TQDM}"
   "--agent=agents/crl.py"
   "${EXTRA_AGENT_FLAGS[@]}"
 )

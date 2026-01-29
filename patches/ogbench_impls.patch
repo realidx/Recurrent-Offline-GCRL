@@ -35,3 +35,55 @@ index 9c421dd..18a88c4 100644
      wandb_output_dir = tempfile.mkdtemp()
      tags = [group] if group is not None else None
 
+diff --git a/impls/main.py b/impls/main.py
+index 3660e03..b1b20cc 100644
+--- a/impls/main.py
++++ b/impls/main.py
+@@ -28,8 +28,14 @@ flags.DEFINE_integer('restore_epoch', None, 'Restore epoch.')
+ 
+ flags.DEFINE_integer('train_steps', 1000000, 'Number of training steps.')
+ flags.DEFINE_integer('log_interval', 5000, 'Logging interval.')
++flags.DEFINE_integer(
++    'validation_log_interval',
++    None,
++    'Validation logging interval (defaults to log_interval).',
++)
+ flags.DEFINE_integer('eval_interval', 100000, 'Evaluation interval.')
+ flags.DEFINE_integer('save_interval', 1000000, 'Saving interval.')
++flags.DEFINE_bool('disable_tqdm', False, 'Disable tqdm progress bars (reduces stderr spam).')
+ 
+ flags.DEFINE_integer('eval_tasks', None, 'Number of tasks to evaluate (None for all).')
+ flags.DEFINE_integer('eval_episodes', 20, 'Number of episodes for each task.')
+@@ -91,7 +97,13 @@ def main(_):
+     eval_logger = CsvLogger(os.path.join(FLAGS.save_dir, 'eval.csv'))
+     first_time = time.time()
+     last_time = time.time()
+-    for i in tqdm.tqdm(range(1, FLAGS.train_steps + 1), smoothing=0.1, dynamic_ncols=True):
++    validation_log_interval = FLAGS.validation_log_interval or FLAGS.log_interval
++    for i in tqdm.tqdm(
++        range(1, FLAGS.train_steps + 1),
++        smoothing=0.1,
++        dynamic_ncols=True,
++        disable=FLAGS.disable_tqdm,
++    ):
+         # Update agent.
+         batch = train_dataset.sample(config['batch_size'])
+         agent, update_info = agent.update(batch)
+@@ -99,7 +111,7 @@ def main(_):
+         # Log metrics.
+         if i % FLAGS.log_interval == 0:
+             train_metrics = {f'training/{k}': v for k, v in update_info.items()}
+-            if val_dataset is not None:
++            if val_dataset is not None and i % validation_log_interval == 0:
+                 val_batch = val_dataset.sample(config['batch_size'])
+                 _, val_info = agent.total_loss(val_batch, grad_params=None)
+                 train_metrics.update({f'validation/{k}': v for k, v in val_info.items()})
+@@ -120,7 +132,7 @@ def main(_):
+             overall_metrics = defaultdict(list)
+             task_infos = env.unwrapped.task_infos if hasattr(env.unwrapped, 'task_infos') else env.task_infos
+             num_tasks = FLAGS.eval_tasks if FLAGS.eval_tasks is not None else len(task_infos)
+-            for task_id in tqdm.trange(1, num_tasks + 1):
++            for task_id in tqdm.trange(1, num_tasks + 1, disable=FLAGS.disable_tqdm):
+                 task_name = task_infos[task_id - 1]['task_name']
+                 eval_info, trajs, cur_renders = evaluate(
+                     agent=eval_agent,

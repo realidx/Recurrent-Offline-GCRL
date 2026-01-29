@@ -21,7 +21,7 @@ Common overrides:
 
 ```bash
 sbatch \
-  --export=ALL,WANDB_MODE=online,CONDA_ENV=recurrent,DATASET_DIR=/scratch/$USER/ogbench_data,LOG_ROOT=/scratch/$USER/logs/phase_0 \
+  --export=ALL,WANDB_MODE=online,CONDA_ENV=recurrent,DATASET_DIR=/scratch/$USER/ogbench_data,LOG_ROOT=/scratch/$USER/logs/phase_0,SAVE_DIR=/scratch/$USER/exp,DISABLE_TQDM=1,LOG_INTERVAL=20000,EVAL_INTERVAL=200000 \
   slurm/repro_crl_antmaze_stitch_array.slurm
 ```
 
@@ -29,3 +29,11 @@ If your compute nodes say `conda: command not found`, either:
 
 - Add your cluster’s `module load anaconda` / `module load miniconda` near the top of the `.slurm` file, or
 - Submit with `--export=ALL,CONDA_EXE=/full/path/to/conda,...` (e.g., `$HOME/miniconda3/bin/conda`).
+
+## Summarize results
+
+From the repo root:
+
+```bash
+python scripts/summarize_ogbench_csvs.py --roots exp logs --aggregate --out runs.csv --print
+```
