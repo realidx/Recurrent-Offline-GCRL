@@ -108,6 +108,8 @@ class RunSummary:
     critic_backbone: Optional[str]
     critic_resnet_depth: Optional[int]
     critic_recur_iters: Optional[int]
+    critic_backbone_hidden_dim: Optional[int]
+    critic_eval_num_iters: Optional[int]
 
     train_last_step: Optional[int]
 
@@ -136,6 +138,8 @@ class RunSummary:
         critic_backbone = _get_nested(flags, ["agent", "critic_backbone"])
         critic_resnet_depth = _get_nested(flags, ["agent", "critic_resnet_depth"])
         critic_recur_iters = _get_nested(flags, ["agent", "critic_recur_iters"])
+        critic_backbone_hidden_dim = _get_nested(flags, ["agent", "critic_backbone_hidden_dim"])
+        critic_eval_num_iters = _get_nested(flags, ["agent", "critic_eval_num_iters"])
 
         alpha = _get_nested(flags, ["agent", "alpha"])
         discount = _get_nested(flags, ["agent", "discount"])
@@ -181,6 +185,10 @@ class RunSummary:
             critic_backbone=str(critic_backbone) if critic_backbone is not None else None,
             critic_resnet_depth=int(critic_resnet_depth) if critic_resnet_depth is not None else None,
             critic_recur_iters=int(critic_recur_iters) if critic_recur_iters is not None else None,
+            critic_backbone_hidden_dim=(
+                int(critic_backbone_hidden_dim) if critic_backbone_hidden_dim is not None else None
+            ),
+            critic_eval_num_iters=int(critic_eval_num_iters) if critic_eval_num_iters is not None else None,
             train_last_step=train_last_step,
             eval_last_step=eval_last_step,
             eval_last_overall_success=eval_last_overall_success,
@@ -235,6 +243,8 @@ def main() -> None:
         "critic_backbone",
         "critic_resnet_depth",
         "critic_recur_iters",
+        "critic_backbone_hidden_dim",
+        "critic_eval_num_iters",
         "alpha",
         "discount",
         "train_last_step",

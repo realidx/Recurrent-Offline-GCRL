@@ -1,5 +1,5 @@
 diff --git a/impls/agents/crl.py b/impls/agents/crl.py
-index 53109ab..aa9d576 100644
+index 53109ab..9c80cd3 100644
 --- a/impls/agents/crl.py
 +++ b/impls/agents/crl.py
 @@ -52,6 +52,7 @@ class CRLAgent(flax.struct.PyTreeNode):
@@ -45,7 +45,7 @@ index 53109ab..aa9d576 100644
              }
          else:
              raise ValueError(f'Unsupported actor loss: {self.config["actor_loss"]}')
-@@ -231,6 +246,11 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -231,6 +246,12 @@ class CRLAgent(flax.struct.PyTreeNode):
                  state_encoder=encoders.get('critic_state'),
                  goal_encoder=encoders.get('critic_goal'),
                  action_dim=action_dim,
@@ -54,10 +54,11 @@ index 53109ab..aa9d576 100644
 +                recur_num_iters=config['critic_recur_iters'],
 +                recur_max_iters=config['critic_recur_max_iters'],
 +                layerscale_init=config['critic_layerscale_init'],
++                backbone_hidden_dim=config.get('critic_backbone_hidden_dim'),
              )
          else:
              critic_def = GCBilinearValue(
-@@ -241,6 +261,11 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -241,6 +262,12 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
                  state_encoder=encoders.get('critic_state'),
                  goal_encoder=encoders.get('critic_goal'),
@@ -66,10 +67,11 @@ index 53109ab..aa9d576 100644
 +                recur_num_iters=config['critic_recur_iters'],
 +                recur_max_iters=config['critic_recur_max_iters'],
 +                layerscale_init=config['critic_layerscale_init'],
++                backbone_hidden_dim=config.get('critic_backbone_hidden_dim'),
              )
  
          if config['actor_loss'] == 'awr':
-@@ -253,6 +278,11 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -253,6 +280,12 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
                  state_encoder=encoders.get('value_state'),
                  goal_encoder=encoders.get('value_goal'),
@@ -78,10 +80,11 @@ index 53109ab..aa9d576 100644
 +                recur_num_iters=config['critic_recur_iters'],
 +                recur_max_iters=config['critic_recur_max_iters'],
 +                layerscale_init=config['critic_layerscale_init'],
++                backbone_hidden_dim=config.get('critic_backbone_hidden_dim'),
              )
  
          if config['discrete']:
-@@ -306,6 +336,12 @@ def get_config():
+@@ -306,6 +339,14 @@ def get_config():
              const_std=True,  # Whether to use constant standard deviation for the actor.
              discrete=False,  # Whether the action space is discrete.
              encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
@@ -89,13 +92,15 @@ index 53109ab..aa9d576 100644
 +            critic_backbone='mlp',  # 'mlp' | 'resnet' | 'recur_tied'
 +            critic_resnet_depth=3,  # Untied ResNet blocks (used if critic_backbone='resnet').
 +            critic_recur_iters=4,  # Tied iterations K_train (used if critic_backbone='recur_tied').
++            critic_eval_num_iters=None,  # Optional K_test override for evaluation-only (tied-only test-time compute knob).
 +            critic_recur_max_iters=32,  # Max step embedding table size.
 +            critic_layerscale_init=1e-2,  # LayerScale init for resnet/recur.
++            critic_backbone_hidden_dim=None,  # Optional override (e.g., param-match resnet vs recur).
              # Dataset hyperparameters.
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
 diff --git a/impls/main.py b/impls/main.py
-index 3660e03..bda4190 100644
+index 3660e03..da8f641 100644
 --- a/impls/main.py
 +++ b/impls/main.py
 @@ -28,13 +28,22 @@ flags.DEFINE_integer('restore_epoch', None, 'Restore epoch.')
@@ -183,7 +188,7 @@ index 3660e03..bda4190 100644
                  eval_metrics.update(
                      {f'evaluation/{task_name}_{k}': v for k, v in eval_info.items() if k in metric_names}
                  )
-@@ -148,6 +170,22 @@ def main(_):
+@@ -148,6 +170,24 @@ def main(_):
                  video = get_wandb_video(renders=renders, n_cols=num_tasks)
                  eval_metrics['video'] = video
  
@@ -191,10 +196,12 @@ index 3660e03..bda4190 100644
 +            eval_batch = train_dataset.sample(config['batch_size'])
 +            if config['discrete']:
 +                eval_batch['actions'] = np.full_like(eval_batch['actions'], env.action_space.n - 1)
++            critic_eval_num_iters = config.get('critic_eval_num_iters', None)
 +            q_vals = eval_agent.network.select('critic')(
 +                eval_batch['observations'],
 +                eval_batch['value_goals'],
 +                eval_batch['actions'],
++                num_iters=critic_eval_num_iters,
 +            )
 +            q_vals = np.asarray(q_vals)
 +            eval_metrics['evaluation/Q_mean'] = float(q_vals.mean())
@@ -226,7 +233,7 @@ index 6b17e11..00ef632 100644
      val_dataset = Dataset.create(**val_dataset)
  
 diff --git a/impls/utils/evaluation.py b/impls/utils/evaluation.py
-index a3a9944..c216eba 100644
+index a3a9944..e15df13 100644
 --- a/impls/utils/evaluation.py
 +++ b/impls/utils/evaluation.py
 @@ -2,6 +2,7 @@ from collections import defaultdict
@@ -247,13 +254,31 @@ index a3a9944..c216eba 100644
  ):
      """Evaluate the agent in the environment.
  
-@@ -65,6 +69,42 @@ def evaluate(
+@@ -65,6 +69,60 @@ def evaluate(
      trajs = []
      stats = defaultdict(list)
  
++    def _cfg_get(key, default=None):
++        if config is None:
++            return default
++        try:
++            return config.get(key, default)
++        except Exception:
++            try:
++                return config[key]
++            except Exception:
++                return default
++
++    critic_eval_num_iters = _cfg_get('critic_eval_num_iters', None)
++
 +    def _critic_score(ob, goal, action):
 +        # CRL critic outputs an ensemble of bilinear scores; match actor loss aggregation (min over ensemble).
-+        v = agent.network.select('critic')(ob[None, ...], goal[None, ...], action[None, ...])
++        v = agent.network.select('critic')(
++            ob[None, ...],
++            goal[None, ...],
++            action[None, ...],
++            num_iters=critic_eval_num_iters,
++        )
 +        if hasattr(v, 'ndim') and v.ndim >= 2:
 +            # v shape: (E, B) or (B,). For B=1, take min over ensemble.
 +            if v.ndim == 2:
@@ -290,7 +315,7 @@ index a3a9944..c216eba 100644
      renders = []
      for i in trange(num_eval_episodes + num_video_episodes):
          traj = defaultdict(list)
-@@ -76,13 +116,20 @@ def evaluate(
+@@ -76,13 +134,20 @@ def evaluate(
          done = False
          step = 0
          render = []
@@ -315,7 +340,7 @@ index a3a9944..c216eba 100644
  
              next_observation, reward, terminated, truncated, info = env.step(action)
              done = terminated or truncated
-@@ -106,6 +153,13 @@ def evaluate(
+@@ -106,6 +171,13 @@ def evaluate(
              add_to(traj, transition)
              observation = next_observation
          if i < num_eval_episodes:
@@ -369,7 +394,7 @@ index 9c421dd..18a88c4 100644
      tags = [group] if group is not None else None
  
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..dd1974f 100644
+index 4ee2b26..4606a6c 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
 @@ -60,6 +60,85 @@ class MLP(nn.Module):
@@ -458,11 +483,12 @@ index 4ee2b26..dd1974f 100644
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -347,16 +426,64 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +426,65 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
 +    backbone: str = 'mlp'  # 'mlp' | 'resnet' | 'recur_tied'
++    backbone_hidden_dim: Optional[int] = None
 +    resnet_num_blocks: int = 3
 +    recur_num_iters: int = 4
 +    recur_max_iters: int = 32
@@ -476,7 +502,7 @@ index 4ee2b26..dd1974f 100644
 +            phi_kwargs = dict(hidden_dims=(*self.hidden_dims, self.latent_dim), activate_final=False, layer_norm=self.layer_norm)
 +            psi_kwargs = dict(hidden_dims=(*self.hidden_dims, self.latent_dim), activate_final=False, layer_norm=self.layer_norm)
 +        elif backbone == 'resnet':
-+            hidden_dim = int(self.hidden_dims[-1])
++            hidden_dim = int(self.backbone_hidden_dim) if self.backbone_hidden_dim is not None else int(self.hidden_dims[-1])
 +            module_cls = DeepResNetBackbone
 +            phi_kwargs = dict(
 +                hidden_dim=hidden_dim,
@@ -493,7 +519,7 @@ index 4ee2b26..dd1974f 100644
 +                layerscale_init=self.layerscale_init,
 +            )
 +        elif backbone == 'recur_tied':
-+            hidden_dim = int(self.hidden_dims[-1])
++            hidden_dim = int(self.backbone_hidden_dim) if self.backbone_hidden_dim is not None else int(self.hidden_dims[-1])
 +            module_cls = RecurTiedBackbone
 +            phi_kwargs = dict(
 +                hidden_dim=hidden_dim,
@@ -528,7 +554,7 @@ index 4ee2b26..dd1974f 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +491,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +492,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -536,7 +562,7 @@ index 4ee2b26..dd1974f 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,8 +503,12 @@ class GCBilinearValue(nn.Module):
+@@ -375,8 +504,12 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
@@ -551,3 +577,15 @@ index 4ee2b26..dd1974f 100644
  
          v = (phi * psi / jnp.sqrt(self.latent_dim)).sum(axis=-1)
  
+@@ -394,9 +527,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+ 
+     action_dim: int = None
+ 
+-    def __call__(self, observations, goals=None, actions=None, info=False):
++    def __call__(self, observations, goals=None, actions=None, info=False, *, num_iters=None):
+         actions = jnp.eye(self.action_dim)[actions]
+-        return super().__call__(observations, goals, actions, info)
++        return super().__call__(observations, goals, actions, info, num_iters=num_iters)
+ 
+ 
+ class GCMRNValue(nn.Module):

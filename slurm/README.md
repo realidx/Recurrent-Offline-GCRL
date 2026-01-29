@@ -46,3 +46,28 @@ One environment (`antmaze-large-stitch-v0`), 3 seeds, 7 configs = 21 array tasks
 mkdir -p logs/phase_1
 sbatch slurm/phase1_critics_antmaze_large_stitch_array.slurm
 ```
+
+## Phase 1 (reduced): depth-6 untied vs tied (+ param-matched tied)
+
+This is the recommended “fast” Phase 1 run: 3 seeds × 3 configs = 9 array tasks:
+
+- `resnet` depth = 6
+- `recur_tied` iters = 6
+- `recur_tied` iters = 6 with `critic_backbone_hidden_dim` chosen to parameter-match `resnet:6`
+
+```bash
+mkdir -p logs/phase_1
+
+# (1) Compute a good hidden-dim match on the login node.
+OGBENCH_DATASET_DIR=.ogbench_data \
+  python scripts/match_recur_hidden_dim.py --dataset antmaze-large-stitch-v0 --resnet-depth 6 --recur-iters 6
+
+# (2) Submit with the printed RECUR_MATCH_HIDDEN_DIM.
+sbatch --export=ALL,RECUR_MATCH_HIDDEN_DIM=### slurm/phase1_min_antmaze_large_stitch_array.slurm
+```
+
+To test the tied model with more test-time compute (K_test), set `CRITIC_EVAL_NUM_ITERS` (only affects `recur_tied`):
+
+```bash
+sbatch --export=ALL,RECUR_MATCH_HIDDEN_DIM=###,CRITIC_EVAL_NUM_ITERS=12 slurm/phase1_min_antmaze_large_stitch_array.slurm
+```
