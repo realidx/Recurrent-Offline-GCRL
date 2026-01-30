@@ -2,8 +2,9 @@
 """
 Find a recurrent-tied critic hidden dim that matches the parameter count of an untied ResNet critic.
 
-This uses the OGBench impls `GCBilinearValue` module directly (no MuJoCo needed) and reads
-observation/action dims from the downloaded dataset `.npz`.
+This uses a closed-form parameter count (no JAX needed) and reads observation/action dims from
+the downloaded dataset `.npz`. This avoids failures on login nodes whose CPUs do not support
+AVX (some prebuilt jaxlib wheels require AVX).
 
 Example:
   OGBENCH_DATASET_DIR=/path/to/data \
@@ -15,16 +16,18 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Tuple
 
-import jax
-import jax.numpy as jnp
 import numpy as np
 
 
-def count_params(params: Any) -> int:
-    leaves = jax.tree_util.tree_leaves(params)
-    return int(sum(np.prod(x.shape) for x in leaves))
+def dense_params(in_dim: int, out_dim: int, *, bias: bool = True) -> int:
+    return int(in_dim) * int(out_dim) + (int(out_dim) if bias else 0)
+
+
+def layer_norm_params(dim: int) -> int:
+    # scale + bias
+    return 2 * int(dim)
 
 
 def load_dims(dataset_dir: Path, dataset: str) -> Tuple[int, int, bool]:
@@ -39,54 +42,108 @@ def load_dims(dataset_dir: Path, dataset: str) -> Tuple[int, int, bool]:
     return obs_dim, act_dim, bool(discrete)
 
 
-def build_critic_params(
+def resnet_backbone_params(*, in_dim: int, hidden_dim: int, latent_dim: int, depth: int, layer_norm: bool = True) -> int:
+    """
+    Match utils.networks.DeepResNetBackbone + ResNetBlock parameterization.
+    """
+    h = int(hidden_dim)
+    d = int(latent_dim)
+    depth = int(depth)
+
+    total = 0
+    total += dense_params(in_dim, h, bias=True)
+    for _ in range(depth):
+        if layer_norm:
+            total += layer_norm_params(h)
+        total += dense_params(h, h, bias=True)
+        total += dense_params(h, h, bias=True)
+        total += h  # layerscale vector
+    total += dense_params(h, d, bias=True)
+    return int(total)
+
+
+def recur_tied_backbone_params(
+    *,
+    in_dim: int,
+    hidden_dim: int,
+    latent_dim: int,
+    num_iters: int,
+    max_iters: int = 32,
+    layer_norm: bool = True,
+) -> int:
+    """
+    Match utils.networks.RecurTiedBackbone parameterization.
+
+    Note: in the current implementation, LayerNorm is instantiated inside the unroll loop,
+    so it creates *separate* LN params per iteration (not tied). We count that here.
+    """
+    h = int(hidden_dim)
+    d = int(latent_dim)
+    k = int(num_iters)
+    m = int(max_iters)
+
+    total = 0
+    total += dense_params(in_dim, h, bias=True)
+    total += m * h  # step_embed
+    total += m  # alpha (per-step scalar)
+    total += dense_params(h, h, bias=True)  # film_fc1
+    total += dense_params(h, 2 * h, bias=True)  # film_fc2
+    total += dense_params(h, h, bias=True)  # tied_fc1
+    total += dense_params(h, h, bias=True)  # tied_fc2
+    if layer_norm:
+        total += k * layer_norm_params(h)
+    total += dense_params(h, d, bias=True)
+    return int(total)
+
+
+def bilinear_critic_params(
     *,
     obs_dim: int,
     act_dim: int,
-    hidden_dims=(512, 512, 512),
-    latent_dim=512,
-    layer_norm=True,
-    ensemble=True,
+    latent_dim: int,
     backbone: str,
-    resnet_num_blocks: int = 6,
-    recur_num_iters: int = 6,
+    hidden_dim: int,
+    resnet_depth: int = 6,
+    recur_iters: int = 6,
     recur_max_iters: int = 32,
-    layerscale_init: float = 1e-2,
-    backbone_hidden_dim: int | None = None,
-) -> Dict[str, Any]:
-    repo_root = Path(__file__).resolve().parents[1]
-    impl_dir = repo_root / "third_party" / "ogbench" / "impls"
-    os.environ.setdefault("PYTHONPATH", "")
-    # Make sure `utils.networks` resolves like it does when running from impl_dir.
-    import sys
+    layer_norm: bool = True,
+    ensemble_size: int = 2,
+) -> int:
+    """
+    Match utils.networks.GCBilinearValue when ensemble=True (ensemblize(..., 2)).
+    Counts critic params only (phi + psi backbones), including ensemble duplication.
+    """
+    in_phi = int(obs_dim) + int(act_dim)
+    in_psi = int(obs_dim)
 
-    if str(impl_dir) not in sys.path:
-        sys.path.insert(0, str(impl_dir))
+    if backbone == "resnet":
+        phi = resnet_backbone_params(
+            in_dim=in_phi, hidden_dim=hidden_dim, latent_dim=latent_dim, depth=resnet_depth, layer_norm=layer_norm
+        )
+        psi = resnet_backbone_params(
+            in_dim=in_psi, hidden_dim=hidden_dim, latent_dim=latent_dim, depth=resnet_depth, layer_norm=layer_norm
+        )
+    elif backbone == "recur_tied":
+        phi = recur_tied_backbone_params(
+            in_dim=in_phi,
+            hidden_dim=hidden_dim,
+            latent_dim=latent_dim,
+            num_iters=recur_iters,
+            max_iters=recur_max_iters,
+            layer_norm=layer_norm,
+        )
+        psi = recur_tied_backbone_params(
+            in_dim=in_psi,
+            hidden_dim=hidden_dim,
+            latent_dim=latent_dim,
+            num_iters=recur_iters,
+            max_iters=recur_max_iters,
+            layer_norm=layer_norm,
+        )
+    else:
+        raise ValueError(f"Unsupported backbone: {backbone}")
 
-    from utils.networks import GCBilinearValue  # noqa: E402
-
-    critic = GCBilinearValue(
-        hidden_dims=hidden_dims,
-        latent_dim=latent_dim,
-        layer_norm=layer_norm,
-        ensemble=ensemble,
-        value_exp=False,
-        state_encoder=None,
-        goal_encoder=None,
-        backbone=backbone,
-        resnet_num_blocks=resnet_num_blocks,
-        recur_num_iters=recur_num_iters,
-        recur_max_iters=recur_max_iters,
-        layerscale_init=layerscale_init,
-        backbone_hidden_dim=backbone_hidden_dim,
-    )
-
-    key = jax.random.PRNGKey(0)
-    obs = jnp.zeros((1, obs_dim), dtype=jnp.float32)
-    goal = jnp.zeros((1, obs_dim), dtype=jnp.float32)
-    act = jnp.zeros((1, act_dim), dtype=jnp.float32)
-    variables = critic.init(key, obs, goal, act)
-    return variables["params"]
+    return int(ensemble_size) * int(phi + psi)
 
 
 def main() -> None:
@@ -108,15 +165,16 @@ def main() -> None:
     if discrete:
         raise SystemExit("This helper currently expects continuous actions (antmaze is continuous).")
 
-    resnet_params = build_critic_params(
+    target = bilinear_critic_params(
         obs_dim=obs_dim,
         act_dim=act_dim,
-        hidden_dims=(args.hidden_dim, args.hidden_dim, args.hidden_dim),
         latent_dim=args.latent_dim,
         backbone="resnet",
-        resnet_num_blocks=args.resnet_depth,
+        hidden_dim=args.hidden_dim,
+        resnet_depth=args.resnet_depth,
+        recur_iters=args.recur_iters,
+        recur_max_iters=args.recur_max_iters,
     )
-    target = count_params(resnet_params)
 
     lo = int(args.search_min // args.step) * args.step
     hi = int(args.search_max // args.step) * args.step
@@ -125,17 +183,16 @@ def main() -> None:
     best_diff = None
     best_count = None
     for h in range(lo, hi + 1, int(args.step)):
-        recur_params = build_critic_params(
+        c = bilinear_critic_params(
             obs_dim=obs_dim,
             act_dim=act_dim,
-            hidden_dims=(args.hidden_dim, args.hidden_dim, args.hidden_dim),
             latent_dim=args.latent_dim,
             backbone="recur_tied",
-            recur_num_iters=args.recur_iters,
+            hidden_dim=h,
+            resnet_depth=args.resnet_depth,
+            recur_iters=args.recur_iters,
             recur_max_iters=args.recur_max_iters,
-            backbone_hidden_dim=h,
         )
-        c = count_params(recur_params)
         diff = abs(c - target)
         if best_diff is None or diff < best_diff:
             best_h, best_diff, best_count = h, diff, c
