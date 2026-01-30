@@ -127,6 +127,8 @@ If some eval jobs fail with CUDA initialization / “No visible GPU devices”, 
 This forces `JAX_PLATFORMS=cpu` in `slurm/phase2_eval_only.slurm` so JAX won’t touch CUDA, while still using `MUJOCO_GL=egl`
 for MuJoCo environments.
 
+To sweep `K_test` on saved checkpoints, set `CRITIC_EVAL_NUM_ITERS` when using `slurm/phase2_eval_only.slurm`.
+
 ### Resuming a train-only job
 
 `main.py` now resumes cleanly based on the restored checkpoint’s internal step counter. To resume into the *same*

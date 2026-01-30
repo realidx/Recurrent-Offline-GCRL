@@ -23,6 +23,7 @@ RUN_GROUP="${RUN_GROUP:-P2_EvalOnly}"
 EXP_NAME="${EXP_NAME:-}"
 SAVE_DIR="${SAVE_DIR:-${SLURM_SUBMIT_DIR}/exp}"
 DATASET_DIR="${DATASET_DIR:-${SLURM_SUBMIT_DIR}/.ogbench_data}"
+CRITIC_EVAL_NUM_ITERS="${CRITIC_EVAL_NUM_ITERS:-}"
 
 RESTORE_PATH="${RESTORE_PATH:?Set RESTORE_PATH to the training run directory glob (must match exactly one).}"
 RESTORE_EPOCH="${RESTORE_EPOCH:?Set RESTORE_EPOCH (e.g., 1000000).}"
@@ -130,6 +131,7 @@ emit("RESUME_CRITIC_BACKBONE", agent.get("critic_backbone"))
 emit("RESUME_CRITIC_RESNET_DEPTH", agent.get("critic_resnet_depth"))
 emit("RESUME_CRITIC_RECUR_ITERS", agent.get("critic_recur_iters"))
 emit("RESUME_CRITIC_BACKBONE_HIDDEN_DIM", agent.get("critic_backbone_hidden_dim"))
+emit("RESUME_CRITIC_EVAL_NUM_ITERS", agent.get("critic_eval_num_iters"))
 emit("RESUME_ACTOR_P_RANDOMGOAL", agent.get("actor_p_randomgoal"))
 emit("RESUME_ACTOR_P_TRAJGOAL", agent.get("actor_p_trajgoal"))
 emit("RESUME_ALPHA", agent.get("alpha"))
@@ -164,6 +166,12 @@ if [[ -n "${RESUME_CRITIC_RECUR_ITERS:-}" ]]; then
 fi
 if [[ -n "${RESUME_CRITIC_BACKBONE_HIDDEN_DIM:-}" ]]; then
   AGENT_FLAGS+=("--agent.critic_backbone_hidden_dim=${RESUME_CRITIC_BACKBONE_HIDDEN_DIM}")
+fi
+
+if [[ -n "${CRITIC_EVAL_NUM_ITERS}" ]]; then
+  AGENT_FLAGS+=("--agent.critic_eval_num_iters=${CRITIC_EVAL_NUM_ITERS}")
+elif [[ -n "${RESUME_CRITIC_EVAL_NUM_ITERS:-}" ]]; then
+  AGENT_FLAGS+=("--agent.critic_eval_num_iters=${RESUME_CRITIC_EVAL_NUM_ITERS}")
 fi
 
 if [[ -n "${RESUME_SEED:-}" ]]; then
