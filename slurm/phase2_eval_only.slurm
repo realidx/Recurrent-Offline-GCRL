@@ -37,9 +37,12 @@ export WANDB_SILENT="${WANDB_SILENT:-true}"
 
 # Evaluation should be robust to flaky GPU nodes. If evaluating on CPU, force CPU backend so JAX
 # never attempts CUDA initialization (some nodes can report "No visible GPU devices").
+#
+# Note: OGBench AntMaze environments require MuJoCo. On many clusters OSMesa is not available, so
+# we default to EGL even for CPU-eval; you still submit the job to a GPU partition for MuJoCo.
 if [[ "${EVAL_ON_CPU}" == "1" ]]; then
   export JAX_PLATFORMS="${JAX_PLATFORMS:-cpu}"
-  export MUJOCO_GL="${MUJOCO_GL:-osmesa}"
+  export MUJOCO_GL="${MUJOCO_GL:-egl}"
 else
   export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda}"
   export MUJOCO_GL="${MUJOCO_GL:-egl}"

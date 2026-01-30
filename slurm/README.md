@@ -124,7 +124,8 @@ sbatch --export=ALL,RESTORE_PATH='exp/OGBench/P2_TrainOnly_Depth6/sd000_*',RESTO
 ```
 
 If some eval jobs fail with CUDA initialization / “No visible GPU devices”, keep `EVAL_ON_CPU=1` (default).
-This forces `JAX_PLATFORMS=cpu` in `slurm/phase2_eval_only.slurm` so JAX won’t touch CUDA.
+This forces `JAX_PLATFORMS=cpu` in `slurm/phase2_eval_only.slurm` so JAX won’t touch CUDA, while still using `MUJOCO_GL=egl`
+for MuJoCo environments.
 
 ### Resuming a train-only job
 
