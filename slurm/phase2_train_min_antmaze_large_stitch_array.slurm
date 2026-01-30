@@ -32,8 +32,11 @@ WANDB_MODE="${WANDB_MODE:-offline}"
 
 ENV_NAME="${ENV_NAME:-antmaze-large-stitch-v0}"
 RUN_GROUP="${RUN_GROUP:-P2_TrainOnly_Depth6}"
+EXP_NAME="${EXP_NAME:-}"
 SAVE_DIR="${SAVE_DIR:-${SLURM_SUBMIT_DIR}/exp}"
 DATASET_DIR="${DATASET_DIR:-${SLURM_SUBMIT_DIR}/.ogbench_data}"
+RESTORE_PATH="${RESTORE_PATH:-}"
+RESTORE_EPOCH="${RESTORE_EPOCH:-}"
 
 # Train settings.
 TRAIN_STEPS="${TRAIN_STEPS:-1000000}"
@@ -49,6 +52,7 @@ VIDEO_EPISODES="${VIDEO_EPISODES:-0}"
 
 export MUJOCO_GL="${MUJOCO_GL:-egl}"
 export WANDB_SILENT="${WANDB_SILENT:-true}"
+export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda}"
 
 mkdir -p "${DATASET_DIR}"
 export OGBENCH_DATASET_DIR="${DATASET_DIR}"
@@ -133,6 +137,16 @@ cmd=(
   "${AGENT_FLAGS[@]}"
 )
 
+if [[ -n "${EXP_NAME}" ]]; then
+  cmd+=("--exp_name=${EXP_NAME}")
+fi
+if [[ -n "${RESTORE_PATH}" ]]; then
+  cmd+=("--restore_path=${RESTORE_PATH}")
+fi
+if [[ -n "${RESTORE_EPOCH}" ]]; then
+  cmd+=("--restore_epoch=${RESTORE_EPOCH}")
+fi
+
 echo "cfg=${CFG} seed=${SEED} cwd=$(pwd) WANDB_MODE=${WANDB_MODE} OGBENCH_DATASET_DIR=${OGBENCH_DATASET_DIR} ${cmd[*]}"
 
 if ! command -v "${CONDA_EXE}" >/dev/null 2>&1; then
@@ -159,5 +173,9 @@ import jax
 print("jax_devices:", jax.devices())
 PY
 
-"${CONDA_EXE}" run -n "${CONDA_ENV}" env WANDB_MODE="${WANDB_MODE}" "${cmd[@]}"
+if command -v nvidia-smi >/dev/null 2>&1; then
+  nvidia-smi -L || true
+  nvidia-smi || true
+fi
 
+"${CONDA_EXE}" run -n "${CONDA_ENV}" env WANDB_MODE="${WANDB_MODE}" "${cmd[@]}"

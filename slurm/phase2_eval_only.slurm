@@ -20,6 +20,7 @@ WANDB_MODE="${WANDB_MODE:-offline}"
 
 ENV_NAME="${ENV_NAME:-antmaze-large-stitch-v0}"
 RUN_GROUP="${RUN_GROUP:-P2_EvalOnly}"
+EXP_NAME="${EXP_NAME:-}"
 SAVE_DIR="${SAVE_DIR:-${SLURM_SUBMIT_DIR}/exp}"
 DATASET_DIR="${DATASET_DIR:-${SLURM_SUBMIT_DIR}/.ogbench_data}"
 
@@ -34,6 +35,7 @@ EVAL_ON_CPU="${EVAL_ON_CPU:-1}"
 
 export MUJOCO_GL="${MUJOCO_GL:-egl}"
 export WANDB_SILENT="${WANDB_SILENT:-true}"
+export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda}"
 
 mkdir -p "${DATASET_DIR}"
 export OGBENCH_DATASET_DIR="${DATASET_DIR}"
@@ -58,6 +60,10 @@ cmd=(
   "--eval_on_cpu=${EVAL_ON_CPU}"
   "--agent=agents/crl.py"
 )
+
+if [[ -n "${EXP_NAME}" ]]; then
+  cmd+=("--exp_name=${EXP_NAME}")
+fi
 
 if [[ -n "${EVAL_TASKS}" ]]; then
   cmd+=("--eval_tasks=${EVAL_TASKS}")
@@ -89,5 +95,9 @@ import jax
 print("jax_devices:", jax.devices())
 PY
 
-"${CONDA_EXE}" run -n "${CONDA_ENV}" env WANDB_MODE="${WANDB_MODE}" "${cmd[@]}"
+if command -v nvidia-smi >/dev/null 2>&1; then
+  nvidia-smi -L || true
+  nvidia-smi || true
+fi
 
+"${CONDA_EXE}" run -n "${CONDA_ENV}" env WANDB_MODE="${WANDB_MODE}" "${cmd[@]}"

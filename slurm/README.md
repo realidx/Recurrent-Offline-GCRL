@@ -122,3 +122,16 @@ Eval-only (single job):
 mkdir -p logs/phase_2
 sbatch --export=ALL,RESTORE_PATH='exp/OGBench/P2_TrainOnly_Depth6/sd000_*',RESTORE_EPOCH=1000000 slurm/phase2_eval_only.slurm
 ```
+
+### Resuming a train-only job
+
+`main.py` now resumes cleanly based on the restored checkpoint’s internal step counter. To resume into the *same*
+run directory (so you don’t create duplicate “seed 0” runs), set `EXP_NAME` and restore from that same directory.
+
+Example (resume seed 0 run in place):
+
+```bash
+sbatch --export=ALL,RECUR_MATCH_HIDDEN_DIM=###,RUN_GROUP=P2_TrainOnly_Depth6,EXP_NAME='sd000_s_123456.20260130_010203',RESTORE_PATH='exp/OGBench/P2_TrainOnly_Depth6/sd000_s_123456.20260130_010203',RESTORE_EPOCH=80000 slurm/phase2_train_min_antmaze_large_stitch_array.slurm
+```
+
+If a job ever runs on CPU by accident (slow), `JAX_PLATFORMS=cuda` makes it fail fast instead of burning hours.
