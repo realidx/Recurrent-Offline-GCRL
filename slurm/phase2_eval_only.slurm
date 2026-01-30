@@ -52,7 +52,6 @@ cmd=(
   python main.py
   "--run_group=${RUN_GROUP}"
   "--save_dir=${SAVE_DIR}"
-  "--seed=0"
   "--env_name=${ENV_NAME}"
   "--train_steps=0"
   "--eval_only=1"
@@ -93,6 +92,77 @@ if ! command -v "${CONDA_EXE}" >/dev/null 2>&1; then
   echo "Error: 'conda' not found in this job environment." >&2
   exit 3
 fi
+
+export RESTORE_PATH
+"${CONDA_EXE}" run -n "${CONDA_ENV}" python - <<'PY'
+import json
+import os
+import shlex
+from pathlib import Path
+
+restore_path = Path(os.environ["RESTORE_PATH"]).expanduser()
+flags_path = restore_path / "flags.json"
+if not flags_path.exists():
+    raise SystemExit(f"flags.json not found at: {flags_path}")
+
+flags = json.loads(flags_path.read_text())
+agent = flags.get("agent", {}) if isinstance(flags, dict) else {}
+
+def emit(k, v):
+    if v is None:
+        return
+    print(f"{k}={shlex.quote(str(v))}")
+
+emit("RESUME_SEED", flags.get("seed"))
+emit("RESUME_ENV_NAME", flags.get("env_name"))
+emit("RESUME_CRITIC_BACKBONE", agent.get("critic_backbone"))
+emit("RESUME_CRITIC_RESNET_DEPTH", agent.get("critic_resnet_depth"))
+emit("RESUME_CRITIC_RECUR_ITERS", agent.get("critic_recur_iters"))
+emit("RESUME_CRITIC_BACKBONE_HIDDEN_DIM", agent.get("critic_backbone_hidden_dim"))
+emit("RESUME_ACTOR_P_RANDOMGOAL", agent.get("actor_p_randomgoal"))
+emit("RESUME_ACTOR_P_TRAJGOAL", agent.get("actor_p_trajgoal"))
+emit("RESUME_ALPHA", agent.get("alpha"))
+PY > /tmp/ogbench_eval_resume.env
+
+# shellcheck disable=SC1091
+source /tmp/ogbench_eval_resume.env
+
+if [[ -n "${RESUME_ENV_NAME:-}" ]]; then
+  ENV_NAME="${RESUME_ENV_NAME}"
+fi
+
+AGENT_FLAGS=()
+if [[ -n "${RESUME_ACTOR_P_RANDOMGOAL:-}" ]]; then
+  AGENT_FLAGS+=("--agent.actor_p_randomgoal=${RESUME_ACTOR_P_RANDOMGOAL}")
+fi
+if [[ -n "${RESUME_ACTOR_P_TRAJGOAL:-}" ]]; then
+  AGENT_FLAGS+=("--agent.actor_p_trajgoal=${RESUME_ACTOR_P_TRAJGOAL}")
+fi
+if [[ -n "${RESUME_ALPHA:-}" ]]; then
+  AGENT_FLAGS+=("--agent.alpha=${RESUME_ALPHA}")
+fi
+
+if [[ -n "${RESUME_CRITIC_BACKBONE:-}" ]]; then
+  AGENT_FLAGS+=("--agent.critic_backbone=${RESUME_CRITIC_BACKBONE}")
+fi
+if [[ -n "${RESUME_CRITIC_RESNET_DEPTH:-}" ]]; then
+  AGENT_FLAGS+=("--agent.critic_resnet_depth=${RESUME_CRITIC_RESNET_DEPTH}")
+fi
+if [[ -n "${RESUME_CRITIC_RECUR_ITERS:-}" ]]; then
+  AGENT_FLAGS+=("--agent.critic_recur_iters=${RESUME_CRITIC_RECUR_ITERS}")
+fi
+if [[ -n "${RESUME_CRITIC_BACKBONE_HIDDEN_DIM:-}" ]]; then
+  AGENT_FLAGS+=("--agent.critic_backbone_hidden_dim=${RESUME_CRITIC_BACKBONE_HIDDEN_DIM}")
+fi
+
+if [[ -n "${RESUME_SEED:-}" ]]; then
+  # For eval logging randomness and exp naming; model params still come from restore_path.
+  cmd+=("--seed=${RESUME_SEED}")
+else
+  cmd+=("--seed=0")
+fi
+
+cmd+=("${AGENT_FLAGS[@]}")
 
 "${CONDA_EXE}" run -n "${CONDA_ENV}" python - <<'PY'
 import jax
