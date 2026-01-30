@@ -35,7 +35,8 @@ EVAL_ON_CPU="${EVAL_ON_CPU:-1}"
 
 export MUJOCO_GL="${MUJOCO_GL:-egl}"
 export WANDB_SILENT="${WANDB_SILENT:-true}"
-export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda}"
+# Allow CPU backend when requested via EVAL_ON_CPU=1.
+export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda,cpu}"
 
 mkdir -p "${DATASET_DIR}"
 export OGBENCH_DATASET_DIR="${DATASET_DIR}"

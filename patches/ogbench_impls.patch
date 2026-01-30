@@ -100,10 +100,15 @@ index 53109ab..9c80cd3 100644
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
 diff --git a/impls/main.py b/impls/main.py
-index 3660e03..b0abff6 100644
+index 3660e03..8c41974 100644
 --- a/impls/main.py
 +++ b/impls/main.py
-@@ -23,28 +23,39 @@ flags.DEFINE_string('run_group', 'Debug', 'Run group.')
+@@ -1,3 +1,4 @@
++import glob
+ import json
+ import os
+ import random
+@@ -23,28 +24,44 @@ flags.DEFINE_string('run_group', 'Debug', 'Run group.')
  flags.DEFINE_integer('seed', 0, 'Random seed.')
  flags.DEFINE_string('env_name', 'antmaze-large-navigate-v0', 'Environment (dataset) name.')
  flags.DEFINE_string('save_dir', 'exp/', 'Save directory.')
@@ -133,6 +138,11 @@ index 3660e03..b0abff6 100644
  flags.DEFINE_integer('video_frame_skip', 3, 'Frame skip for videos.')
  flags.DEFINE_integer('eval_on_cpu', 1, 'Whether to evaluate on CPU.')
 +flags.DEFINE_bool('eval_only', False, 'Skip training and run evaluation only (requires --restore_path).')
++flags.DEFINE_bool(
++    'restore_use_flags',
++    True,
++    'If restore_path points to a run dir with flags.json, merge agent config/env_name from it (helps eval/resume).',
++)
  
  config_flags.DEFINE_config_file('agent', 'agents/gciql.py', lock_config=False)
  
@@ -144,7 +154,42 @@ index 3660e03..b0abff6 100644
      setup_wandb(project='OGBench', group=FLAGS.run_group, name=exp_name)
  
      FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, FLAGS.run_group, exp_name)
-@@ -85,13 +96,102 @@ def main(_):
+@@ -55,7 +72,33 @@ def main(_):
+ 
+     # Set up environment and dataset.
+     config = FLAGS.agent
+-    env, train_dataset, val_dataset = make_env_and_datasets(FLAGS.env_name, frame_stack=config['frame_stack'])
++
++    env_name = FLAGS.env_name
++    if FLAGS.restore_use_flags and FLAGS.restore_path is not None:
++        candidates = glob.glob(FLAGS.restore_path)
++        restore_dir = candidates[0] if len(candidates) == 1 else (FLAGS.restore_path if os.path.isdir(FLAGS.restore_path) else None)
++        if restore_dir is not None:
++            flags_path = os.path.join(restore_dir, 'flags.json')
++            if os.path.exists(flags_path):
++                try:
++                    restore_flags = json.load(open(flags_path, 'r'))
++                except Exception:
++                    restore_flags = None
++                if isinstance(restore_flags, dict):
++                    # Make env match the checkpoint by default.
++                    env_name = restore_flags.get('env_name', env_name)
++
++                    # Merge agent config needed to reconstruct the exact parameter tree.
++                    # Avoid overriding eval-only knobs that are useful to change at test time.
++                    restore_agent_cfg = restore_flags.get('agent', {})
++                    if isinstance(restore_agent_cfg, dict):
++                        for k, v in restore_agent_cfg.items():
++                            if k == 'critic_eval_num_iters':
++                                continue
++                            if k in config:
++                                config[k] = v
++
++    env, train_dataset, val_dataset = make_env_and_datasets(env_name, frame_stack=config['frame_stack'])
+ 
+     dataset_class = {
+         'GCDataset': GCDataset,
+@@ -85,13 +128,104 @@ def main(_):
      # Restore agent.
      if FLAGS.restore_path is not None:
          agent = restore_agent(agent, FLAGS.restore_path, FLAGS.restore_epoch)
@@ -221,10 +266,12 @@ index 3660e03..b0abff6 100644
 +
 +    if FLAGS.eval_only:
 +        eval_step = int(FLAGS.restore_epoch) if FLAGS.restore_epoch is not None else 0
++        eval_agent = agent
 +        if FLAGS.eval_on_cpu:
-+            eval_agent = jax.device_put(agent, device=jax.devices('cpu')[0])
-+        else:
-+            eval_agent = agent
++            try:
++                eval_agent = jax.device_put(agent, device=jax.devices('cpu')[0])
++            except Exception:
++                print('Warning: eval_on_cpu requested but CPU backend unavailable; evaluating on current device.')
 +        run_evaluation(step=eval_step, eval_agent=eval_agent)
 +        train_logger.close()
 +        eval_logger.close()
@@ -248,7 +295,7 @@ index 3660e03..b0abff6 100644
          # Update agent.
          batch = train_dataset.sample(config['batch_size'])
          agent, update_info = agent.update(batch)
-@@ -99,57 +199,26 @@ def main(_):
+@@ -99,57 +233,28 @@ def main(_):
          # Log metrics.
          if i % FLAGS.log_interval == 0:
              train_metrics = {f'training/{k}': v for k, v in update_info.items()}
@@ -270,10 +317,11 @@ index 3660e03..b0abff6 100644
          # Evaluate agent.
 -        if i == 1 or i % FLAGS.eval_interval == 0:
 +        if FLAGS.eval_interval and (i == 1 or i % FLAGS.eval_interval == 0):
++            eval_agent = agent
              if FLAGS.eval_on_cpu:
-                 eval_agent = jax.device_put(agent, device=jax.devices('cpu')[0])
-             else:
-                 eval_agent = agent
+-                eval_agent = jax.device_put(agent, device=jax.devices('cpu')[0])
+-            else:
+-                eval_agent = agent
 -            renders = []
 -            eval_metrics = {}
 -            overall_metrics = defaultdict(list)
@@ -309,6 +357,10 @@ index 3660e03..b0abff6 100644
 -
 -            wandb.log(eval_metrics, step=i)
 -            eval_logger.log(eval_metrics, step=i)
++                try:
++                    eval_agent = jax.device_put(agent, device=jax.devices('cpu')[0])
++                except Exception:
++                    print('Warning: eval_on_cpu requested but CPU backend unavailable; evaluating on current device.')
 +            run_evaluation(step=i, eval_agent=eval_agent)
  
          # Save agent.
