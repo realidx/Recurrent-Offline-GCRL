@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import glob
 import json
 import math
 from dataclasses import dataclass
@@ -50,6 +51,19 @@ def _safe_read_json(path: Path) -> Optional[Dict[str, Any]]:
         return json.loads(path.read_text())
     except Exception:
         return None
+
+
+def _resolve_restore_dir(path_str: Optional[str]) -> Optional[Path]:
+    if not path_str:
+        return None
+    try:
+        candidates = glob.glob(path_str)
+        if len(candidates) == 1:
+            return Path(candidates[0])
+    except Exception:
+        pass
+    p = Path(path_str).expanduser()
+    return p if p.exists() else None
 
 
 def _get_nested(d: Optional[Dict[str, Any]], keys: Iterable[str]) -> Any:
@@ -130,19 +144,38 @@ class RunSummary:
         flags = _safe_read_json(flags_path)
         agent_cfg = flags.get("agent") if isinstance(flags, dict) else None
 
+        # If this is an eval-only run, flags.json may reflect the *default* agent config (because the run
+        # restores from a checkpoint). In that case, read the restored run's flags.json and use that to
+        # infer the correct backbone/depth/seed/env for summarization.
+        restore_flags = None
+        if isinstance(flags, dict):
+            restore_dir = _resolve_restore_dir(flags.get("restore_path"))
+            if restore_dir is not None:
+                restore_flags = _safe_read_json(restore_dir / "flags.json")
+                if isinstance(restore_flags, dict):
+                    agent_cfg = restore_flags.get("agent") if isinstance(restore_flags.get("agent"), dict) else agent_cfg
+                    # Prefer the restored run's seed/env_name for grouping.
+                    if restore_flags.get("seed") is not None:
+                        flags["seed"] = restore_flags.get("seed")
+                    if restore_flags.get("env_name") is not None:
+                        flags["env_name"] = restore_flags.get("env_name")
+
         env_name = flags.get("env_name") if isinstance(flags, dict) else None
         seed = flags.get("seed") if isinstance(flags, dict) else None
         run_group = flags.get("run_group") if isinstance(flags, dict) else None
         agent_name = _get_nested(flags, ["agent", "agent_name"])
 
-        critic_backbone = _get_nested(flags, ["agent", "critic_backbone"])
-        critic_resnet_depth = _get_nested(flags, ["agent", "critic_resnet_depth"])
-        critic_recur_iters = _get_nested(flags, ["agent", "critic_recur_iters"])
-        critic_backbone_hidden_dim = _get_nested(flags, ["agent", "critic_backbone_hidden_dim"])
-        critic_eval_num_iters = _get_nested(flags, ["agent", "critic_eval_num_iters"])
+        # Prefer restored agent_cfg if present.
+        critic_backbone = _get_nested(agent_cfg, ["critic_backbone"]) if isinstance(agent_cfg, dict) else None
+        critic_resnet_depth = _get_nested(agent_cfg, ["critic_resnet_depth"]) if isinstance(agent_cfg, dict) else None
+        critic_recur_iters = _get_nested(agent_cfg, ["critic_recur_iters"]) if isinstance(agent_cfg, dict) else None
+        critic_backbone_hidden_dim = (
+            _get_nested(agent_cfg, ["critic_backbone_hidden_dim"]) if isinstance(agent_cfg, dict) else None
+        )
+        critic_eval_num_iters = _get_nested(agent_cfg, ["critic_eval_num_iters"]) if isinstance(agent_cfg, dict) else None
 
-        alpha = _get_nested(flags, ["agent", "alpha"])
-        discount = _get_nested(flags, ["agent", "discount"])
+        alpha = _get_nested(agent_cfg, ["alpha"]) if isinstance(agent_cfg, dict) else None
+        discount = _get_nested(agent_cfg, ["discount"]) if isinstance(agent_cfg, dict) else None
         try:
             alpha = float(alpha) if alpha is not None else None
         except Exception:
