@@ -33,10 +33,17 @@ VIDEO_EPISODES="${VIDEO_EPISODES:-0}"
 DISABLE_TQDM="${DISABLE_TQDM:-1}"
 EVAL_ON_CPU="${EVAL_ON_CPU:-1}"
 
-export MUJOCO_GL="${MUJOCO_GL:-egl}"
 export WANDB_SILENT="${WANDB_SILENT:-true}"
-# Allow CPU backend when requested via EVAL_ON_CPU=1.
-export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda,cpu}"
+
+# Evaluation should be robust to flaky GPU nodes. If evaluating on CPU, force CPU backend so JAX
+# never attempts CUDA initialization (some nodes can report "No visible GPU devices").
+if [[ "${EVAL_ON_CPU}" == "1" ]]; then
+  export JAX_PLATFORMS="${JAX_PLATFORMS:-cpu}"
+  export MUJOCO_GL="${MUJOCO_GL:-osmesa}"
+else
+  export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda}"
+  export MUJOCO_GL="${MUJOCO_GL:-egl}"
+fi
 
 mkdir -p "${DATASET_DIR}"
 export OGBENCH_DATASET_DIR="${DATASET_DIR}"

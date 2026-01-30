@@ -123,6 +123,9 @@ mkdir -p logs/phase_2
 sbatch --export=ALL,RESTORE_PATH='exp/OGBench/P2_TrainOnly_Depth6/sd000_*',RESTORE_EPOCH=1000000 slurm/phase2_eval_only.slurm
 ```
 
+If some eval jobs fail with CUDA initialization / “No visible GPU devices”, keep `EVAL_ON_CPU=1` (default).
+This forces `JAX_PLATFORMS=cpu` in `slurm/phase2_eval_only.slurm` so JAX won’t touch CUDA.
+
 ### Resuming a train-only job
 
 `main.py` now resumes cleanly based on the restored checkpoint’s internal step counter. To resume into the *same*
