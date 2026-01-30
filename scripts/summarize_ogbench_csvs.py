@@ -173,6 +173,8 @@ class RunSummary:
             _get_nested(agent_cfg, ["critic_backbone_hidden_dim"]) if isinstance(agent_cfg, dict) else None
         )
         critic_eval_num_iters = _get_nested(agent_cfg, ["critic_eval_num_iters"]) if isinstance(agent_cfg, dict) else None
+        if critic_backbone_hidden_dim in (0, 0.0, "0"):
+            critic_backbone_hidden_dim = None
 
         alpha = _get_nested(agent_cfg, ["alpha"]) if isinstance(agent_cfg, dict) else None
         discount = _get_nested(agent_cfg, ["discount"]) if isinstance(agent_cfg, dict) else None

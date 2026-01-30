@@ -1,5 +1,5 @@
 diff --git a/impls/agents/crl.py b/impls/agents/crl.py
-index 53109ab..9c80cd3 100644
+index 53109ab..b1a3165 100644
 --- a/impls/agents/crl.py
 +++ b/impls/agents/crl.py
 @@ -52,6 +52,7 @@ class CRLAgent(flax.struct.PyTreeNode):
@@ -45,7 +45,7 @@ index 53109ab..9c80cd3 100644
              }
          else:
              raise ValueError(f'Unsupported actor loss: {self.config["actor_loss"]}')
-@@ -231,6 +246,12 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -231,6 +246,14 @@ class CRLAgent(flax.struct.PyTreeNode):
                  state_encoder=encoders.get('critic_state'),
                  goal_encoder=encoders.get('critic_goal'),
                  action_dim=action_dim,
@@ -54,11 +54,13 @@ index 53109ab..9c80cd3 100644
 +                recur_num_iters=config['critic_recur_iters'],
 +                recur_max_iters=config['critic_recur_max_iters'],
 +                layerscale_init=config['critic_layerscale_init'],
-+                backbone_hidden_dim=config.get('critic_backbone_hidden_dim'),
++                backbone_hidden_dim=None
++                if not config.get('critic_backbone_hidden_dim')
++                else int(config.get('critic_backbone_hidden_dim')),
              )
          else:
              critic_def = GCBilinearValue(
-@@ -241,6 +262,12 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -241,6 +264,14 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
                  state_encoder=encoders.get('critic_state'),
                  goal_encoder=encoders.get('critic_goal'),
@@ -67,11 +69,13 @@ index 53109ab..9c80cd3 100644
 +                recur_num_iters=config['critic_recur_iters'],
 +                recur_max_iters=config['critic_recur_max_iters'],
 +                layerscale_init=config['critic_layerscale_init'],
-+                backbone_hidden_dim=config.get('critic_backbone_hidden_dim'),
++                backbone_hidden_dim=None
++                if not config.get('critic_backbone_hidden_dim')
++                else int(config.get('critic_backbone_hidden_dim')),
              )
  
          if config['actor_loss'] == 'awr':
-@@ -253,6 +280,12 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -253,6 +284,14 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
                  state_encoder=encoders.get('value_state'),
                  goal_encoder=encoders.get('value_goal'),
@@ -80,11 +84,13 @@ index 53109ab..9c80cd3 100644
 +                recur_num_iters=config['critic_recur_iters'],
 +                recur_max_iters=config['critic_recur_max_iters'],
 +                layerscale_init=config['critic_layerscale_init'],
-+                backbone_hidden_dim=config.get('critic_backbone_hidden_dim'),
++                backbone_hidden_dim=None
++                if not config.get('critic_backbone_hidden_dim')
++                else int(config.get('critic_backbone_hidden_dim')),
              )
  
          if config['discrete']:
-@@ -306,6 +339,14 @@ def get_config():
+@@ -306,6 +345,14 @@ def get_config():
              const_std=True,  # Whether to use constant standard deviation for the actor.
              discrete=False,  # Whether the action space is discrete.
              encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
@@ -95,7 +101,7 @@ index 53109ab..9c80cd3 100644
 +            critic_eval_num_iters=None,  # Optional K_test override for evaluation-only (tied-only test-time compute knob).
 +            critic_recur_max_iters=32,  # Max step embedding table size.
 +            critic_layerscale_init=1e-2,  # LayerScale init for resnet/recur.
-+            critic_backbone_hidden_dim=None,  # Optional override (e.g., param-match resnet vs recur).
++            critic_backbone_hidden_dim=0,  # Optional override (e.g., param-match resnet vs recur). 0 disables.
              # Dataset hyperparameters.
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
