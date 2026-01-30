@@ -59,6 +59,10 @@ export OGBENCH_DATASET_DIR="${DATASET_DIR}"
 
 mkdir -p logs/phase_2
 
+if [[ -n "${RESTORE_PATH}" && "${RESTORE_PATH}" != /* ]]; then
+  RESTORE_PATH="${SLURM_SUBMIT_DIR}/${RESTORE_PATH}"
+fi
+
 SEEDS=(0 1 2)
 
 # 3 configs × 3 seeds = 9 tasks:

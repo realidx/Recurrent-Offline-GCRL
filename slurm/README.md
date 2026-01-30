@@ -127,6 +127,7 @@ sbatch --export=ALL,RESTORE_PATH='exp/OGBench/P2_TrainOnly_Depth6/sd000_*',RESTO
 
 `main.py` now resumes cleanly based on the restored checkpoint’s internal step counter. To resume into the *same*
 run directory (so you don’t create duplicate “seed 0” runs), set `EXP_NAME` and restore from that same directory.
+In the Phase 2 SLURM scripts, `RESTORE_PATH` can be relative to `${SLURM_SUBMIT_DIR}` (it will be converted to an absolute path).
 
 Example (resume seed 0 run in place):
 
