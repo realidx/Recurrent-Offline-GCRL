@@ -176,6 +176,17 @@ def main() -> None:
         recur_max_iters=args.recur_max_iters,
     )
 
+    recur_base = bilinear_critic_params(
+        obs_dim=obs_dim,
+        act_dim=act_dim,
+        latent_dim=args.latent_dim,
+        backbone="recur_tied",
+        hidden_dim=args.hidden_dim,
+        resnet_depth=args.resnet_depth,
+        recur_iters=args.recur_iters,
+        recur_max_iters=args.recur_max_iters,
+    )
+
     lo = int(args.search_min // args.step) * args.step
     hi = int(args.search_max // args.step) * args.step
 
@@ -199,6 +210,7 @@ def main() -> None:
 
     print(f"dataset={args.dataset} obs_dim={obs_dim} act_dim={act_dim}")
     print(f"target: resnet depth={args.resnet_depth} hidden_dim={args.hidden_dim} params={target}")
+    print(f"base: recur iters={args.recur_iters} hidden_dim={args.hidden_dim} params={recur_base} diff={abs(recur_base - target)}")
     print(
         f"match: recur iters={args.recur_iters} backbone_hidden_dim={best_h} params={best_count} diff={best_diff}"
     )
