@@ -136,15 +136,16 @@ index 53109ab..27777ca 100644
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
 diff --git a/impls/main.py b/impls/main.py
-index 3660e03..4f87c3d 100644
+index 3660e03..9f2c95d 100644
 --- a/impls/main.py
 +++ b/impls/main.py
-@@ -1,10 +1,13 @@
+@@ -1,10 +1,14 @@
 +import glob
  import json
  import os
 +import pickle
  import random
++import signal
  import time
  from collections import defaultdict
  
@@ -153,7 +154,7 @@ index 3660e03..4f87c3d 100644
  import numpy as np
  import tqdm
  import wandb
-@@ -23,28 +26,163 @@ flags.DEFINE_string('run_group', 'Debug', 'Run group.')
+@@ -23,28 +27,175 @@ flags.DEFINE_string('run_group', 'Debug', 'Run group.')
  flags.DEFINE_integer('seed', 0, 'Random seed.')
  flags.DEFINE_string('env_name', 'antmaze-large-navigate-v0', 'Environment (dataset) name.')
  flags.DEFINE_string('save_dir', 'exp/', 'Save directory.')
@@ -257,6 +258,18 @@ index 3660e03..4f87c3d 100644
 +
 +
  def main(_):
++    terminate_requested = {'flag': False, 'sig': None}
++
++    def _handle_terminate(sig, frame):
++        terminate_requested['flag'] = True
++        terminate_requested['sig'] = sig
++
++    try:
++        signal.signal(signal.SIGTERM, _handle_terminate)
++        signal.signal(signal.SIGINT, _handle_terminate)
++    except Exception:
++        pass
++
 +    # If restoring from a previous run, load its flags.json early so W&B / flags.json reflect
 +    # the actual checkpoint architecture (instead of defaults like mlp/3/4).
 +    if FLAGS.restore_use_flags and FLAGS.restore_path is not None:
@@ -318,7 +331,7 @@ index 3660e03..4f87c3d 100644
      setup_wandb(project='OGBench', group=FLAGS.run_group, name=exp_name)
  
      FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, FLAGS.run_group, exp_name)
-@@ -85,13 +223,149 @@ def main(_):
+@@ -85,13 +236,149 @@ def main(_):
      # Restore agent.
      if FLAGS.restore_path is not None:
          agent = restore_agent(agent, FLAGS.restore_path, FLAGS.restore_epoch)
@@ -469,7 +482,7 @@ index 3660e03..4f87c3d 100644
          # Update agent.
          batch = train_dataset.sample(config['batch_size'])
          agent, update_info = agent.update(batch)
-@@ -99,57 +373,54 @@ def main(_):
+@@ -99,57 +386,62 @@ def main(_):
          # Log metrics.
          if i % FLAGS.log_interval == 0:
              train_metrics = {f'training/{k}': v for k, v in update_info.items()}
@@ -514,6 +527,14 @@ index 3660e03..4f87c3d 100644
              wandb.log(train_metrics, step=i)
              train_logger.log(train_metrics, step=i)
  
++        # If the job is about to be killed (time limit / preemption), save once and exit cleanly.
++        if terminate_requested['flag']:
++            try:
++                save_agent(agent, FLAGS.save_dir, i)
++            finally:
++                print(f"Terminate signal received (sig={terminate_requested['sig']}), saved params_{i}.pkl and exiting.")
++            break
++
          # Evaluate agent.
 -        if i == 1 or i % FLAGS.eval_interval == 0:
 +        if FLAGS.eval_interval and (i == 1 or i % FLAGS.eval_interval == 0):
@@ -853,7 +874,7 @@ index 48d8b11..1e7c646 100644
  
      return agent
 diff --git a/impls/utils/log_utils.py b/impls/utils/log_utils.py
-index 9c421dd..a0b3667 100644
+index 9c421dd..3da1eab 100644
 --- a/impls/utils/log_utils.py
 +++ b/impls/utils/log_utils.py
 @@ -17,6 +17,21 @@ class CsvLogger:
@@ -878,7 +899,7 @@ index 9c421dd..a0b3667 100644
  
      def log(self, row, step):
          row['step'] = step
-@@ -64,9 +79,12 @@ def setup_wandb(
+@@ -64,9 +79,15 @@ def setup_wandb(
      project='project',
      group=None,
      name=None,
@@ -889,9 +910,25 @@ index 9c421dd..a0b3667 100644
 +    if mode is None:
 +        mode = os.environ.get('WANDB_MODE', 'online')
 +
++    wandb_run_id = os.environ.get('WANDB_RUN_ID', None)
++    wandb_resume = os.environ.get('WANDB_RESUME', None)
++
      wandb_output_dir = tempfile.mkdtemp()
      tags = [group] if group is not None else None
  
+@@ -86,6 +107,12 @@ def setup_wandb(
+         save_code=True,
+     )
+ 
++    # Optional: allow resuming the same W&B run across SLURM preemptions/timeouts.
++    # If WANDB_RUN_ID is set, W&B will append to the same run (resume=allow by default).
++    if wandb_run_id:
++        init_kwargs['id'] = wandb_run_id
++        init_kwargs['resume'] = wandb_resume or 'allow'
++
+     run = wandb.init(**init_kwargs)
+ 
+     return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
 index 4ee2b26..04877a9 100644
 --- a/impls/utils/networks.py
