@@ -87,18 +87,25 @@ At each env step, given state `s`:
 1. Initialize `a_0 = π(s)` (actor output).
 2. For `t=0..T-1`, update action to increase critic value:
    - `a_{t+1} = clip(a_t + η * normalize(∂Q(s,a_t)/∂a), action_low, action_high)`
-3. Execute `a_T`.
+   - **Early stopping:** Stop if any of these conditions are met:
+     - **NaN/Inf detected:** Gradient or Q-value becomes non-finite
+     - **Gradient vanished:** `||∇Q|| < 1e-6` (converged to local optimum)
+     - **Q plateau:** `Q(s, a_t) - Q(s, a_{t-1}) < 1e-5` (negligible improvement)
+3. Execute `a_T` (or earlier if early-stopped).
 
 Keep identical for all critics:
 
 - same `T` (refinement steps), `η` (step size), and action projection
 - same random seeds and evaluation episodes
 - same compute measurement methodology
+- same early stopping thresholds (`grad_eps=1e-6`, `q_eps=1e-5`)
 
 Guardrails:
 
 - Always clip/project actions to env bounds.
 - Log refinement success/failure stats (NaNs, grad norms, delta-a magnitude).
+- Track early stop reasons: `nonfinite`, `grad_vanished`, `q_plateau`, `max_steps`.
+- Report `steps_taken_mean` to show actual useful iterations vs total `T`.
 
 ## Phase 0 — Reproduce official CRL on AntMaze stitching tasks
 ### P0.1 Tasks and compute budget

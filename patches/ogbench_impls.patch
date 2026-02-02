@@ -1,19 +1,40 @@
 diff --git a/impls/agents/crl.py b/impls/agents/crl.py
-index 53109ab..b1a3165 100644
+index 53109ab..0f50744 100644
 --- a/impls/agents/crl.py
 +++ b/impls/agents/crl.py
-@@ -52,6 +52,7 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -39,6 +39,13 @@ class CRLAgent(flax.struct.PyTreeNode):
+         if len(phi.shape) == 2:  # Non-ensemble.
+             phi = phi[None, ...]
+             psi = psi[None, ...]
++
++        v_raw = v
++        ensemble_disagreement = 0.0
++        if hasattr(v_raw, 'ndim') and v_raw.ndim == 2:
++            # v_raw shape: (E, B). Track disagreement across ensemble members.
++            ensemble_disagreement = jnp.mean(jnp.std(v_raw, axis=0))
++
+         logits = jnp.einsum('eik,ejk->ije', phi, psi) / jnp.sqrt(phi.shape[-1])
+         # logits.shape is (B, B, e) with one term for positive pair and (B - 1) terms for negative pairs in each row.
+         I = jnp.eye(batch_size)
+@@ -50,21 +57,32 @@ class CRLAgent(flax.struct.PyTreeNode):
+         contrastive_loss = jnp.mean(contrastive_loss)
+ 
          # Compute additional statistics.
-         v = jnp.exp(v)
+-        v = jnp.exp(v)
++        v = jnp.exp(v_raw)
          logits = jnp.mean(logits, axis=-1)
 +        logits_diag = jnp.diag(logits)
          correct = jnp.argmax(logits, axis=1) == jnp.argmax(I, axis=1)
          logits_pos = jnp.sum(logits * I) / jnp.sum(I)
          logits_neg = jnp.sum(logits * (1 - I)) / jnp.sum(1 - I)
-@@ -61,6 +62,13 @@ class CRLAgent(flax.struct.PyTreeNode):
++        score_margin = logits_pos - logits_neg
+ 
+         return contrastive_loss, {
+             'contrastive_loss': contrastive_loss,
              'v_mean': v.mean(),
              'v_max': v.max(),
              'v_min': v.min(),
++            'ensemble_disagreement': ensemble_disagreement,
 +            # "Q-like" score stats for debugging (diagonal = matched (s,a,g) pairs).
 +            'q_mean': logits_diag.mean(),
 +            'q_std': logits_diag.std(),
@@ -24,7 +45,12 @@ index 53109ab..b1a3165 100644
              'binary_accuracy': jnp.mean((logits > 0) == I),
              'categorical_accuracy': jnp.mean(correct),
              'logits_pos': logits_pos,
-@@ -104,6 +112,8 @@ class CRLAgent(flax.struct.PyTreeNode):
+             'logits_neg': logits_neg,
++            'score_margin': score_margin,
+             'logits': logits.mean(),
+         }
+ 
+@@ -104,6 +122,8 @@ class CRLAgent(flax.struct.PyTreeNode):
              assert not self.config['discrete']
  
              dist = self.network.select('actor')(batch['observations'], batch['actor_goals'], params=grad_params)
@@ -33,7 +59,7 @@ index 53109ab..b1a3165 100644
              if self.config['const_std']:
                  q_actions = jnp.clip(dist.mode(), -1, 1)
              else:
-@@ -128,6 +138,11 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -128,6 +148,11 @@ class CRLAgent(flax.struct.PyTreeNode):
                  'bc_log_prob': log_prob.mean(),
                  'mse': jnp.mean((dist.mode() - batch['actions']) ** 2),
                  'std': jnp.mean(dist.scale_diag),
@@ -45,7 +71,7 @@ index 53109ab..b1a3165 100644
              }
          else:
              raise ValueError(f'Unsupported actor loss: {self.config["actor_loss"]}')
-@@ -231,6 +246,14 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -231,6 +256,14 @@ class CRLAgent(flax.struct.PyTreeNode):
                  state_encoder=encoders.get('critic_state'),
                  goal_encoder=encoders.get('critic_goal'),
                  action_dim=action_dim,
@@ -60,7 +86,7 @@ index 53109ab..b1a3165 100644
              )
          else:
              critic_def = GCBilinearValue(
-@@ -241,6 +264,14 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -241,6 +274,14 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
                  state_encoder=encoders.get('critic_state'),
                  goal_encoder=encoders.get('critic_goal'),
@@ -75,7 +101,7 @@ index 53109ab..b1a3165 100644
              )
  
          if config['actor_loss'] == 'awr':
-@@ -253,6 +284,14 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -253,6 +294,14 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
                  state_encoder=encoders.get('value_state'),
                  goal_encoder=encoders.get('value_goal'),
@@ -90,7 +116,7 @@ index 53109ab..b1a3165 100644
              )
  
          if config['discrete']:
-@@ -306,6 +345,14 @@ def get_config():
+@@ -306,6 +355,14 @@ def get_config():
              const_std=True,  # Whether to use constant standard deviation for the actor.
              discrete=False,  # Whether the action space is discrete.
              encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
@@ -99,14 +125,14 @@ index 53109ab..b1a3165 100644
 +            critic_resnet_depth=3,  # Untied ResNet blocks (used if critic_backbone='resnet').
 +            critic_recur_iters=4,  # Tied iterations K_train (used if critic_backbone='recur_tied').
 +            critic_eval_num_iters=None,  # Optional K_test override for evaluation-only (tied-only test-time compute knob).
-+            critic_recur_max_iters=32,  # Max step embedding table size.
++            critic_recur_max_iters=16,  # Max step embedding table size.
 +            critic_layerscale_init=1e-2,  # LayerScale init for resnet/recur.
 +            critic_backbone_hidden_dim=0,  # Optional override (e.g., param-match resnet vs recur). 0 disables.
              # Dataset hyperparameters.
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
 diff --git a/impls/main.py b/impls/main.py
-index 3660e03..8c41974 100644
+index 3660e03..7987b8b 100644
 --- a/impls/main.py
 +++ b/impls/main.py
 @@ -1,3 +1,4 @@
@@ -114,7 +140,15 @@ index 3660e03..8c41974 100644
  import json
  import os
  import random
-@@ -23,28 +24,44 @@ flags.DEFINE_string('run_group', 'Debug', 'Run group.')
+@@ -5,6 +6,7 @@ import time
+ from collections import defaultdict
+ 
+ import jax
++import jax.numpy as jnp
+ import numpy as np
+ import tqdm
+ import wandb
+@@ -23,28 +25,85 @@ flags.DEFINE_string('run_group', 'Debug', 'Run group.')
  flags.DEFINE_integer('seed', 0, 'Random seed.')
  flags.DEFINE_string('env_name', 'antmaze-large-navigate-v0', 'Environment (dataset) name.')
  flags.DEFINE_string('save_dir', 'exp/', 'Save directory.')
@@ -154,22 +188,15 @@ index 3660e03..8c41974 100644
  
  
  def main(_):
-     # Set up logger.
--    exp_name = get_exp_name(FLAGS.seed)
-+    exp_name = FLAGS.exp_name or get_exp_name(FLAGS.seed)
-     setup_wandb(project='OGBench', group=FLAGS.run_group, name=exp_name)
- 
-     FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, FLAGS.run_group, exp_name)
-@@ -55,7 +72,33 @@ def main(_):
- 
-     # Set up environment and dataset.
-     config = FLAGS.agent
--    env, train_dataset, val_dataset = make_env_and_datasets(FLAGS.env_name, frame_stack=config['frame_stack'])
-+
-+    env_name = FLAGS.env_name
++    # If restoring from a previous run, load its flags.json early so W&B / flags.json reflect
++    # the actual checkpoint architecture (instead of defaults like mlp/3/4).
 +    if FLAGS.restore_use_flags and FLAGS.restore_path is not None:
 +        candidates = glob.glob(FLAGS.restore_path)
-+        restore_dir = candidates[0] if len(candidates) == 1 else (FLAGS.restore_path if os.path.isdir(FLAGS.restore_path) else None)
++        restore_dir = (
++            candidates[0]
++            if len(candidates) == 1
++            else (FLAGS.restore_path if os.path.isdir(FLAGS.restore_path) else None)
++        )
 +        if restore_dir is not None:
 +            flags_path = os.path.join(restore_dir, 'flags.json')
 +            if os.path.exists(flags_path):
@@ -178,24 +205,37 @@ index 3660e03..8c41974 100644
 +                except Exception:
 +                    restore_flags = None
 +                if isinstance(restore_flags, dict):
-+                    # Make env match the checkpoint by default.
-+                    env_name = restore_flags.get('env_name', env_name)
++                    # Prefer checkpoint env_name for correctness.
++                    if restore_flags.get('env_name') is not None:
++                        FLAGS.env_name = restore_flags.get('env_name')
++
++                    # Prefer checkpoint seed unless explicitly overridden.
++                    try:
++                        seed_flag = flags.FLAGS['seed']
++                        seed_was_set = bool(getattr(seed_flag, 'present', False))
++                    except Exception:
++                        seed_was_set = False
++                    if not seed_was_set and restore_flags.get('seed') is not None:
++                        FLAGS.seed = restore_flags.get('seed')
 +
 +                    # Merge agent config needed to reconstruct the exact parameter tree.
 +                    # Avoid overriding eval-only knobs that are useful to change at test time.
 +                    restore_agent_cfg = restore_flags.get('agent', {})
 +                    if isinstance(restore_agent_cfg, dict):
++                        cfg = FLAGS.agent
 +                        for k, v in restore_agent_cfg.items():
 +                            if k == 'critic_eval_num_iters':
 +                                continue
-+                            if k in config:
-+                                config[k] = v
++                            if k in cfg:
++                                cfg[k] = v
 +
-+    env, train_dataset, val_dataset = make_env_and_datasets(env_name, frame_stack=config['frame_stack'])
+     # Set up logger.
+-    exp_name = get_exp_name(FLAGS.seed)
++    exp_name = FLAGS.exp_name or get_exp_name(FLAGS.seed)
+     setup_wandb(project='OGBench', group=FLAGS.run_group, name=exp_name)
  
-     dataset_class = {
-         'GCDataset': GCDataset,
-@@ -85,13 +128,104 @@ def main(_):
+     FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, FLAGS.run_group, exp_name)
+@@ -85,13 +144,149 @@ def main(_):
      # Restore agent.
      if FLAGS.restore_path is not None:
          agent = restore_agent(agent, FLAGS.restore_path, FLAGS.restore_epoch)
@@ -228,7 +268,19 @@ index 3660e03..8c41974 100644
 +            renders.extend(cur_renders)
 +            metric_names = ['success', 'episode.return']
 +            if FLAGS.eval_refine_steps and FLAGS.eval_refine_steps > 0:
-+                metric_names += ['refine.q_pre', 'refine.q_post', 'refine.delta_a']
++                    metric_names += [
++                        'refine.q_pre',
++                        'refine.q_post',
++                        'refine.delta_a',
++                        'refine.q_improve',
++                        'refine.grad_norm_mean',
++                        'refine.grad_norm_max',
++                        'refine.steps_taken_mean',
++                        'refine.nonfinite_frac',
++                        'refine.grad_vanished_frac',
++                        'refine.q_plateau_frac',
++                        'refine.max_steps_frac',
++                    ]
 +            eval_metrics.update({f'evaluation/{task_name}_{k}': v for k, v in eval_info.items() if k in metric_names})
 +            for k, v in eval_info.items():
 +                if k in metric_names:
@@ -292,6 +344,39 @@ index 3660e03..8c41974 100644
 +        eval_logger.close()
 +        return
 +
++    def _extract_module_params(params, module_name: str):
++        if not isinstance(params, dict):
++            return None
++        if module_name in params:
++            return params[module_name]
++        alt_keys = [f"modules_{module_name}", f"module_{module_name}", module_name]
++        for k in alt_keys:
++            if k in params:
++                return params[k]
++        # Fallback: try to find a single key that contains the module name.
++        for k, v in params.items():
++            if module_name in str(k):
++                return v
++        return None
++
++    def _abs_param_stats(param_tree):
++        if param_tree is None:
++            return None, None
++        leaves = jax.tree_util.tree_leaves(param_tree)
++        if not leaves:
++            return None, None
++        abs_sum = 0.0
++        count = 0
++        abs_max = 0.0
++        for x in leaves:
++            x = jnp.asarray(x)
++            ax = jnp.abs(x)
++            abs_sum = abs_sum + ax.sum()
++            count += ax.size
++            abs_max = jnp.maximum(abs_max, ax.max())
++        abs_mean = abs_sum / max(1, count)
++        return float(abs_mean), float(abs_max)
++
 +    for i in tqdm.tqdm(
 +        range(start_i, FLAGS.train_steps + 1),
 +        smoothing=0.1,
@@ -301,7 +386,7 @@ index 3660e03..8c41974 100644
          # Update agent.
          batch = train_dataset.sample(config['batch_size'])
          agent, update_info = agent.update(batch)
-@@ -99,57 +233,28 @@ def main(_):
+@@ -99,57 +294,54 @@ def main(_):
          # Log metrics.
          if i % FLAGS.log_interval == 0:
              train_metrics = {f'training/{k}': v for k, v in update_info.items()}
@@ -317,6 +402,32 @@ index 3660e03..8c41974 100644
              train_metrics['time/total_time'] = time.time() - first_time
              last_time = time.time()
 +            last_log_step = i
++
++            # Parameter magnitude stats (helps catch drift/explosions).
++            critic_params = _extract_module_params(agent.network.params, "critic")
++            critic_abs_mean, critic_abs_max = _abs_param_stats(critic_params)
++            if critic_abs_mean is not None:
++                train_metrics['params/critic_abs_mean'] = critic_abs_mean
++                train_metrics['params/critic_abs_max'] = critic_abs_max
++
++            # Policy vs behavior action divergence (offline RL sanity).
++            if not config.get('discrete'):
++                try:
++                    dist = agent.network.select('actor')(
++                        batch['observations'],
++                        batch['actor_goals'],
++                        temperature=1.0,
++                    )
++                    policy_actions = dist.mode()
++                    behavior_actions = jnp.asarray(batch['actions'])
++                    diff = policy_actions - behavior_actions
++                    train_metrics['action/policy_behavior_mse'] = float(jnp.mean(diff**2))
++                    train_metrics['action/policy_behavior_l2'] = float(jnp.mean(jnp.linalg.norm(diff, axis=-1)))
++                    train_metrics['action/policy_behavior_max_diff'] = float(jnp.max(jnp.abs(diff)))
++                except Exception:
++                    # Keep training robust even if a dataset variant is missing actor_goals/actions shapes.
++                    pass
++
              wandb.log(train_metrics, step=i)
              train_logger.log(train_metrics, step=i)
  
@@ -391,7 +502,7 @@ index 6b17e11..00ef632 100644
      val_dataset = Dataset.create(**val_dataset)
  
 diff --git a/impls/utils/evaluation.py b/impls/utils/evaluation.py
-index a3a9944..e15df13 100644
+index a3a9944..3ba9b82 100644
 --- a/impls/utils/evaluation.py
 +++ b/impls/utils/evaluation.py
 @@ -2,6 +2,7 @@ from collections import defaultdict
@@ -412,7 +523,7 @@ index a3a9944..e15df13 100644
  ):
      """Evaluate the agent in the environment.
  
-@@ -65,6 +69,60 @@ def evaluate(
+@@ -65,6 +69,131 @@ def evaluate(
      trajs = []
      stats = defaultdict(list)
  
@@ -428,6 +539,12 @@ index a3a9944..e15df13 100644
 +                return default
 +
 +    critic_eval_num_iters = _cfg_get('critic_eval_num_iters', None)
++
++    def _is_finite(x) -> bool:
++        try:
++            return bool(np.all(np.isfinite(np.asarray(x))))
++        except Exception:
++            return False
 +
 +    def _critic_score(ob, goal, action):
 +        # CRL critic outputs an ensemble of bilinear scores; match actor loss aggregation (min over ensemble).
@@ -458,22 +575,87 @@ index a3a9944..e15df13 100644
 +                score = score - refine_l2 * jnp.sum((a - a0) ** 2)
 +            return score
 +
-+        q_pre = objective(a0)
++        grad_eps = 1e-6
++        q_eps = 1e-5
++
++        q_prev = objective(a0)
++        q_pre = q_prev
++        q_pre_finite = _is_finite(q_pre)
++
 +        a = a0
++        grad_norm_sum = 0.0
++        grad_norm_max = 0.0
++        steps_taken = 0
++        nonfinite = 0
++        early_stop_reason = "max_steps"
++
 +        for _ in range(int(refine_steps)):
 +            g = jax.grad(objective)(a)
 +            g_norm = jnp.linalg.norm(g) + 1e-8
++
++            # Check 1: NaN/Inf in gradient.
++            g_finite = _is_finite(g) and _is_finite(g_norm)
++            if not g_finite:
++                nonfinite = 1
++                early_stop_reason = "nonfinite"
++                break
++
++            gn = float(g_norm)
++
++            # Check 2: gradient too small (converged).
++            if gn < grad_eps:
++                early_stop_reason = "grad_vanished"
++                break
++
++            # Take step.
 +            a = a + float(refine_lr) * (g / g_norm)
 +            a = jnp.clip(a, -1.0, 1.0)
-+        q_post = objective(a)
++
++            steps_taken += 1
++            grad_norm_sum += gn
++            grad_norm_max = max(grad_norm_max, gn)
++
++            # Check 3: negligible improvement in objective.
++            q_curr = objective(a)
++            q_curr_finite = _is_finite(q_curr)
++            q_prev_finite = _is_finite(q_prev)
++            if not q_curr_finite:
++                nonfinite = 1
++                early_stop_reason = "nonfinite"
++                break
++
++            if q_prev_finite:
++                if float(q_curr - q_prev) < q_eps:
++                    early_stop_reason = "q_plateau"
++                    q_prev = q_curr
++                    break
++            q_prev = q_curr
++
++        q_post = q_prev
++        q_post_finite = _is_finite(q_post)
++        if not (q_pre_finite and q_post_finite):
++            nonfinite = 1
++            early_stop_reason = "nonfinite"
 +        delta = jnp.linalg.norm(a - a0)
 +
-+        return np.array(a), dict(q_pre=float(q_pre), q_post=float(q_post), delta_a=float(delta))
++        return np.array(a), dict(
++            q_pre=float(q_pre) if q_pre_finite else float('nan'),
++            q_post=float(q_post) if q_post_finite else float('nan'),
++            delta_a=float(delta) if _is_finite(delta) else float('nan'),
++            q_improve=(float(q_post - q_pre) if (q_pre_finite and q_post_finite) else float('nan')),
++            grad_norm_mean=(grad_norm_sum / max(1, steps_taken)) if steps_taken > 0 else 0.0,
++            grad_norm_max=grad_norm_max,
++            steps_taken=int(steps_taken),
++            nonfinite=int(nonfinite),
++            early_stop_reason=str(early_stop_reason),
++            q_eps=float(q_eps),
++            grad_eps=float(grad_eps),
++        )
 +
      renders = []
      for i in trange(num_eval_episodes + num_video_episodes):
          traj = defaultdict(list)
-@@ -76,13 +134,20 @@ def evaluate(
+@@ -76,13 +205,20 @@ def evaluate(
          done = False
          step = 0
          render = []
@@ -498,16 +680,25 @@ index a3a9944..e15df13 100644
  
              next_observation, reward, terminated, truncated, info = env.step(action)
              done = terminated or truncated
-@@ -106,6 +171,13 @@ def evaluate(
+@@ -106,6 +242,22 @@ def evaluate(
              add_to(traj, transition)
              observation = next_observation
          if i < num_eval_episodes:
 +            if refine_step_stats:
 +                info = dict(info)
++                reasons = [x.get('early_stop_reason', 'unknown') for x in refine_step_stats]
 +                info['refine'] = dict(
 +                    q_pre=float(np.mean([x['q_pre'] for x in refine_step_stats])),
 +                    q_post=float(np.mean([x['q_post'] for x in refine_step_stats])),
 +                    delta_a=float(np.mean([x['delta_a'] for x in refine_step_stats])),
++                    q_improve=float(np.mean([x.get('q_improve', float('nan')) for x in refine_step_stats])),
++                    grad_norm_mean=float(np.mean([x.get('grad_norm_mean', 0.0) for x in refine_step_stats])),
++                    grad_norm_max=float(np.max([x.get('grad_norm_max', 0.0) for x in refine_step_stats])),
++                    steps_taken_mean=float(np.mean([x.get('steps_taken', 0) for x in refine_step_stats])),
++                    nonfinite_frac=float(np.mean([x.get('nonfinite', 0) for x in refine_step_stats])),
++                    grad_vanished_frac=float(np.mean([r == 'grad_vanished' for r in reasons])),
++                    q_plateau_frac=float(np.mean([r == 'q_plateau' for r in reasons])),
++                    max_steps_frac=float(np.mean([r == 'max_steps' for r in reasons])),
 +                )
              add_to(stats, flatten(info))
              trajs.append(traj)
@@ -574,10 +765,10 @@ index 9c421dd..a0b3667 100644
      tags = [group] if group is not None else None
  
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..4606a6c 100644
+index 4ee2b26..43a178e 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
-@@ -60,6 +60,85 @@ class MLP(nn.Module):
+@@ -60,6 +60,90 @@ class MLP(nn.Module):
          return x
  
  
@@ -619,7 +810,7 @@ index 4ee2b26..4606a6c 100644
 +    hidden_dim: int
 +    out_dim: int
 +    num_iters: int
-+    max_iters: int = 32
++    max_iters: int = 16
 +    layer_norm: bool = True
 +    layerscale_init: float = 1e-2
 +
@@ -644,10 +835,15 @@ index 4ee2b26..4606a6c 100644
 +        tied_fc1 = nn.Dense(self.hidden_dim)
 +        tied_fc2 = nn.Dense(self.hidden_dim)
 +
++        ln = None
++        if self.layer_norm:
++            # IMPORTANT: tie LayerNorm across iterations (single module instance).
++            ln = nn.LayerNorm(name='ln')
++
 +        for k in range(iters):
 +            h1 = h
-+            if self.layer_norm:
-+                h1 = nn.LayerNorm()(h1)
++            if ln is not None:
++                h1 = ln(h1)
 +
 +            e = step_embed[k]
 +            film = film_fc2(nn.silu(film_fc1(e)))
@@ -663,7 +859,7 @@ index 4ee2b26..4606a6c 100644
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -347,16 +426,65 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +431,65 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
@@ -671,7 +867,7 @@ index 4ee2b26..4606a6c 100644
 +    backbone_hidden_dim: Optional[int] = None
 +    resnet_num_blocks: int = 3
 +    recur_num_iters: int = 4
-+    recur_max_iters: int = 32
++    recur_max_iters: int = 16
 +    layerscale_init: float = 1e-2
  
      def setup(self):
@@ -734,7 +930,7 @@ index 4ee2b26..4606a6c 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +492,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +497,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -742,7 +938,7 @@ index 4ee2b26..4606a6c 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,8 +504,12 @@ class GCBilinearValue(nn.Module):
+@@ -375,8 +509,12 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
@@ -757,7 +953,7 @@ index 4ee2b26..4606a6c 100644
  
          v = (phi * psi / jnp.sqrt(self.latent_dim)).sum(axis=-1)
  
-@@ -394,9 +527,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+@@ -394,9 +532,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
  
      action_dim: int = None
  

@@ -83,7 +83,7 @@ AGENT_FLAGS=(
   "--agent.actor_p_trajgoal=0.5"
   "--agent.alpha=0.1"
   "--agent.critic_backbone=${CRITIC_BACKBONE}"
-  "--agent.critic_recur_max_iters=32"
+  "--agent.critic_recur_max_iters=16"
   "--agent.critic_layerscale_init=1e-2"
 )
 
@@ -140,4 +140,3 @@ print("jax_devices:", jax.devices())
 PY
 
 "${CONDA_EXE}" run -n "${CONDA_ENV}" env WANDB_MODE="${WANDB_MODE}" "${cmd[@]}"
-

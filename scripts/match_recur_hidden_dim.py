@@ -68,14 +68,13 @@ def recur_tied_backbone_params(
     hidden_dim: int,
     latent_dim: int,
     num_iters: int,
-    max_iters: int = 32,
+    max_iters: int = 16,
     layer_norm: bool = True,
 ) -> int:
     """
     Match utils.networks.RecurTiedBackbone parameterization.
 
-    Note: in the current implementation, LayerNorm is instantiated inside the unroll loop,
-    so it creates *separate* LN params per iteration (not tied). We count that here.
+    Note: LayerNorm is tied across iterations (single module instance), so LN params do not grow with K.
     """
     h = int(hidden_dim)
     d = int(latent_dim)
@@ -91,7 +90,7 @@ def recur_tied_backbone_params(
     total += dense_params(h, h, bias=True)  # tied_fc1
     total += dense_params(h, h, bias=True)  # tied_fc2
     if layer_norm:
-        total += k * layer_norm_params(h)
+        total += layer_norm_params(h)
     total += dense_params(h, d, bias=True)
     return int(total)
 
@@ -105,7 +104,7 @@ def bilinear_critic_params(
     hidden_dim: int,
     resnet_depth: int = 6,
     recur_iters: int = 6,
-    recur_max_iters: int = 32,
+    recur_max_iters: int = 16,
     layer_norm: bool = True,
     ensemble_size: int = 2,
 ) -> int:
@@ -152,7 +151,7 @@ def main() -> None:
     parser.add_argument("--dataset-dir", default=os.environ.get("OGBENCH_DATASET_DIR", "~/.ogbench/data"))
     parser.add_argument("--resnet-depth", type=int, default=6)
     parser.add_argument("--recur-iters", type=int, default=6)
-    parser.add_argument("--recur-max-iters", type=int, default=32)
+    parser.add_argument("--recur-max-iters", type=int, default=16)
     parser.add_argument("--latent-dim", type=int, default=512)
     parser.add_argument("--hidden-dim", type=int, default=512, help="Base hidden dim (value_hidden_dims[-1]).")
     parser.add_argument("--search-min", type=int, default=256)
