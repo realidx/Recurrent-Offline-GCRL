@@ -1,5 +1,5 @@
 diff --git a/impls/agents/crl.py b/impls/agents/crl.py
-index 53109ab..0f50744 100644
+index 53109ab..27777ca 100644
 --- a/impls/agents/crl.py
 +++ b/impls/agents/crl.py
 @@ -39,6 +39,13 @@ class CRLAgent(flax.struct.PyTreeNode):
@@ -71,7 +71,7 @@ index 53109ab..0f50744 100644
              }
          else:
              raise ValueError(f'Unsupported actor loss: {self.config["actor_loss"]}')
-@@ -231,6 +256,14 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -231,6 +256,15 @@ class CRLAgent(flax.struct.PyTreeNode):
                  state_encoder=encoders.get('critic_state'),
                  goal_encoder=encoders.get('critic_goal'),
                  action_dim=action_dim,
@@ -79,6 +79,7 @@ index 53109ab..0f50744 100644
 +                resnet_num_blocks=config['critic_resnet_depth'],
 +                recur_num_iters=config['critic_recur_iters'],
 +                recur_max_iters=config['critic_recur_max_iters'],
++                recur_tied_layer_norm=bool(config.get('critic_recur_tied_ln', True)),
 +                layerscale_init=config['critic_layerscale_init'],
 +                backbone_hidden_dim=None
 +                if not config.get('critic_backbone_hidden_dim')
@@ -86,7 +87,7 @@ index 53109ab..0f50744 100644
              )
          else:
              critic_def = GCBilinearValue(
-@@ -241,6 +274,14 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -241,6 +275,15 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
                  state_encoder=encoders.get('critic_state'),
                  goal_encoder=encoders.get('critic_goal'),
@@ -94,6 +95,7 @@ index 53109ab..0f50744 100644
 +                resnet_num_blocks=config['critic_resnet_depth'],
 +                recur_num_iters=config['critic_recur_iters'],
 +                recur_max_iters=config['critic_recur_max_iters'],
++                recur_tied_layer_norm=bool(config.get('critic_recur_tied_ln', True)),
 +                layerscale_init=config['critic_layerscale_init'],
 +                backbone_hidden_dim=None
 +                if not config.get('critic_backbone_hidden_dim')
@@ -101,7 +103,7 @@ index 53109ab..0f50744 100644
              )
  
          if config['actor_loss'] == 'awr':
-@@ -253,6 +294,14 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -253,6 +296,15 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
                  state_encoder=encoders.get('value_state'),
                  goal_encoder=encoders.get('value_goal'),
@@ -109,6 +111,7 @@ index 53109ab..0f50744 100644
 +                resnet_num_blocks=config['critic_resnet_depth'],
 +                recur_num_iters=config['critic_recur_iters'],
 +                recur_max_iters=config['critic_recur_max_iters'],
++                recur_tied_layer_norm=bool(config.get('critic_recur_tied_ln', True)),
 +                layerscale_init=config['critic_layerscale_init'],
 +                backbone_hidden_dim=None
 +                if not config.get('critic_backbone_hidden_dim')
@@ -116,7 +119,7 @@ index 53109ab..0f50744 100644
              )
  
          if config['discrete']:
-@@ -306,6 +355,14 @@ def get_config():
+@@ -306,6 +358,15 @@ def get_config():
              const_std=True,  # Whether to use constant standard deviation for the actor.
              discrete=False,  # Whether the action space is discrete.
              encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
@@ -128,19 +131,21 @@ index 53109ab..0f50744 100644
 +            critic_recur_max_iters=16,  # Max step embedding table size.
 +            critic_layerscale_init=1e-2,  # LayerScale init for resnet/recur.
 +            critic_backbone_hidden_dim=0,  # Optional override (e.g., param-match resnet vs recur). 0 disables.
++            critic_recur_tied_ln=True,  # Tie LayerNorm across iterations for recur_tied (set False to load old checkpoints).
              # Dataset hyperparameters.
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
 diff --git a/impls/main.py b/impls/main.py
-index 3660e03..7987b8b 100644
+index 3660e03..4f87c3d 100644
 --- a/impls/main.py
 +++ b/impls/main.py
-@@ -1,3 +1,4 @@
+@@ -1,10 +1,13 @@
 +import glob
  import json
  import os
++import pickle
  import random
-@@ -5,6 +6,7 @@ import time
+ import time
  from collections import defaultdict
  
  import jax
@@ -148,7 +153,7 @@ index 3660e03..7987b8b 100644
  import numpy as np
  import tqdm
  import wandb
-@@ -23,28 +25,85 @@ flags.DEFINE_string('run_group', 'Debug', 'Run group.')
+@@ -23,28 +26,163 @@ flags.DEFINE_string('run_group', 'Debug', 'Run group.')
  flags.DEFINE_integer('seed', 0, 'Random seed.')
  flags.DEFINE_string('env_name', 'antmaze-large-navigate-v0', 'Environment (dataset) name.')
  flags.DEFINE_string('save_dir', 'exp/', 'Save directory.')
@@ -187,6 +192,70 @@ index 3660e03..7987b8b 100644
  config_flags.DEFINE_config_file('agent', 'agents/gciql.py', lock_config=False)
  
  
++def _infer_latest_epoch_from_dir(restore_dir: str) -> int | None:
++    try:
++        epochs = []
++        for p in glob.glob(os.path.join(restore_dir, 'params_*.pkl')):
++            base = os.path.basename(p)
++            try:
++                epochs.append(int(base.split('_', 1)[1].split('.', 1)[0]))
++            except Exception:
++                continue
++        return max(epochs) if epochs else None
++    except Exception:
++        return None
++
++
++def _deep_has_key(obj, pred) -> bool:
++    if isinstance(obj, dict):
++        for k, v in obj.items():
++            try:
++                if pred(k):
++                    return True
++            except Exception:
++                pass
++            if _deep_has_key(v, pred):
++                return True
++        return False
++    if isinstance(obj, (list, tuple)):
++        return any(_deep_has_key(v, pred) for v in obj)
++    return False
++
++
++def _infer_recur_tied_ln_from_ckpt(restore_dir: str, restore_epoch: int | None) -> bool | None:
++    """Infer whether the checkpoint was trained with tied LayerNorm (key 'ln') or per-iter LNs ('LayerNorm_k')."""
++    epoch = restore_epoch if restore_epoch is not None else _infer_latest_epoch_from_dir(restore_dir)
++    if epoch is None:
++        return None
++    params_path = os.path.join(restore_dir, f'params_{epoch}.pkl')
++    if not os.path.exists(params_path):
++        return None
++    try:
++        with open(params_path, 'rb') as f:
++            load_dict = pickle.load(f)
++    except Exception:
++        return None
++
++    agent_state = load_dict.get('agent', {})
++    try:
++        phi = agent_state.get('network', {}).get('params', {}).get('modules_critic', {}).get('phi', None)
++    except Exception:
++        phi = None
++
++    if isinstance(phi, dict):
++        if 'ln' in phi:
++            return True
++        if any(isinstance(k, str) and k.startswith('LayerNorm_') for k in phi.keys()):
++            return False
++
++    # Fallback: deep search within the agent state.
++    if _deep_has_key(agent_state, lambda k: k == 'ln'):
++        return True
++    if _deep_has_key(agent_state, lambda k: isinstance(k, str) and k.startswith('LayerNorm_')):
++        return False
++    return None
++
++
  def main(_):
 +    # If restoring from a previous run, load its flags.json early so W&B / flags.json reflect
 +    # the actual checkpoint architecture (instead of defaults like mlp/3/4).
@@ -197,6 +266,8 @@ index 3660e03..7987b8b 100644
 +            if len(candidates) == 1
 +            else (FLAGS.restore_path if os.path.isdir(FLAGS.restore_path) else None)
 +        )
++        if restore_dir is not None and os.path.isfile(restore_dir) and restore_dir.endswith('.pkl'):
++            restore_dir = os.path.dirname(restore_dir)
 +        if restore_dir is not None:
 +            flags_path = os.path.join(restore_dir, 'flags.json')
 +            if os.path.exists(flags_path):
@@ -229,13 +300,25 @@ index 3660e03..7987b8b 100644
 +                            if k in cfg:
 +                                cfg[k] = v
 +
++                        # Backwards compatibility: old recur_tied checkpoints used per-iteration LayerNorm modules,
++                        # but new code defaults to tied LayerNorm (single module 'ln'). If the checkpoint doesn't
++                        # specify the LN mode, infer it from params_{epoch}.pkl to reconstruct the right tree.
++                        if (
++                            restore_agent_cfg.get('critic_backbone') == 'recur_tied'
++                            and 'critic_recur_tied_ln' in cfg
++                            and 'critic_recur_tied_ln' not in restore_agent_cfg
++                        ):
++                            inferred = _infer_recur_tied_ln_from_ckpt(restore_dir, FLAGS.restore_epoch)
++                            if inferred is not None:
++                                cfg['critic_recur_tied_ln'] = bool(inferred)
++
      # Set up logger.
 -    exp_name = get_exp_name(FLAGS.seed)
 +    exp_name = FLAGS.exp_name or get_exp_name(FLAGS.seed)
      setup_wandb(project='OGBench', group=FLAGS.run_group, name=exp_name)
  
      FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, FLAGS.run_group, exp_name)
-@@ -85,13 +144,149 @@ def main(_):
+@@ -85,13 +223,149 @@ def main(_):
      # Restore agent.
      if FLAGS.restore_path is not None:
          agent = restore_agent(agent, FLAGS.restore_path, FLAGS.restore_epoch)
@@ -386,7 +469,7 @@ index 3660e03..7987b8b 100644
          # Update agent.
          batch = train_dataset.sample(config['batch_size'])
          agent, update_info = agent.update(batch)
-@@ -99,57 +294,54 @@ def main(_):
+@@ -99,57 +373,54 @@ def main(_):
          # Log metrics.
          if i % FLAGS.log_interval == 0:
              train_metrics = {f'training/{k}': v for k, v in update_info.items()}
@@ -704,10 +787,18 @@ index a3a9944..3ba9b82 100644
              trajs.append(traj)
          else:
 diff --git a/impls/utils/flax_utils.py b/impls/utils/flax_utils.py
-index 48d8b11..0dd008f 100644
+index 48d8b11..1e7c646 100644
 --- a/impls/utils/flax_utils.py
 +++ b/impls/utils/flax_utils.py
-@@ -153,9 +153,16 @@ class TrainState(flax.struct.PyTreeNode):
+@@ -2,6 +2,7 @@ import functools
+ import glob
+ import os
+ import pickle
++import re
+ from typing import Any, Dict, Mapping, Sequence
+ 
+ import flax
+@@ -153,9 +154,16 @@ class TrainState(flax.struct.PyTreeNode):
                  'grad/max': final_grad_max,
                  'grad/min': final_grad_min,
                  'grad/norm': final_grad_norm,
@@ -724,6 +815,43 @@ index 48d8b11..0dd008f 100644
          return self.apply_gradients(grads=grads), info
  
  
+@@ -187,16 +195,31 @@ def restore_agent(agent, restore_path, restore_epoch):
+         restore_epoch: Epoch number.
+     """
+     candidates = glob.glob(restore_path)
+-
+     assert len(candidates) == 1, f'Found {len(candidates)} candidates: {candidates}'
+ 
+-    restore_path = candidates[0] + f'/params_{restore_epoch}.pkl'
+-
+-    with open(restore_path, 'rb') as f:
++    candidate = candidates[0]
++    params_path = None
++
++    # Allow passing a direct checkpoint file path (e.g., .../params_1000000.pkl).
++    if os.path.isfile(candidate) and candidate.endswith('.pkl'):
++        params_path = candidate
++    else:
++        # Otherwise treat restore_path as a run directory.
++        if restore_epoch is None:
++            epochs = []
++            for p in glob.glob(os.path.join(candidate, 'params_*.pkl')):
++                m = re.search(r'params_(\\d+)\\.pkl$', p)
++                if m:
++                    epochs.append(int(m.group(1)))
++            assert len(epochs) > 0, f'No params_*.pkl found in {candidate}'
++            restore_epoch = max(epochs)
++        params_path = os.path.join(candidate, f'params_{restore_epoch}.pkl')
++
++    with open(params_path, 'rb') as f:
+         load_dict = pickle.load(f)
+ 
+     agent = flax.serialization.from_state_dict(agent, load_dict['agent'])
+ 
+-    print(f'Restored from {restore_path}')
++    print(f'Restored from {params_path}')
+ 
+     return agent
 diff --git a/impls/utils/log_utils.py b/impls/utils/log_utils.py
 index 9c421dd..a0b3667 100644
 --- a/impls/utils/log_utils.py
@@ -765,10 +893,10 @@ index 9c421dd..a0b3667 100644
      tags = [group] if group is not None else None
  
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..43a178e 100644
+index 4ee2b26..04877a9 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
-@@ -60,6 +60,90 @@ class MLP(nn.Module):
+@@ -60,6 +60,100 @@ class MLP(nn.Module):
          return x
  
  
@@ -812,10 +940,11 @@ index 4ee2b26..43a178e 100644
 +    num_iters: int
 +    max_iters: int = 16
 +    layer_norm: bool = True
++    tied_layer_norm: bool = True
 +    layerscale_init: float = 1e-2
 +
 +    @nn.compact
-+    def __call__(self, x, *, num_iters=None):
++    def __call__(self, x, num_iters=None):
 +        iters = self.num_iters if num_iters is None else int(num_iters)
 +        if iters > self.max_iters:
 +            raise ValueError(f'num_iters={iters} exceeds max_iters={self.max_iters}')
@@ -836,14 +965,23 @@ index 4ee2b26..43a178e 100644
 +        tied_fc2 = nn.Dense(self.hidden_dim)
 +
 +        ln = None
++        lns = None
 +        if self.layer_norm:
-+            # IMPORTANT: tie LayerNorm across iterations (single module instance).
-+            ln = nn.LayerNorm(name='ln')
++            if self.tied_layer_norm:
++                # Tie LayerNorm across iterations (single module instance).
++                ln = nn.LayerNorm(name='ln')
++            else:
++                # Backwards-compatible mode: per-iteration LayerNorm modules.
++                # Create all modules up to max_iters so we can evaluate with num_iters > num_iters at init time.
++                lns = [nn.LayerNorm(name=f'LayerNorm_{k}') for k in range(int(self.max_iters))]
 +
 +        for k in range(iters):
 +            h1 = h
-+            if ln is not None:
-+                h1 = ln(h1)
++            if self.layer_norm:
++                if ln is not None:
++                    h1 = ln(h1)
++                else:
++                    h1 = lns[k](h1)
 +
 +            e = step_embed[k]
 +            film = film_fc2(nn.silu(film_fc1(e)))
@@ -859,7 +997,7 @@ index 4ee2b26..43a178e 100644
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -347,16 +431,65 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +441,68 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
@@ -868,6 +1006,7 @@ index 4ee2b26..43a178e 100644
 +    resnet_num_blocks: int = 3
 +    recur_num_iters: int = 4
 +    recur_max_iters: int = 16
++    recur_tied_layer_norm: bool = True
 +    layerscale_init: float = 1e-2
  
      def setup(self):
@@ -903,6 +1042,7 @@ index 4ee2b26..43a178e 100644
 +                num_iters=int(self.recur_num_iters),
 +                max_iters=int(self.recur_max_iters),
 +                layer_norm=self.layer_norm,
++                tied_layer_norm=bool(self.recur_tied_layer_norm),
 +                layerscale_init=self.layerscale_init,
 +            )
 +            psi_kwargs = dict(
@@ -911,6 +1051,7 @@ index 4ee2b26..43a178e 100644
 +                num_iters=int(self.recur_num_iters),
 +                max_iters=int(self.recur_max_iters),
 +                layer_norm=self.layer_norm,
++                tied_layer_norm=bool(self.recur_tied_layer_norm),
 +                layerscale_init=self.layerscale_init,
 +            )
 +        else:
@@ -930,7 +1071,7 @@ index 4ee2b26..43a178e 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +497,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +510,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -938,22 +1079,23 @@ index 4ee2b26..43a178e 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,8 +509,12 @@ class GCBilinearValue(nn.Module):
+@@ -375,8 +522,13 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
 -        phi = self.phi(phi_inputs)
 -        psi = self.psi(goals)
 +        if self.backbone == 'recur_tied':
-+            phi = self.phi(phi_inputs, num_iters=num_iters)
-+            psi = self.psi(goals, num_iters=num_iters)
++            # IMPORTANT: nn.vmap does not support kwargs; pass num_iters positionally.
++            phi = self.phi(phi_inputs, num_iters)
++            psi = self.psi(goals, num_iters)
 +        else:
 +            phi = self.phi(phi_inputs)
 +            psi = self.psi(goals)
  
          v = (phi * psi / jnp.sqrt(self.latent_dim)).sum(axis=-1)
  
-@@ -394,9 +532,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+@@ -394,9 +546,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
  
      action_dim: int = None
  
