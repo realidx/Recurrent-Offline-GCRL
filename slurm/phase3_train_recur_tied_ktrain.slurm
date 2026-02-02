@@ -1,13 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=p3_recur_ktrain
 #SBATCH --partition=gpu-long
-#SBATCH --constraint=h100
 #SBATCH --time=05:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=24G
 #SBATCH --gpus=1
 #SBATCH --gres=gpu:1
-#SBATCH --signal=B:TERM@120
 #SBATCH --output=logs/phase_3/slurm-%x-%A_%a.out
 #SBATCH --error=logs/phase_3/slurm-%x-%A_%a.err
 #SBATCH --array=0-8
