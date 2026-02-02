@@ -49,7 +49,7 @@ DISABLE_TQDM="${DISABLE_TQDM:-1}"
 
 # Evaluation during training (can be expensive; keep small for diagnostics).
 EVAL_INTERVAL="${EVAL_INTERVAL:-200000}"
-EVAL_TASKS="${EVAL_TASKS:5}"
+EVAL_TASKS="${EVAL_TASKS:-5}"
 EVAL_EPISODES="${EVAL_EPISODES:-20}"
 VIDEO_EPISODES="${VIDEO_EPISODES:-0}"
 EVAL_ON_CPU="${EVAL_ON_CPU:-1}"
