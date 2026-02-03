@@ -808,7 +808,7 @@ index a3a9944..3ba9b82 100644
              trajs.append(traj)
          else:
 diff --git a/impls/utils/flax_utils.py b/impls/utils/flax_utils.py
-index 48d8b11..1e7c646 100644
+index 48d8b11..a49d19a 100644
 --- a/impls/utils/flax_utils.py
 +++ b/impls/utils/flax_utils.py
 @@ -2,6 +2,7 @@ import functools
@@ -857,7 +857,7 @@ index 48d8b11..1e7c646 100644
 +        if restore_epoch is None:
 +            epochs = []
 +            for p in glob.glob(os.path.join(candidate, 'params_*.pkl')):
-+                m = re.search(r'params_(\\d+)\\.pkl$', p)
++                m = re.search(r'params_(\d+)\.pkl$', p)
 +                if m:
 +                    epochs.append(int(m.group(1)))
 +            assert len(epochs) > 0, f'No params_*.pkl found in {candidate}'

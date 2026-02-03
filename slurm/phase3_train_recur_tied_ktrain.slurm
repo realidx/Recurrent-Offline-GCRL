@@ -8,7 +8,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --output=logs/phase_3/slurm-%x-%A_%a.out
 #SBATCH --error=logs/phase_3/slurm-%x-%A_%a.err
-#SBATCH --array=0-8
+#SBATCH --array=0-2
 
 set -euo pipefail
 
@@ -64,7 +64,7 @@ export OGBENCH_DATASET_DIR="${DATASET_DIR}"
 mkdir -p logs/phase_3
 
 SEEDS=(0 1 2)
-KTRAINS=(4 8 16)
+KTRAINS=(4)
 
 # 3 K_train values × 3 seeds = 9 tasks.
 idx="${SLURM_ARRAY_TASK_ID}"
@@ -88,7 +88,8 @@ export WANDB_RESUME="${WANDB_RESUME:-allow}"
 AGENT_FLAGS=(
   "--agent.actor_p_randomgoal=0.5"
   "--agent.actor_p_trajgoal=0.5"
-  "--agent.alpha=0.1"
+  "--agent.alpha=0.3"
+  "--agent.batch_size=2048"
   "--agent.critic_backbone=recur_tied"
   "--agent.critic_recur_iters=${KTRAIN}"
   "--agent.critic_recur_max_iters=16"
