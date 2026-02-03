@@ -101,11 +101,33 @@ cd "${IMPL_DIR}"
 RUN_DIR="${SAVE_DIR}/OGBench/${RUN_GROUP}/${EXP_NAME}"
 if [[ -z "${RESTORE_PATH}" && "${AUTO_RESUME}" == "1" && -d "${RUN_DIR}" ]]; then
   # Resume from latest checkpoint in-place.
-  latest_epoch="$(ls -1 "${RUN_DIR}"/params_*.pkl 2>/dev/null | sed -E 's/.*params_([0-9]+)\\.pkl/\\1/' | sort -n | tail -1)"
+  latest_epoch="$(
+    for p in "${RUN_DIR}"/params_*.pkl; do
+      [[ -e "${p}" ]] || continue
+      b="$(basename "${p}")"
+      b="${b#params_}"
+      b="${b%.pkl}"
+      if [[ "${b}" =~ ^[0-9]+$ ]]; then
+        echo "${b}"
+      fi
+    done | sort -n | tail -1
+  )"
   if [[ -n "${latest_epoch}" ]]; then
     RESTORE_PATH="${RUN_DIR}"
     RESTORE_EPOCH="${RESTORE_EPOCH:-${latest_epoch}}"
     echo "Auto-resume: RESTORE_PATH=${RESTORE_PATH} RESTORE_EPOCH=${RESTORE_EPOCH}"
+  fi
+fi
+
+if [[ -n "${RESTORE_EPOCH}" && ! "${RESTORE_EPOCH}" =~ ^[0-9]+$ ]]; then
+  # Common gotcha: RESTORE_EPOCH inherited from the submit shell (e.g., accidentally set to a params_*.pkl path).
+  if [[ "${RESTORE_EPOCH}" =~ params_([0-9]+)\\.pkl$ ]]; then
+    echo "Warning: RESTORE_EPOCH looks like a checkpoint path; extracting epoch." >&2
+    RESTORE_EPOCH="${BASH_REMATCH[1]}"
+  else
+    echo "Error: RESTORE_EPOCH must be an integer (e.g., 600000). Got: ${RESTORE_EPOCH}" >&2
+    echo "Tip: run 'unset RESTORE_EPOCH RESTORE_PATH' before sbatch, or submit with --export=ALL,RESTORE_EPOCH=,RESTORE_PATH=" >&2
+    exit 2
   fi
 fi
 
