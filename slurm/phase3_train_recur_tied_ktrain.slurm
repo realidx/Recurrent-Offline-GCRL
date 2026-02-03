@@ -32,7 +32,7 @@ CONDA_EXE="${CONDA_EXE:-conda}"
 WANDB_MODE="${WANDB_MODE:-online}"
 
 ENV_NAME="${ENV_NAME:-antmaze-large-stitch-v0}"
-RUN_GROUP="${RUN_GROUP:-P3_RecurTied_KtrainSweep}"
+RUN_GROUP="${RUN_GROUP:-P3_RecurTied_Tune}"
 SAVE_DIR="${SAVE_DIR:-${SLURM_SUBMIT_DIR}/exp}"
 DATASET_DIR="${DATASET_DIR:-${SLURM_SUBMIT_DIR}/.ogbench_data}"
 AUTO_RESUME="${AUTO_RESUME:-1}"
