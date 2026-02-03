@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=p3_recur_ktrain
 #SBATCH --partition=gpu-long
-#SBATCH --time=05:00:00
+#SBATCH --time=10:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=24G
 #SBATCH --gpus=1
@@ -52,7 +52,7 @@ EVAL_INTERVAL="${EVAL_INTERVAL:-200000}"
 EVAL_TASKS="${EVAL_TASKS:-5}"
 EVAL_EPISODES="${EVAL_EPISODES:-20}"
 VIDEO_EPISODES="${VIDEO_EPISODES:-0}"
-EVAL_ON_CPU="${EVAL_ON_CPU:-1}"
+EVAL_ON_CPU="${EVAL_ON_CPU:-0}"
 
 export MUJOCO_GL="${MUJOCO_GL:-egl}"
 export WANDB_SILENT="${WANDB_SILENT:-true}"
