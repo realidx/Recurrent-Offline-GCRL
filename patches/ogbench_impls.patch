@@ -129,7 +129,7 @@ index 53109ab..ba2b92b 100644
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
 diff --git a/impls/main.py b/impls/main.py
-index 3660e03..9c80e7f 100644
+index 3660e03..65fb5e8 100644
 --- a/impls/main.py
 +++ b/impls/main.py
 @@ -1,10 +1,14 @@
@@ -324,7 +324,7 @@ index 3660e03..9c80e7f 100644
      setup_wandb(project='OGBench', group=FLAGS.run_group, name=exp_name)
  
      FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, FLAGS.run_group, exp_name)
-@@ -85,13 +236,149 @@ def main(_):
+@@ -85,71 +236,221 @@ def main(_):
      # Restore agent.
      if FLAGS.restore_path is not None:
          agent = restore_agent(agent, FLAGS.restore_path, FLAGS.restore_epoch)
@@ -475,7 +475,16 @@ index 3660e03..9c80e7f 100644
          # Update agent.
          batch = train_dataset.sample(config['batch_size'])
          agent, update_info = agent.update(batch)
-@@ -99,57 +386,62 @@ def main(_):
+ 
++        # One-time debug: dump param/grad key structure so we can fix per-module grad norms.
++        if i == start_i:
++            def _key_structure(tree, prefix=''):
++                if hasattr(tree, 'keys'):
++                    return {prefix + k: _key_structure(v, prefix + k + '/') for k, v in tree.items()}
++                return 'leaf'
++            print('DEBUG param keys:', _key_structure(agent.network.params), flush=True)
++            print('DEBUG update_info keys:', sorted(update_info.keys()), flush=True)
++
          # Log metrics.
          if i % FLAGS.log_interval == 0:
              train_metrics = {f'training/{k}': v for k, v in update_info.items()}
@@ -802,7 +811,7 @@ index a3a9944..3ba9b82 100644
              trajs.append(traj)
          else:
 diff --git a/impls/utils/flax_utils.py b/impls/utils/flax_utils.py
-index 48d8b11..0c3ed88 100644
+index 48d8b11..4187a64 100644
 --- a/impls/utils/flax_utils.py
 +++ b/impls/utils/flax_utils.py
 @@ -2,6 +2,7 @@ import functools
@@ -813,15 +822,14 @@ index 48d8b11..0c3ed88 100644
  from typing import Any, Dict, Mapping, Sequence
  
  import flax
-@@ -136,25 +137,15 @@ class TrainState(flax.struct.PyTreeNode):
+@@ -136,25 +137,24 @@ class TrainState(flax.struct.PyTreeNode):
          """
          grads, info = jax.grad(loss_fn, has_aux=True)(self.params)
  
 -        grad_max = jax.tree_util.tree_map(jnp.max, grads)
 -        grad_min = jax.tree_util.tree_map(jnp.min, grads)
 -        grad_norm = jax.tree_util.tree_map(jnp.linalg.norm, grads)
-+        info['grad/global_norm'] = optax.global_norm(grads)
- 
+-
 -        grad_max_flat = jnp.concatenate([jnp.reshape(x, -1) for x in jax.tree_util.tree_leaves(grad_max)], axis=0)
 -        grad_min_flat = jnp.concatenate([jnp.reshape(x, -1) for x in jax.tree_util.tree_leaves(grad_min)], axis=0)
 -        grad_norm_flat = jnp.concatenate([jnp.reshape(x, -1) for x in jax.tree_util.tree_leaves(grad_norm)], axis=0)
@@ -837,17 +845,28 @@ index 48d8b11..0c3ed88 100644
 -                'grad/norm': final_grad_norm,
 -            }
 -        )
-+        # Per-module gradient norms (handles both flat and ModuleDict-nested layouts).
-+        if isinstance(grads, Mapping):
-+            # ModuleDict nests sub-modules under a 'modules' key; fall back to top-level.
-+            module_container = grads['modules'] if 'modules' in grads and isinstance(grads['modules'], Mapping) else grads
++        info['grad/global_norm'] = optax.global_norm(grads)
++
++        # Per-module gradient norms.  Search mirrors _extract_module_params in main.py
++        # so it works regardless of Flax's param-tree layout (flat, nested, or underscore-joined).
++        if hasattr(grads, 'keys'):
 +            for module_name in ['critic', 'actor', 'value']:
-+                if module_name in module_container:
-+                    info[f'grad/{module_name}_global_norm'] = optax.global_norm(module_container[module_name])
++                sub = None
++                if module_name in grads:
++                    sub = grads[module_name]
++                elif 'modules' in grads and hasattr(grads['modules'], 'keys') and module_name in grads['modules']:
++                    sub = grads['modules'][module_name]
++                else:
++                    for k in grads.keys():
++                        if module_name in str(k):
++                            sub = grads[k]
++                            break
++                if sub is not None:
++                    info[f'grad/{module_name}_global_norm'] = optax.global_norm(sub)
  
          return self.apply_gradients(grads=grads), info
  
-@@ -187,16 +178,31 @@ def restore_agent(agent, restore_path, restore_epoch):
+@@ -187,16 +187,31 @@ def restore_agent(agent, restore_path, restore_epoch):
          restore_epoch: Epoch number.
      """
      candidates = glob.glob(restore_path)
@@ -941,10 +960,10 @@ index 9c421dd..3da1eab 100644
  
      return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..04877a9 100644
+index 4ee2b26..e6367d5 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
-@@ -60,6 +60,100 @@ class MLP(nn.Module):
+@@ -60,6 +60,101 @@ class MLP(nn.Module):
          return x
  
  
@@ -1007,7 +1026,8 @@ index 4ee2b26..04877a9 100644
 +        alpha = self.param('alpha', nn.initializers.constant(self.layerscale_init), (self.max_iters,))
 +
 +        film_fc1 = nn.Dense(self.hidden_dim)
-+        film_fc2 = nn.Dense(2 * self.hidden_dim)
++        film_fc2 = nn.Dense(self.hidden_dim)
++        film_fc3 = nn.Dense(2 * self.hidden_dim)
 +
 +        tied_fc1 = nn.Dense(self.hidden_dim)
 +        tied_fc2 = nn.Dense(self.hidden_dim)
@@ -1031,8 +1051,8 @@ index 4ee2b26..04877a9 100644
 +                else:
 +                    h1 = lns[k](h1)
 +
-+            e = step_embed[k]
-+            film = film_fc2(nn.silu(film_fc1(e)))
++            e = jnp.concatenate([jnp.broadcast_to(step_embed[k], h1.shape), h1], axis=-1)
++            film = film_fc3(nn.silu(film_fc2(nn.silu(film_fc1(e)))))
 +            gamma, beta = jnp.split(film, 2, axis=-1)
 +            h_film = (1.0 + gamma) * h1 + beta
 +
@@ -1045,7 +1065,7 @@ index 4ee2b26..04877a9 100644
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -347,16 +441,68 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +442,68 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
@@ -1119,7 +1139,7 @@ index 4ee2b26..04877a9 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +510,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +511,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -1127,7 +1147,7 @@ index 4ee2b26..04877a9 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,8 +522,13 @@ class GCBilinearValue(nn.Module):
+@@ -375,8 +523,13 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
@@ -1143,7 +1163,7 @@ index 4ee2b26..04877a9 100644
  
          v = (phi * psi / jnp.sqrt(self.latent_dim)).sum(axis=-1)
  
-@@ -394,9 +546,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+@@ -394,9 +547,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
  
      action_dim: int = None
  

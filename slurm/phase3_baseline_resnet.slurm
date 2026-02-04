@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=p3_dynfilm
+#SBATCH --job-name=p3_resnet_base
 #SBATCH --partition=gpu-long
 #SBATCH --time=10:00:00
 #SBATCH --cpus-per-task=8
@@ -32,7 +32,7 @@ CONDA_EXE="${CONDA_EXE:-conda}"
 WANDB_MODE="${WANDB_MODE:-online}"
 
 ENV_NAME="${ENV_NAME:-antmaze-large-stitch-v0}"
-RUN_GROUP="${RUN_GROUP:-P3_RecurTied_DynFiLM}"
+RUN_GROUP="${RUN_GROUP:-P3_ResNet_Baseline}"
 SAVE_DIR="${SAVE_DIR:-${SLURM_SUBMIT_DIR}/exp}"
 DATASET_DIR="${DATASET_DIR:-${SLURM_SUBMIT_DIR}/.ogbench_data}"
 AUTO_RESUME="${AUTO_RESUME:-1}"
@@ -64,21 +64,23 @@ export OGBENCH_DATASET_DIR="${DATASET_DIR}"
 mkdir -p logs/phase_3
 
 SEEDS=(0 1 2)
-KTRAINS=(4)
+DEPTHS=(4)
 ALPHAS=(0.1)
 
-# 1 K_train × 1 alpha × 3 seeds = 3 tasks.
+# 2 depths × 1 alpha × 3 seeds = 6 tasks.
+# Iteration order: alpha (fastest) → depth → seed (slowest).
 idx="${SLURM_ARRAY_TASK_ID}"
 alpha_idx=$(( idx % ${#ALPHAS[@]} ))
-seed_idx=$(( idx / ${#ALPHAS[@]} ))
+depth_idx=$(( (idx / ${#ALPHAS[@]}) % ${#DEPTHS[@]} ))
+seed_idx=$(( idx / (${#ALPHAS[@]} * ${#DEPTHS[@]}) ))
 
 SEED="${SEEDS[seed_idx]}"
-KTRAIN="${KTRAINS[0]}"
+DEPTH="${DEPTHS[depth_idx]}"
 ALPHA="${ALPHAS[alpha_idx]}"
 
 # Deterministic exp_name makes resume trivial (re-submitting array resumes into the same dir).
 ALPHA_TAG="${ALPHA//.}"
-EXP_NAME_BASE="sd$(printf %03d ${SEED})_ktrain${KTRAIN}_a${ALPHA_TAG}"
+EXP_NAME_BASE="sd$(printf %03d ${SEED})_resnet${DEPTH}_a${ALPHA_TAG}"
 if [[ -n "${EXP_NAME_SUFFIX}" ]]; then
   EXP_NAME="${EXP_NAME:-${EXP_NAME_BASE}_${EXP_NAME_SUFFIX}}"
 else
@@ -93,10 +95,8 @@ AGENT_FLAGS=(
   "--agent.actor_p_trajgoal=0.5"
   "--agent.alpha=${ALPHA}"
   "--agent.batch_size=1024"
-  "--agent.critic_backbone=recur_tied"
-  "--agent.critic_recur_iters=${KTRAIN}"
-  "--agent.critic_recur_max_iters=16"
-  "--agent.critic_recur_tied_ln=1"
+  "--agent.critic_backbone=resnet"
+  "--agent.critic_resnet_depth=${DEPTH}"
   "--agent.critic_layerscale_init=1e-2"
 )
 
@@ -169,7 +169,7 @@ if [[ -n "${RESTORE_EPOCH}" ]]; then
   cmd+=("--restore_epoch=${RESTORE_EPOCH}")
 fi
 
-echo "seed=${SEED} ktrain=${KTRAIN} exp_name=${EXP_NAME} cwd=$(pwd) WANDB_MODE=${WANDB_MODE} OGBENCH_DATASET_DIR=${OGBENCH_DATASET_DIR} ${cmd[*]}"
+echo "seed=${SEED} depth=${DEPTH} exp_name=${EXP_NAME} cwd=$(pwd) WANDB_MODE=${WANDB_MODE} OGBENCH_DATASET_DIR=${OGBENCH_DATASET_DIR} ${cmd[*]}"
 
 if ! command -v "${CONDA_EXE}" >/dev/null 2>&1; then
   for conda_sh in \
