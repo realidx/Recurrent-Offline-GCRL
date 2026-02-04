@@ -960,10 +960,10 @@ index 9c421dd..3da1eab 100644
  
      return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..e6367d5 100644
+index 4ee2b26..56faffa 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
-@@ -60,6 +60,101 @@ class MLP(nn.Module):
+@@ -60,6 +60,105 @@ class MLP(nn.Module):
          return x
  
  
@@ -1025,7 +1025,8 @@ index 4ee2b26..e6367d5 100644
 +        )
 +        alpha = self.param('alpha', nn.initializers.constant(self.layerscale_init), (self.max_iters,))
 +
-+        film_fc1 = nn.Dense(self.hidden_dim)
++        film_fc1_step = nn.Dense(self.hidden_dim, use_bias=False)
++        film_fc1_h = nn.Dense(self.hidden_dim)
 +        film_fc2 = nn.Dense(self.hidden_dim)
 +        film_fc3 = nn.Dense(2 * self.hidden_dim)
 +
@@ -1043,6 +1044,9 @@ index 4ee2b26..e6367d5 100644
 +                # Create all modules up to max_iters so we can evaluate with num_iters > num_iters at init time.
 +                lns = [nn.LayerNorm(name=f'LayerNorm_{k}') for k in range(int(self.max_iters))]
 +
++        # Precompute step_embed contributions for all iterations (one batched matmul).
++        step_contributions = film_fc1_step(step_embed)  # (max_iters, hidden_dim)
++
 +        for k in range(iters):
 +            h1 = h
 +            if self.layer_norm:
@@ -1051,8 +1055,8 @@ index 4ee2b26..e6367d5 100644
 +                else:
 +                    h1 = lns[k](h1)
 +
-+            e = jnp.concatenate([jnp.broadcast_to(step_embed[k], h1.shape), h1], axis=-1)
-+            film = film_fc3(nn.silu(film_fc2(nn.silu(film_fc1(e)))))
++            fc1_out = step_contributions[k] + film_fc1_h(h1)
++            film = film_fc3(nn.silu(film_fc2(nn.silu(fc1_out))))
 +            gamma, beta = jnp.split(film, 2, axis=-1)
 +            h_film = (1.0 + gamma) * h1 + beta
 +
@@ -1065,7 +1069,7 @@ index 4ee2b26..e6367d5 100644
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -347,16 +442,68 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +446,68 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
@@ -1139,7 +1143,7 @@ index 4ee2b26..e6367d5 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +511,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +515,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -1147,7 +1151,7 @@ index 4ee2b26..e6367d5 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,8 +523,13 @@ class GCBilinearValue(nn.Module):
+@@ -375,8 +527,13 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
@@ -1163,7 +1167,7 @@ index 4ee2b26..e6367d5 100644
  
          v = (phi * psi / jnp.sqrt(self.latent_dim)).sum(axis=-1)
  
-@@ -394,9 +547,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+@@ -394,9 +551,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
  
      action_dim: int = None
  
