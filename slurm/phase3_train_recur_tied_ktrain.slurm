@@ -1,14 +1,14 @@
 #!/bin/bash
 #SBATCH --job-name=p3_recur_ktrain
 #SBATCH --partition=gpu-long
-#SBATCH --time=5:00:00
+#SBATCH --time=10:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=24G
 #SBATCH --gpus=1
 #SBATCH --gres=gpu:1
 #SBATCH --output=logs/phase_3/slurm-%x-%A_%a.out
 #SBATCH --error=logs/phase_3/slurm-%x-%A_%a.err
-#SBATCH --array=0
+#SBATCH --array=0-5
 
 set -euo pipefail
 
@@ -32,7 +32,7 @@ CONDA_EXE="${CONDA_EXE:-conda}"
 WANDB_MODE="${WANDB_MODE:-online}"
 
 ENV_NAME="${ENV_NAME:-antmaze-large-stitch-v0}"
-RUN_GROUP="${RUN_GROUP:-P3_RecurTied_KtrainSweep}"
+RUN_GROUP="${RUN_GROUP:-P3_RecurTied_Tune_alpha}"
 SAVE_DIR="${SAVE_DIR:-${SLURM_SUBMIT_DIR}/exp}"
 DATASET_DIR="${DATASET_DIR:-${SLURM_SUBMIT_DIR}/.ogbench_data}"
 AUTO_RESUME="${AUTO_RESUME:-1}"
@@ -63,19 +63,22 @@ export OGBENCH_DATASET_DIR="${DATASET_DIR}"
 
 mkdir -p logs/phase_3
 
-SEEDS=(2)
-KTRAINS=(16)
+SEEDS=(0 1 2)
+KTRAINS=(4)
+ALPHAS=(0.15 0.20)
 
-# 3 K_train values × 3 seeds = 9 tasks.
+# 1 K_train × 2 alphas × 3 seeds = 6 tasks.
 idx="${SLURM_ARRAY_TASK_ID}"
-ktrain_idx=$(( idx % ${#KTRAINS[@]} ))
-seed_idx=$(( idx / ${#KTRAINS[@]} ))
+alpha_idx=$(( idx % ${#ALPHAS[@]} ))
+seed_idx=$(( idx / ${#ALPHAS[@]} ))
 
 SEED="${SEEDS[seed_idx]}"
-KTRAIN="${KTRAINS[ktrain_idx]}"
+KTRAIN="${KTRAINS[0]}"
+ALPHA="${ALPHAS[alpha_idx]}"
 
 # Deterministic exp_name makes resume trivial (re-submitting array resumes into the same dir).
-EXP_NAME_BASE="sd$(printf %03d ${SEED})_ktrain${KTRAIN}"
+ALPHA_TAG="${ALPHA//.}"
+EXP_NAME_BASE="sd$(printf %03d ${SEED})_ktrain${KTRAIN}_a${ALPHA_TAG}"
 if [[ -n "${EXP_NAME_SUFFIX}" ]]; then
   EXP_NAME="${EXP_NAME:-${EXP_NAME_BASE}_${EXP_NAME_SUFFIX}}"
 else
@@ -88,8 +91,8 @@ export WANDB_RESUME="${WANDB_RESUME:-allow}"
 AGENT_FLAGS=(
   "--agent.actor_p_randomgoal=0.5"
   "--agent.actor_p_trajgoal=0.5"
-  "--agent.alpha=0.1"
-  "--agent.batch_size=1024"
+  "--agent.alpha=${ALPHA}"
+  "--agent.batch_size=2048"
   "--agent.critic_backbone=recur_tied"
   "--agent.critic_recur_iters=${KTRAIN}"
   "--agent.critic_recur_max_iters=16"
