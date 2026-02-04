@@ -64,7 +64,7 @@ export OGBENCH_DATASET_DIR="${DATASET_DIR}"
 mkdir -p logs/phase_3
 
 SEEDS=(0 1 2)
-KTRAINS=(4)
+KTRAINS=(8)
 ALPHAS=(0.1)
 
 # 1 K_train × 1 alpha × 3 seeds = 3 tasks.

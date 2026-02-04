@@ -64,7 +64,7 @@ export OGBENCH_DATASET_DIR="${DATASET_DIR}"
 mkdir -p logs/phase_3
 
 SEEDS=(0 1 2)
-DEPTHS=(4)
+DEPTHS=(8)
 ALPHAS=(0.1)
 
 # 2 depths × 1 alpha × 3 seeds = 6 tasks.
