@@ -47,6 +47,10 @@ VALIDATION_LOG_INTERVAL="${VALIDATION_LOG_INTERVAL:-100000}"
 SAVE_INTERVAL="${SAVE_INTERVAL:-200000}"
 DISABLE_TQDM="${DISABLE_TQDM:-1}"
 
+# LR decay (cosine schedule; 0 = constant LR).  Default: decay over the full run.
+LR_DECAY_STEPS="${LR_DECAY_STEPS:-${TRAIN_STEPS}}"
+LR_MIN="${LR_MIN:-1e-5}"
+
 # Evaluation during training (can be expensive; keep small for diagnostics).
 EVAL_INTERVAL="${EVAL_INTERVAL:-200000}"
 EVAL_TASKS="${EVAL_TASKS:-5}"
@@ -64,7 +68,7 @@ export OGBENCH_DATASET_DIR="${DATASET_DIR}"
 mkdir -p logs/phase_3
 
 SEEDS=(0 1 2)
-KTRAINS=(8)
+KTRAINS=(4)
 ALPHAS=(0.1)
 
 # 1 K_train × 1 alpha × 3 seeds = 3 tasks.
@@ -79,6 +83,9 @@ ALPHA="${ALPHAS[alpha_idx]}"
 # Deterministic exp_name makes resume trivial (re-submitting array resumes into the same dir).
 ALPHA_TAG="${ALPHA//.}"
 EXP_NAME_BASE="sd$(printf %03d ${SEED})_ktrain${KTRAIN}_a${ALPHA_TAG}"
+if [[ "${LR_DECAY_STEPS}" -gt 0 ]]; then
+  EXP_NAME_BASE="${EXP_NAME_BASE}_lrd${LR_DECAY_STEPS}"
+fi
 if [[ -n "${EXP_NAME_SUFFIX}" ]]; then
   EXP_NAME="${EXP_NAME:-${EXP_NAME_BASE}_${EXP_NAME_SUFFIX}}"
 else
@@ -98,6 +105,8 @@ AGENT_FLAGS=(
   "--agent.critic_recur_max_iters=16"
   "--agent.critic_recur_tied_ln=1"
   "--agent.critic_layerscale_init=1e-2"
+  "--agent.lr_decay_steps=${LR_DECAY_STEPS}"
+  "--agent.lr_min=${LR_MIN}"
 )
 
 cd "${IMPL_DIR}"
@@ -169,7 +178,7 @@ if [[ -n "${RESTORE_EPOCH}" ]]; then
   cmd+=("--restore_epoch=${RESTORE_EPOCH}")
 fi
 
-echo "seed=${SEED} ktrain=${KTRAIN} exp_name=${EXP_NAME} cwd=$(pwd) WANDB_MODE=${WANDB_MODE} OGBENCH_DATASET_DIR=${OGBENCH_DATASET_DIR} ${cmd[*]}"
+echo "seed=${SEED} ktrain=${KTRAIN} lr_decay_steps=${LR_DECAY_STEPS} exp_name=${EXP_NAME} cwd=$(pwd) WANDB_MODE=${WANDB_MODE} OGBENCH_DATASET_DIR=${OGBENCH_DATASET_DIR} ${cmd[*]}"
 
 if ! command -v "${CONDA_EXE}" >/dev/null 2>&1; then
   for conda_sh in \
