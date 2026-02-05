@@ -1,5 +1,5 @@
 diff --git a/impls/agents/crl.py b/impls/agents/crl.py
-index 53109ab..ba2b92b 100644
+index 53109ab..0f8f5b4 100644
 --- a/impls/agents/crl.py
 +++ b/impls/agents/crl.py
 @@ -39,6 +39,13 @@ class CRLAgent(flax.struct.PyTreeNode):
@@ -112,7 +112,33 @@ index 53109ab..ba2b92b 100644
              )
  
          if config['discrete']:
-@@ -306,6 +337,15 @@ def get_config():
+@@ -282,7 +313,15 @@ class CRLAgent(flax.struct.PyTreeNode):
+         network_args = {k: v[1] for k, v in network_info.items()}
+ 
+         network_def = ModuleDict(networks)
+-        network_tx = optax.adam(learning_rate=config['lr'])
++        if config['lr_decay_steps'] > 0:
++            lr_schedule = optax.cosine_decay_schedule(
++                init_value=config['lr'],
++                decay_steps=int(config['lr_decay_steps']),
++                alpha=config['lr_min'] / config['lr'],
++            )
++        else:
++            lr_schedule = config['lr']
++        network_tx = optax.adam(learning_rate=lr_schedule)
+         network_params = network_def.init(init_rng, **network_args)['params']
+         network = TrainState.create(network_def, network_params, tx=network_tx)
+ 
+@@ -295,6 +334,8 @@ def get_config():
+             # Agent hyperparameters.
+             agent_name='crl',  # Agent name.
+             lr=3e-4,  # Learning rate.
++            lr_decay_steps=0,  # Cosine LR decay over this many steps (0 = constant LR).
++            lr_min=1e-5,  # Minimum LR at end of cosine decay.
+             batch_size=1024,  # Batch size.
+             actor_hidden_dims=(512, 512, 512),  # Actor network hidden dimensions.
+             value_hidden_dims=(512, 512, 512),  # Value network hidden dimensions.
+@@ -306,6 +347,15 @@ def get_config():
              const_std=True,  # Whether to use constant standard deviation for the actor.
              discrete=False,  # Whether the action space is discrete.
              encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
@@ -960,10 +986,10 @@ index 9c421dd..3da1eab 100644
  
      return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..56faffa 100644
+index 4ee2b26..e1b406f 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
-@@ -60,6 +60,105 @@ class MLP(nn.Module):
+@@ -60,6 +60,104 @@ class MLP(nn.Module):
          return x
  
  
@@ -1027,8 +1053,7 @@ index 4ee2b26..56faffa 100644
 +
 +        film_fc1_step = nn.Dense(self.hidden_dim, use_bias=False)
 +        film_fc1_h = nn.Dense(self.hidden_dim)
-+        film_fc2 = nn.Dense(self.hidden_dim)
-+        film_fc3 = nn.Dense(2 * self.hidden_dim)
++        film_fc2 = nn.Dense(2 * self.hidden_dim)
 +
 +        tied_fc1 = nn.Dense(self.hidden_dim)
 +        tied_fc2 = nn.Dense(self.hidden_dim)
@@ -1056,7 +1081,7 @@ index 4ee2b26..56faffa 100644
 +                    h1 = lns[k](h1)
 +
 +            fc1_out = step_contributions[k] + film_fc1_h(h1)
-+            film = film_fc3(nn.silu(film_fc2(nn.silu(fc1_out))))
++            film = film_fc2(nn.silu(fc1_out))
 +            gamma, beta = jnp.split(film, 2, axis=-1)
 +            h_film = (1.0 + gamma) * h1 + beta
 +
@@ -1069,7 +1094,7 @@ index 4ee2b26..56faffa 100644
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -347,16 +446,68 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +445,68 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
@@ -1143,7 +1168,7 @@ index 4ee2b26..56faffa 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +515,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +514,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -1151,7 +1176,7 @@ index 4ee2b26..56faffa 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,8 +527,13 @@ class GCBilinearValue(nn.Module):
+@@ -375,8 +526,13 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
@@ -1167,7 +1192,7 @@ index 4ee2b26..56faffa 100644
  
          v = (phi * psi / jnp.sqrt(self.latent_dim)).sum(axis=-1)
  
-@@ -394,9 +551,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+@@ -394,9 +550,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
  
      action_dim: int = None
  
