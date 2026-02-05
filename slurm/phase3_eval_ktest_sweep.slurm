@@ -84,6 +84,7 @@ EXP_NAME="sd$(printf %03d ${SEED})_ktrain4_ktest${KTEST}_ref${REFINE}"
 export WANDB_SILENT="${WANDB_SILENT:-true}"
 export WANDB_RUN_ID="${WANDB_RUN_ID:-ogbench_${RUN_GROUP}_${EXP_NAME}}"
 export WANDB_RESUME="allow"
+export PYTHONUNBUFFERED=1
 
 # ---------------------------------------------------------------------------
 # Platform

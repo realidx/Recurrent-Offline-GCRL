@@ -635,7 +635,7 @@ index 6b17e11..00ef632 100644
      val_dataset = Dataset.create(**val_dataset)
  
 diff --git a/impls/utils/evaluation.py b/impls/utils/evaluation.py
-index a3a9944..3ba9b82 100644
+index a3a9944..38115e1 100644
 --- a/impls/utils/evaluation.py
 +++ b/impls/utils/evaluation.py
 @@ -2,6 +2,7 @@ from collections import defaultdict
@@ -656,7 +656,7 @@ index a3a9944..3ba9b82 100644
  ):
      """Evaluate the agent in the environment.
  
-@@ -65,6 +69,131 @@ def evaluate(
+@@ -65,6 +69,144 @@ def evaluate(
      trajs = []
      stats = defaultdict(list)
  
@@ -694,6 +694,23 @@ index a3a9944..3ba9b82 100644
 +            return v[0]
 +        return jnp.asarray(v)
 +
++    # ---------------------------------------------------------------------------
++    # Jitted value + grad + ||grad|| over the critic.  Defined once here so that
++    # XLA compiles it on the first call and reuses the compiled kernel for every
++    # subsequent env step.  ob / goal / a / a0 are explicit args → no
++    # recompilation when their values change.  refine_l2 is a Python scalar
++    # resolved at trace time.
++    # ---------------------------------------------------------------------------
++    @jax.jit
++    def _jit_value_grad_norm(ob, goal, a, a0):
++        def obj(action):
++            score = _critic_score(ob, goal, action)
++            if refine_l2 and refine_l2 > 0:
++                score = score - refine_l2 * jnp.sum((action - a0) ** 2)
++            return score
++        val, grad = jax.value_and_grad(obj)(a)
++        return val, grad, jnp.linalg.norm(grad)
++
 +    def _refine_action(ob_np, goal_np, action0_np):
 +        if config.get('discrete') or refine_steps <= 0:
 +            return action0_np, None
@@ -702,20 +719,16 @@ index a3a9944..3ba9b82 100644
 +        goal = jnp.asarray(goal_np)
 +        a0 = jnp.asarray(action0_np)
 +
-+        def objective(a):
-+            score = _critic_score(ob, goal, a)
-+            if refine_l2 and refine_l2 > 0:
-+                score = score - refine_l2 * jnp.sum((a - a0) ** 2)
-+            return score
-+
 +        grad_eps = 1e-6
 +        q_eps = 1e-5
 +
-+        q_prev = objective(a0)
-+        q_pre = q_prev
++        # Initial value + grad at a0.  The grad is reused as iteration 0's
++        # gradient (a == a0 at that point), so no redundant forward pass.
++        q_pre, g, g_norm_raw = _jit_value_grad_norm(ob, goal, a0, a0)
 +        q_pre_finite = _is_finite(q_pre)
-+
++        q_prev = q_pre
 +        a = a0
++
 +        grad_norm_sum = 0.0
 +        grad_norm_max = 0.0
 +        steps_taken = 0
@@ -723,8 +736,7 @@ index a3a9944..3ba9b82 100644
 +        early_stop_reason = "max_steps"
 +
 +        for _ in range(int(refine_steps)):
-+            g = jax.grad(objective)(a)
-+            g_norm = jnp.linalg.norm(g) + 1e-8
++            g_norm = g_norm_raw + 1e-8
 +
 +            # Check 1: NaN/Inf in gradient.
 +            g_finite = _is_finite(g) and _is_finite(g_norm)
@@ -741,15 +753,16 @@ index a3a9944..3ba9b82 100644
 +                break
 +
 +            # Take step.
-+            a = a + float(refine_lr) * (g / g_norm)
-+            a = jnp.clip(a, -1.0, 1.0)
++            a = jnp.clip(a + float(refine_lr) * (g / g_norm), -1.0, 1.0)
 +
 +            steps_taken += 1
 +            grad_norm_sum += gn
 +            grad_norm_max = max(grad_norm_max, gn)
 +
 +            # Check 3: negligible improvement in objective.
-+            q_curr = objective(a)
++            # value_and_grad also produces the grad for the next iteration at no
++            # extra cost; it is simply unused if we break here.
++            q_curr, g, g_norm_raw = _jit_value_grad_norm(ob, goal, a, a0)
 +            q_curr_finite = _is_finite(q_curr)
 +            q_prev_finite = _is_finite(q_prev)
 +            if not q_curr_finite:
@@ -788,7 +801,7 @@ index a3a9944..3ba9b82 100644
      renders = []
      for i in trange(num_eval_episodes + num_video_episodes):
          traj = defaultdict(list)
-@@ -76,13 +205,20 @@ def evaluate(
+@@ -76,13 +218,20 @@ def evaluate(
          done = False
          step = 0
          render = []
@@ -813,7 +826,7 @@ index a3a9944..3ba9b82 100644
  
              next_observation, reward, terminated, truncated, info = env.step(action)
              done = terminated or truncated
-@@ -106,6 +242,22 @@ def evaluate(
+@@ -106,6 +255,22 @@ def evaluate(
              add_to(traj, transition)
              observation = next_observation
          if i < num_eval_episodes:
