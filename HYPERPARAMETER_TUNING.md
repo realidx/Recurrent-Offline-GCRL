@@ -1,9 +1,9 @@
 # Hyperparameter Tuning Guide
 
-## Current Status: Phase 2 (Depth=4,8 with 3 seeds each)
+## Current Status: Phase 3 (Tied K=4/8 vs ResNet d=4/8; LR decay under test)
 
-**Last Updated:** 2026-02-03
-**Current Config:** `alpha=0.1`, `lr=3e-4`, `actor_p_randomgoal=0.5`
+**Last Updated:** 2026-02-05
+**Current Config:** `alpha=0.1`, `lr=3e-4` (cosine decay → 1e-5), `batch_size=1024`, `actor_p_randomgoal=0.5`
 
 ---
 
@@ -16,9 +16,11 @@
 - `action_norm/mean/saturation_frac` plateau after 100k steps
 - Actor stops learning new behaviors
 
-**Root Cause:** `alpha=0.1` too conservative → actor learns too slowly
+**Root Cause (Phase 2 hypothesis):** `alpha=0.1` too conservative → actor learns too slowly
 
 **Diagnosis Date:** 2026-02-03 (initial), confirmed 2026-02-03 (validation analysis)
+
+> **RESOLVED — Phase 3 (2026-02-05):** alpha=0.1 is actually optimal. Phase 3 confirmed 0.1 > 0.15 > 0.2 > 0.3. The actor-loss framing was misleading: the real lever was the critic architecture. The tied recurrent critic produces a smoother, better-generalised value landscape that the actor can follow even at alpha=0.1. Increasing alpha was not needed.
 
 ---
 
@@ -31,7 +33,7 @@
 - `training/score_margin` much higher than `validation/score_margin`
 - d=8 overfits MORE than d=4 (explains why d=8 doesn't beat d=4 in evaluation)
 
-**Root Cause:** `batch_size=1024` too small → critic memorizes training batch instead of learning general Q-value patterns
+**Root Cause (Phase 2 hypothesis):** `batch_size=1024` too small → critic memorizes training batch instead of learning general Q-value patterns
 
 **Why This Matters:**
 - Critic gives **wrong Q-values** on validation/evaluation data
@@ -42,13 +44,17 @@
 
 **Diagnosis Date:** 2026-02-03 (training/validation log comparison)
 
-**CRITICAL:** These two issues are COUPLED. You must fix BOTH simultaneously.
+> **RESOLVED — Phase 3 (2026-02-05):** The overfitting *symptom* was correctly diagnosed for untied deep networks and was confirmed again: ResNet-8 has better training metrics but ~0.20 mean success vs ResNet-4's ~0.24. However, the proposed fix (larger batch) was unnecessary. The actual fix was **architectural**: weight-tied recurrent critics regularise naturally via parameter sharing, achieving ~0.37 mean success at K=4 with `batch_size=1024`. CRL uses sigmoid BCE (not InfoNCE), so batch size has diminishing returns. The tied architecture prevents the memorisation that plagues deep untied models.
 
 ---
 
 ## ✅ Recommended Changes (Priority Order)
 
-### Priority 1: Fix Both Issues Simultaneously 🔴 CRITICAL
+### Priority 1: Fix Both Issues Simultaneously 🔴 ~~CRITICAL~~ → SUPERSEDED
+
+> **Phase 3 outcome:** Neither change was applied. Phase 3 confirmed that alpha=0.1 and batch_size=1024 are correct. The solution was architectural (tied recurrent critic + dynamic FiLM), not hyperparameter tuning. See "Phase 3 Findings" section below.
+
+**Original recommendation (kept for historical context):**
 
 **You MUST apply BOTH changes together. Fixing only one will not work.**
 
@@ -326,6 +332,39 @@ Check these in your WandB dashboard or CSV logs:
 
 ---
 
+## 🔬 Phase 3 Findings (2026-02-05)
+
+The Phase 2 issues were real symptoms but the proposed fixes were wrong. Phase 3 resolved both by changing the **architecture**, not the hyperparameters.
+
+### What actually worked
+- **Tied recurrent critic with dynamic FiLM** — weight sharing prevents memorisation; ~0.37 mean success at K=4
+- **alpha=0.1 is optimal** — tested 0.1 / 0.15 / 0.2 / 0.3; lower is better because the tied critic produces a smoother value landscape
+- **batch_size=1024 is fine** — CRL uses sigmoid BCE, which scores pairs independently; batch size has diminishing returns unlike InfoNCE
+
+### What didn't work (and why)
+- **Deeper untied networks (ResNet-8 vs ResNet-4):** ResNet-8 has 2x params and better training/validation losses, but *worse* eval performance (~0.20 vs ~0.24). More capacity = more offline RL overfitting. Depth alone does not help.
+- **Static FiLM:** When the FiLM network only sees the step index, it outputs the same γ, β for every input at iteration k. Different tasks need different value-landscape shapes, so a single static modulation creates a routing bottleneck.
+
+### What is being tested now
+| Experiment | Status | Notes |
+|------------|--------|-------|
+| Tied K=4, dynamic FiLM (3-layer), no LR decay | Completed | ~0.37 mean success |
+| ResNet depth=4 | Completed | ~0.24 mean success |
+| ResNet depth=8 | Completed | ~0.20 (overfits) |
+| Tied K=4, dynamic FiLM (2-layer) + cosine LR decay | Running | Simplified FiLM + decay; exp names end `_lrd1000000` |
+| Tied K=8, dynamic FiLM (2-layer) + cosine LR decay | Pending | Training time ~13–15 hrs; auto-resume needed |
+
+### Active tuning knob: Cosine LR Decay
+- **Motivation:** Late-stage performance drops (800k–1M steps) are caused by the critic-actor feedback loop — the actor starts exploiting an increasingly overfit critic. Decaying LR slows this co-adaptation.
+- **Schedule:** Cosine from 3e-4 → 1e-5 over 1M steps (`lr_decay_steps=1000000`, `lr_min=1e-5`)
+- **Resume-safe:** The Adam step counter lives in `opt_state`, which is fully serialised by `flax.serialization.to_state_dict`. On resume the cosine schedule correctly evaluates at the saved step, not step 0.
+- **LR at key checkpoints:** step 0 → 3.0e-4, 200k → 2.72e-4, 600k → 1.10e-4, 800k → 3.77e-5, 1M → 1.0e-5
+
+### FiLM depth ablation
+The 3-layer FiLM (fc1→silu→fc2→silu→fc3) was simplified to 2-layer (fc1→silu→fc2) to reduce per-iteration compute by ~17%. The extra depth was speculative; the key innovation was making FiLM input-dependent (seeing h1), not making it deeper. The 2-layer + LR decay run tests whether this simplification holds.
+
+---
+
 ## 📝 Results Log
 
 ### Run History
@@ -334,8 +373,13 @@ Check these in your WandB dashboard or CSV logs:
 |------|-------|-------|----|----|-------|-------|------------|--------------|--------|--------|-------|
 | 2026-02-03 | 0.1 | 1024 | 3e-4 | 0.5 | 4 | 0,1,2 | ~1.7 | ❌ val_q↓ | ❌ Peak→drop | 0% | Actor bottleneck + critic overfitting |
 | 2026-02-03 | 0.1 | 1024 | 3e-4 | 0.5 | 8 | 0,1,2 | ~1.7 | ❌ val_loss↑ | ❌ Peak→drop | 0% | d=8 overfits MORE than d=4 |
-| TBD | 0.3 | 2048 | 3e-4 | 0.5 | 4 | 0,1,2 | ? | ? | ? | ? | **NEXT RUN** - Fix both issues |
-| TBD | 0.3 | 2048 | 3e-4 | 0.5 | 8 | 0,1,2 | ? | ? | ? | ? | **NEXT RUN** - Check if d=8 generalizes |
+| — | 0.3 | 2048 | 3e-4 | 0.5 | 4 | — | — | — | — | — | ~~SUPERSEDED~~ — never run; see Phase 3 |
+| — | 0.3 | 2048 | 3e-4 | 0.5 | 8 | — | — | — | — | — | ~~SUPERSEDED~~ — never run; see Phase 3 |
+| 2026-02-04 | 0.1 | 1024 | 3e-4 | 0.5 | ResNet-4 | 0,1,2 | — | ✅ | — | — | Phase 3 baseline; ~0.24 mean success |
+| 2026-02-04 | 0.1 | 1024 | 3e-4 | 0.5 | ResNet-8 | 0,1,2 | — | ❌ train↓val | — | — | Overfits: better train, worse eval (~0.20) |
+| 2026-02-04 | 0.1 | 1024 | 3e-4 | 0.5 | Tied K=4 (3-layer FiLM) | 0,1,2 | — | ✅ | — | — | Dynamic FiLM; ~0.37 mean success |
+| TBD | 0.1 | 1024 | cosine→1e-5 | 0.5 | Tied K=4 (2-layer FiLM) | 0,1,2 | ? | ? | ? | ? | **CURRENT** — simplified FiLM + LR decay |
+| TBD | 0.1 | 1024 | cosine→1e-5 | 0.5 | Tied K=8 (2-layer FiLM) | 0,1,2 | ? | ? | ? | ? | **PENDING** — training time; auto-resume |
 
 **Legend:**
 - **Val Healthy?**: ✅ = validation metrics track training, ❌ = validation diverges (overfitting)
@@ -454,6 +498,7 @@ Start: Critic overfitting + Actor bottleneck (coupled issues)
 ---
 
 **Next Actions:**
-1. Change `alpha` from 0.1 to 0.3 in [slurm/phase2_critics_antmaze_large_stitch_array.slurm:84](slurm/phase2_critics_antmaze_large_stitch_array.slurm#L84)
-2. Add `--agent.batch_size=2048` in [slurm/phase2_critics_antmaze_large_stitch_array.slurm:88](slurm/phase2_critics_antmaze_large_stitch_array.slurm#L88)
-3. Re-run depth=4,8 experiments with BOTH changes (they must be applied together)
+1. Monitor Tied K=4 LR-decay run — exp names: `sd{seed}_ktrain4_a01_lrd1000000` in group `P3_RecurTied_DynFiLM`
+2. Compare LR-decay vs no-decay K=4 curves: look for late-stage (800k–1M) stability improvement
+3. If LR decay helps: run Tied K=8 with 2-layer FiLM + LR decay (may need auto-resume for 10-hr SLURM limit)
+4. If LR decay does not help: investigate bfloat16 mixed precision as next speed lever for K=8

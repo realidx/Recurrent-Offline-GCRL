@@ -47,12 +47,12 @@
 
 **Key Components:**
 
-1. **Contrastive Loss (InfoNCE)**
+1. **Contrastive Loss (Sigmoid BCE)**
    - **Purpose:** Train critic to distinguish positive (s,a,g) triplets from negatives
    - **Formula:** `sigmoid_binary_cross_entropy(logits=φᵀψ/√d, labels=I)`
    - **Positive pairs:** Actual (state, action, achieved goal)
-   - **Negative pairs:** Mismatched goals within batch
-   - **Batch size effect:** Larger batch = more negatives = better contrastive signal
+   - **Negative pairs:** Mismatched goals within batch (in-batch negatives)
+   - **Batch size effect:** More negatives per batch, but diminishing returns — sigmoid BCE scores each pair independently (unlike InfoNCE which normalises over negatives). B=1024 is sufficient.
 
 2. **Bilinear Critic Architecture**
    - **φ (phi):** State-action encoder `φ: (s,a) → R^d`
@@ -108,8 +108,8 @@ ResNetBlock(h):
 ```
 
 **Hyperparameters:**
-- **Depth (D):** 3, 6, or 12 blocks (swept in experiments)
-- **Hidden dimension:** 512 (default) or matched to recurrent
+- **Depth (D):** 4 or 8 blocks (Phase 3 sweep)
+- **Hidden dimension:** 512
 - **Latent dimension:** 512
 - **LayerScale init:** 1e-2
 - **Layer normalization:** Enabled
@@ -124,31 +124,35 @@ ResNetBlock(h):
 
 **Tied Iteration Block:**
 ```python
-for k in 0..K-1:
-  # Step conditioning via FiLM
-  e_k = step_embed[k]                    # Learnable per-step embedding
-  film = Dense(2*h)(SiLU(Dense(h)(e_k))) # FiLM parameters
-  gamma, beta = split(film)
+# Before loop: precompute step-embedding contributions (one batched matmul)
+step_contrib = Dense(h, no_bias)(step_embed)   # (max_iters, h)
 
-  # Apply FiLM + tied transformation
-  h1 = LayerNorm(h)                      # ⚠️ BUG: should be tied!
-  h_film = (1 + gamma) * h1 + beta       # Affine conditioning
-  u = Dense(h)(SiLU(Dense(h)(h_film)))   # Tied dense layers (shared weights)
-  h = h + alpha[k] * u                   # Per-step learned scaling
+for k in 0..K-1:
+  h1 = LayerNorm(h)                            # Tied LN (single shared module)
+
+  # Dynamic FiLM: conditioned on step index AND current hidden state
+  fc1_out = step_contrib[k] + Dense(h)(h1)     # split-fc1: step part precomputed
+  film    = Dense(2*h)(SiLU(fc1_out))          # → gamma, beta
+  gamma, beta = split(film)
+  h_film  = (1 + gamma) * h1 + beta            # Affine conditioning
+
+  u = Dense(h)(SiLU(Dense(h)(h_film)))         # Tied dense layers (shared weights)
+  h = h + alpha[k] * u                         # Per-step learned LayerScale
 ```
 
 **Hyperparameters:**
-- **Training iterations (K_train):** 3, 4, 6, or 12
-- **Test iterations (K_test):** Can override at eval (e.g., 12 when K_train=6)
-- **Max iterations:** 32 (for parameter pre-allocation)
-- **Hidden dimension:** 512 or matched via script
+- **Training iterations (K_train):** 4 or 8 (Phase 3 sweep)
+- **Test iterations (K_test):** Can override at eval; requires tied LN
+- **Max iterations:** 16 (step embedding table size)
+- **Hidden dimension:** 512
 - **Step embedding stddev:** 0.02
-- **Alpha (per-step scale) init:** 1e-2
+- **Alpha (per-step scale) init:** 1e-2 (LayerScale)
 
 **Novel Features:**
-- **FiLM (Feature-wise Linear Modulation):** Conditions each iteration with learned `(γ, β)`
-- **Per-iteration scaling:** Learned `α[k]` weights each iteration's contribution
-- **Test-time compute knob:** Can increase K at inference for better performance
+- **Dynamic FiLM:** Per-iteration `(γ, β)` conditioned on BOTH step index and current hidden state `h1`. A static FiLM (step-only) produces the same γ, β for all inputs at iteration k, creating a routing bottleneck when different tasks need different modulation.
+- **Split-fc1 precomputation:** `fc1([step; h1])` is decomposed into `fc1_step(step) + fc1_h(h1)`. The step part is computed once before the loop; only the h1-dependent matmul runs per iteration.
+- **Per-iteration scaling:** Learned `α[k]` (LayerScale) weights each iteration's contribution
+- **Test-time compute knob:** Can increase K at inference (requires tied LN; untied LN would have untrained modules for k > K_train)
 
 ### **D. Actor Network**
 **Type:** Gaussian policy (for continuous actions)
@@ -171,7 +175,9 @@ for k in 0..K-1:
 | Parameter | Value | Description |
 |-----------|-------|-------------|
 | **Optimizer** | Adam | Adaptive learning rate optimizer |
-| **Learning rate** | 3e-4 | Fixed throughout training |
+| **Learning rate** | 3e-4 (initial) | Cosine decay to `lr_min`; see LR Decay row |
+| **LR decay steps** | 1,000,000 | Duration of cosine schedule (set 0 for constant LR) |
+| **LR min** | 1e-5 | Final LR at end of cosine decay |
 | **Batch size** | 1024 | Samples per gradient update |
 | **Discount factor (γ)** | 0.99 (0.995 for giant) | Future reward decay |
 | **Gradient clipping** | Enabled | Via `optax.global_norm` (logged) |
@@ -180,11 +186,11 @@ for k in 0..K-1:
 | Parameter | Value | Description |
 |-----------|-------|-------------|
 | **Total train steps** | 1,000,000 | Total gradient updates |
-| **Log interval** | 5,000 | Steps between training logs |
+| **Log interval** | 20,000 | Steps between training logs |
 | **Validation log interval** | 100,000 | Steps between validation logs |
-| **Eval interval** | 100,000 | Steps between full evaluations |
-| **Save interval** | 1,000,000 | Steps between checkpoints |
-| **Estimated wall-clock** | ~5 hours on GPU | For 1M steps |
+| **Eval interval** | 200,000 | Steps between full evaluations |
+| **Save interval** | 200,000 | Steps between checkpoints (auto-resume picks up latest) |
+| **Estimated wall-clock** | ~9.5 hrs (tied K=4) | ResNet baselines faster; K=8 tied ~1.5x slower |
 
 ### **CRL-Specific Hyperparameters**
 | Parameter | Value | Description |
@@ -200,10 +206,13 @@ for k in 0..K-1:
 | Setting | MLP | ResNet | RecurTied |
 |---------|-----|--------|-----------|
 | **Backbone type** | 'mlp' | 'resnet' | 'recur_tied' |
-| **Depth/Iters** | 3 layers | 3/6/12 blocks | 3/4/6/12 iters |
-| **Hidden dim** | 512 | 512 or matched | 512 or matched |
+| **Depth/Iters** | 3 layers | 4 / 8 blocks | 4 / 8 iters (K_train) |
+| **Hidden dim** | 512 | 512 | 512 |
 | **LayerScale init** | N/A | 1e-2 | 1e-2 |
-| **Max iters** | N/A | N/A | 32 |
+| **Max iters** | N/A | N/A | 16 |
+| **Tied LN** | N/A | N/A | Yes (single shared module) |
+| **Dynamic FiLM** | N/A | N/A | Yes (h1-conditioned) |
+| **LR decay** | — | — | Cosine 3e-4 → 1e-5 |
 
 ---
 
@@ -212,7 +221,7 @@ for k in 0..K-1:
 ### **Evaluation Protocol**
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| **Eval episodes** | 50 | Rollouts per task |
+| **Eval episodes** | 20 | Rollouts per task |
 | **Eval tasks** | All (varies by env) | AntMaze-large has multiple task IDs |
 | **Video episodes** | 0 (can set to 1+) | Rendered episodes for visualization |
 | **Video frame skip** | 3 | Subsample frames for video |
@@ -306,8 +315,8 @@ execute a_t                             # Final action (t ≤ T)
 
 **FiLM (Feature-wise Linear Modulation):**
 - **Formula:** `FiLM(x, γ, β) = (1 + γ) ⊙ x + β`
-- **Purpose:** Conditionally modulates features based on context (iteration step)
-- **Use case:** Differentiates recurrent iterations in tied architecture
+- **Purpose:** Conditionally modulates features. In RecurTied, `(γ, β)` are computed from both the step embedding and the current hidden state `h1` (dynamic / input-dependent conditioning).
+- **Why dynamic:** A static FiLM (step-index only) outputs the same γ, β for every input at iteration k. When different tasks require different value-landscape shapes, the tied MLP cannot route them through a single static modulation — dynamic FiLM resolves this bottleneck.
 
 **SiLU (Swish) Activation:**
 - **Formula:** `SiLU(x) = x * sigmoid(x)`
@@ -360,10 +369,10 @@ L_actor = α * ||π(s,g) - a_behavior||² - Q(s, π(s,g), g)
 - **grad:** Automatic differentiation
 
 ### **Reproducibility**
-- **Random seeds:** 0, 1, 2, 3, 4 (5 seeds per experiment)
+- **Random seeds:** 0, 1, 2 (3 seeds per experiment in Phase 3)
 - **Deterministic policy:** No randomness at eval (temp=0)
 - **Fixed datasets:** Offline data doesn't change
-- **Checkpointing:** Save model every 1M steps
+- **Checkpointing:** Save every 200k steps; auto-resume picks up latest checkpoint on resubmit
 
 ### **Parameter Counting**
 **Closed-form formulas** (from `match_recur_hidden_dim.py`):
@@ -380,11 +389,11 @@ params = Dense(in→h) + D × [LN(h) + 2×Dense(h→h) + h] + Dense(h→latent)
 
 **RecurTied backbone:**
 ```
-params = Dense(in→h) + max_iters×h + max_iters +  # step_embed + alpha
-         2×Dense(h→h) + Dense(h→2h) +              # FiLM network
-         2×Dense(h→h) +                            # tied layers
-         K×2h +                                    # K LayerNorms (⚠️BUG)
-         Dense(h→latent)
+params = Dense(in→h) + max_iters×h + max_iters +           # input proj + step_embed + alpha
+         Dense(h→h, no bias) + Dense(h→h) + Dense(h→2h) +  # FiLM: fc1_step + fc1_h + fc2
+         2×Dense(h→h) +                                     # tied MLP layers
+         2×h +                                              # tied LayerNorm (single shared module)
+         Dense(h→latent)                                    # output projection
 ```
 
 ---
@@ -412,11 +421,13 @@ params = Dense(in→h) + max_iters×h + max_iters +  # step_embed + alpha
 - **Goal:** Validate claims A/B (beat baseline, match params)
 - **Same as Phase 1** but with different run_group name
 
-### **Phase 3: Test-Time Compute**
-- **Goal:** Validate claim C (K_test scaling for tied critics)
-- **Method:** Evaluate trained models with K_test > K_train
-- **Example:** Train with K=6, eval with K=12/18/24
-- **Includes:** Action refinement sweeps (T=0/5/10/20)
+### **Phase 3: Tied vs Untied + Dynamic FiLM**
+- **Goal:** Compare tied recurrent critic (dynamic FiLM) against untied ResNet baselines; test cosine LR decay
+- **Tied model:** RecurTied with dynamic FiLM, K_train ∈ {4, 8}, tied LN, 2-layer FiLM
+- **Baseline:** DeepResNet depth ∈ {4, 8}
+- **LR decay:** Cosine schedule 3e-4 → 1e-5 over 1M steps (tied model only, being tested)
+- **Seeds:** 0, 1, 2 per configuration
+- **Key finding so far:** Tied K=4 (~0.37 mean success) beats ResNet-4 (~0.24) and ResNet-8 (~0.20). ResNet-8 overfits: better training metrics but worse eval performance. Depth alone does not help untied models.
 
 ---
 
@@ -437,13 +448,13 @@ params = Dense(in→h) + max_iters×h + max_iters +  # step_embed + alpha
 ### **SLURM Job Arrays**
 - **Job scheduler:** SLURM (for HPC clusters)
 - **Array indexing:** Maps to (seed, config) pairs
-- **Resources per job:** 1 GPU, 8 CPUs, 24GB RAM, 5 hours
-- **Parallelism:** 20+ jobs simultaneously
+- **Resources per job:** 1 GPU, 8 CPUs, 24GB RAM, 10 hours (`gpu-long`)
+- **Auto-resume:** Deterministic exp names + checkpoint scanning; resubmit picks up where it left off
 
 ### **Logging & Monitoring**
-- **Training logs:** Every 5,000 steps
+- **Training logs:** Every 20,000 steps
 - **Validation logs:** Every 100,000 steps
-- **Evaluation:** Every 100,000 steps (full rollouts)
+- **Evaluation:** Every 200,000 steps (full rollouts)
 - **WandB:** Online experiment tracking (optional)
 - **CSV:** Local persistent logs (always enabled)
 
@@ -458,11 +469,12 @@ params = Dense(in→h) + max_iters×h + max_iters +  # step_embed + alpha
 
 ## 🔟 KEY INNOVATIONS (This Project)
 
-1. **Tied Recurrent Critic:** Weight-shared iterative refinement for critics
-2. **FiLM Conditioning:** Step-wise modulation to differentiate tied iterations
-3. **Test-Time Compute Scaling:** Increase K at inference (recur_tied only)
-4. **Action Refinement:** Gradient-based action optimization at eval
-5. **Parameter Matching:** Fair comparison by matching model capacity
+1. **Tied Recurrent Critic:** Weight-shared iterative refinement for critics — natural regularization via parameter sharing
+2. **Dynamic FiLM:** Input-dependent conditioning — γ, β computed from both step embedding and current hidden state h1, resolving the per-task routing bottleneck of static FiLM
+3. **Split-fc1 Precomputation:** `fc1([step; h])` decomposed into `fc1_step(step) + fc1_h(h)`; step part computed once before the loop, eliminating per-iteration broadcast + concatenate
+4. **Cosine LR Decay:** Slows critic-actor co-adaptation in later training stages; fully resume-safe (optimizer step count persists in checkpoint)
+5. **Test-Time Compute Scaling:** Increase K at inference (requires tied LN)
+6. **Parameter Matching:** Fair comparison by matching model capacity
 
 ---
 
@@ -479,6 +491,6 @@ Tied critic performance improves with K_test > K_train (test-time compute)
 
 ---
 
-**Document Version:** 1.0
-**Last Updated:** 2026-02-02
+**Document Version:** 2.0
+**Last Updated:** 2026-02-05
 **Author:** Comprehensive specification generated from codebase analysis
