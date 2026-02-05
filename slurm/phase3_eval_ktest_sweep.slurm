@@ -31,7 +31,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --output=logs/phase_3/slurm-%x-%A_%a.out
 #SBATCH --error=logs/phase_3/slurm-%x-%A_%a.err
-#SBATCH --array=0-17
+#SBATCH --array=0-2
 
 set -euo pipefail
 
