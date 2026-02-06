@@ -117,6 +117,7 @@ cmd=(
   "--restore_epoch=${RESTORE_EPOCH}"
   "--exp_name=${EXP_NAME}"
   "--eval_episodes=${EVAL_EPISODES}"
+  "--eval_tasks=5"
   "--disable_tqdm=${DISABLE_TQDM}"
   "--eval_on_cpu=${EVAL_ON_CPU}"
   "--eval_refine_steps=${REFINE}"
