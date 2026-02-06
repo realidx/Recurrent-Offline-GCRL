@@ -122,6 +122,9 @@ class RunSummary:
     critic_backbone: Optional[str]
     critic_resnet_depth: Optional[int]
     critic_recur_iters: Optional[int]
+    critic_partial_groups: Optional[int]
+    critic_partial_iters_per_group: Optional[int]
+    critic_partial_per_group_film: Optional[bool]
     critic_backbone_hidden_dim: Optional[int]
     critic_eval_num_iters: Optional[int]
 
@@ -169,6 +172,13 @@ class RunSummary:
         critic_backbone = _get_nested(agent_cfg, ["critic_backbone"]) if isinstance(agent_cfg, dict) else None
         critic_resnet_depth = _get_nested(agent_cfg, ["critic_resnet_depth"]) if isinstance(agent_cfg, dict) else None
         critic_recur_iters = _get_nested(agent_cfg, ["critic_recur_iters"]) if isinstance(agent_cfg, dict) else None
+        critic_partial_groups = _get_nested(agent_cfg, ["critic_partial_groups"]) if isinstance(agent_cfg, dict) else None
+        critic_partial_iters_per_group = (
+            _get_nested(agent_cfg, ["critic_partial_iters_per_group"]) if isinstance(agent_cfg, dict) else None
+        )
+        critic_partial_per_group_film = (
+            _get_nested(agent_cfg, ["critic_partial_per_group_film"]) if isinstance(agent_cfg, dict) else None
+        )
         critic_backbone_hidden_dim = (
             _get_nested(agent_cfg, ["critic_backbone_hidden_dim"]) if isinstance(agent_cfg, dict) else None
         )
@@ -220,6 +230,13 @@ class RunSummary:
             critic_backbone=str(critic_backbone) if critic_backbone is not None else None,
             critic_resnet_depth=int(critic_resnet_depth) if critic_resnet_depth is not None else None,
             critic_recur_iters=int(critic_recur_iters) if critic_recur_iters is not None else None,
+            critic_partial_groups=int(critic_partial_groups) if critic_partial_groups is not None else None,
+            critic_partial_iters_per_group=(
+                int(critic_partial_iters_per_group) if critic_partial_iters_per_group is not None else None
+            ),
+            critic_partial_per_group_film=(
+                bool(critic_partial_per_group_film) if critic_partial_per_group_film is not None else None
+            ),
             critic_backbone_hidden_dim=(
                 int(critic_backbone_hidden_dim) if critic_backbone_hidden_dim is not None else None
             ),
@@ -278,6 +295,9 @@ def main() -> None:
         "critic_backbone",
         "critic_resnet_depth",
         "critic_recur_iters",
+        "critic_partial_groups",
+        "critic_partial_iters_per_group",
+        "critic_partial_per_group_film",
         "critic_backbone_hidden_dim",
         "critic_eval_num_iters",
         "alpha",
