@@ -31,7 +31,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --output=logs/phase_3/slurm-%x-%A_%a.out
 #SBATCH --error=logs/phase_3/slurm-%x-%A_%a.err
-#SBATCH --array=0-2
+#SBATCH --array=0-8
 
 set -euo pipefail
 
@@ -42,7 +42,7 @@ cd "${SLURM_SUBMIT_DIR}"
 #   idx = refine_idx + REFINE_STEPS * (ktest_idx + K_TESTS * seed_idx)
 #   refine (fastest) → ktest → seed (slowest)
 # ---------------------------------------------------------------------------
-SEEDS=(0)
+SEEDS=(2)
 K_TESTS=(4 8 16)
 REFINE_STEPS=(10)
 
@@ -58,8 +58,8 @@ REFINE="${REFINE_STEPS[refine_idx]}"
 # ---------------------------------------------------------------------------
 # Source checkpoint (K_train=4, LR-decay run)
 # ---------------------------------------------------------------------------
-TRAIN_RUN_GROUP="${TRAIN_RUN_GROUP:-P3_RecurTied_DynFiLM}"
-TRAIN_BASE_NAME="sd$(printf %03d ${SEED})_ktrain4_a01_lrd1000000"
+TRAIN_RUN_GROUP="${TRAIN_RUN_GROUP:-P3_Sinusoidal_Incremental}"
+TRAIN_BASE_NAME="sd$(printf %03d ${SEED})_sin_k4_lrd1000000"
 RESTORE_PATH="${SLURM_SUBMIT_DIR}/exp/OGBench/${TRAIN_RUN_GROUP}/${TRAIN_BASE_NAME}"
 RESTORE_EPOCH="${RESTORE_EPOCH:-1000000}"
 
@@ -69,7 +69,7 @@ RESTORE_EPOCH="${RESTORE_EPOCH:-1000000}"
 IMPL_DIR="${SLURM_SUBMIT_DIR}/third_party/ogbench/impls"
 CONDA_ENV="${CONDA_ENV:-recurrent}"
 CONDA_EXE="${CONDA_EXE:-conda}"
-WANDB_MODE="${WANDB_MODE:-online}"
+WANDB_MODE="${WANDB_MODE:-offline}"
 
 ENV_NAME="${ENV_NAME:-antmaze-large-stitch-v0}"
 SAVE_DIR="${SAVE_DIR:-${SLURM_SUBMIT_DIR}/exp}"
@@ -78,7 +78,7 @@ EVAL_EPISODES="${EVAL_EPISODES:-50}"
 EVAL_ON_CPU="${EVAL_ON_CPU:-0}"
 DISABLE_TQDM="${DISABLE_TQDM:-1}"
 
-RUN_GROUP="${RUN_GROUP:-P3_TestTimeScaling}"
+RUN_GROUP="${RUN_GROUP:-P3_Sinusoidal_TestTimeScaling}"
 EXP_NAME="sd$(printf %03d ${SEED})_ktrain4_ktest${KTEST}_ref${REFINE}"
 
 export WANDB_SILENT="${WANDB_SILENT:-true}"
@@ -126,6 +126,7 @@ cmd=(
   "--agent.critic_recur_iters=4"
   "--agent.critic_recur_max_iters=16"
   "--agent.critic_recur_tied_ln=1"
+  "--agent.critic_recur_sinusoidal=1"
   "--agent.critic_layerscale_init=1e-2"
   "--agent.critic_eval_num_iters=${KTEST}"
   "--agent.actor_p_randomgoal=0.5"
