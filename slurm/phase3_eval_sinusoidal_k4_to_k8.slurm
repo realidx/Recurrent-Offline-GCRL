@@ -29,8 +29,8 @@ set -euo pipefail
 cd "${SLURM_SUBMIT_DIR}"
 
 # Array sweep
-SEEDS=(0 1 2)
-K_TESTS=(4 8)
+SEEDS=(2)
+K_TESTS=(4 8 16)
 
 idx="${SLURM_ARRAY_TASK_ID}"
 seed_idx=$(( idx % ${#SEEDS[@]} ))
@@ -49,7 +49,7 @@ RESTORE_EPOCH="${RESTORE_EPOCH:-1000000}"
 IMPL_DIR="${SLURM_SUBMIT_DIR}/third_party/ogbench/impls"
 CONDA_ENV="${CONDA_ENV:-recurrent}"
 CONDA_EXE="${CONDA_EXE:-conda}"
-WANDB_MODE="${WANDB_MODE:-online}"
+WANDB_MODE="${WANDB_MODE:-offline}"
 
 ENV_NAME="${ENV_NAME:-antmaze-large-stitch-v0}"
 SAVE_DIR="${SAVE_DIR:-${SLURM_SUBMIT_DIR}/exp}"
