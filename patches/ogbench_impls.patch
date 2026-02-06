@@ -1003,10 +1003,19 @@ index 9c421dd..3da1eab 100644
  
      return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..a49ed12 100644
+index 4ee2b26..0d72f39 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
-@@ -60,6 +60,124 @@ class MLP(nn.Module):
+@@ -6,6 +6,8 @@ import flax.linen as nn
+ import jax
+ import jax.numpy as jnp
+ 
++from .positional_encoding import sinusoidal_step_encoding
++
+ 
+ def default_init(scale=1.0):
+     """Default kernel initializer."""
+@@ -60,6 +62,123 @@ class MLP(nn.Module):
          return x
  
  
@@ -1113,7 +1122,6 @@ index 4ee2b26..a49ed12 100644
 +                step_contrib_k = step_contributions[k]
 +            else:
 +                # Continuous: compute sinusoidal encoding on-the-fly
-+                from utils.positional_encoding import sinusoidal_step_encoding
 +                step_emb_k = sinusoidal_step_encoding(k, self.max_iters, self.hidden_dim)
 +                step_contrib_k = film_fc1_step(step_emb_k)
 +
@@ -1131,7 +1139,7 @@ index 4ee2b26..a49ed12 100644
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -347,16 +465,71 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +466,71 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
@@ -1208,7 +1216,7 @@ index 4ee2b26..a49ed12 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +537,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +538,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -1216,7 +1224,7 @@ index 4ee2b26..a49ed12 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,8 +549,13 @@ class GCBilinearValue(nn.Module):
+@@ -375,8 +550,13 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
@@ -1232,7 +1240,7 @@ index 4ee2b26..a49ed12 100644
  
          v = (phi * psi / jnp.sqrt(self.latent_dim)).sum(axis=-1)
  
-@@ -394,9 +573,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+@@ -394,9 +574,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
  
      action_dim: int = None
  
