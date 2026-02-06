@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=p3_partial_2x2
 #SBATCH --partition=gpu-long
-#SBATCH --time=05:00:00
+#SBATCH --time=10:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=24G
 #SBATCH --gpus=1
@@ -30,7 +30,7 @@ IMPL_DIR="${SLURM_SUBMIT_DIR}/third_party/ogbench/impls"
 
 CONDA_ENV="${CONDA_ENV:-recurrent}"
 CONDA_EXE="${CONDA_EXE:-conda}"
-WANDB_MODE="${WANDB_MODE:-offline}"
+WANDB_MODE="${WANDB_MODE:-online}"
 
 ENV_NAME="${ENV_NAME:-antmaze-large-stitch-v0}"
 RUN_GROUP="${RUN_GROUP:-P3_PartialTied_2x2}"
