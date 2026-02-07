@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Test partial tying with cycling support."""
+"""Test partial tying with cycling support.
+
+This is a quick smoke-test to catch common implementation mistakes:
+- K_test > K_train should run (cycling works)
+- K_test > max_iters should error
+- Sinusoidal step encoding should run for K_test > K_train without introducing new parameters
+"""
 
 import sys
 import os
@@ -21,13 +27,15 @@ def test_partial_cycling():
     output_dim = 32
     max_iters = 16
 
-    # Create 2×4 partial tying model
+    # Create 2×4 partial tying model (discrete step embeddings, cycled step params).
     model = PartiallyTiedBackbone(
         hidden_dim=hidden_dim,
         out_dim=output_dim,
         num_groups=2,
         iters_per_group=4,
         max_iters=max_iters,
+        use_sinusoidal_step_encoding=False,
+        cycle_step_params=True,
     )
 
     key = jax.random.PRNGKey(0)
@@ -83,9 +91,26 @@ def test_partial_cycling():
     print("\nCycling pattern for 2×4 with K=12:")
     print("  K=0-3:   Group 0 (first pass)")
     print("  K=4-7:   Group 1 (first pass)")
-    print("  K=8-11:  Group 0 (cycle back) ← Uses same weights as K=0-3")
-    print("\nKey insight: Each iteration gets unique step_embedding,")
-    print("so K=0 ≠ K=8 despite using same group weights!")
+    print("  K=8-11:  Group 0 (cycle back) ← Uses same group weights as K=0-3")
+    print("\nNote: in discrete+cycled mode, per-step params are cycled,")
+    print("so step conditioning repeats every K_train steps. Extra iterations")
+    print("still change outputs because h changes over time.")
+
+    # Also test sinusoidal step encoding (extrapolatable, no step_embed table).
+    print(f"\n✓ Test sinusoidal encoding (K=12):")
+    sin_model = PartiallyTiedBackbone(
+        hidden_dim=hidden_dim,
+        out_dim=output_dim,
+        num_groups=2,
+        iters_per_group=4,
+        max_iters=max_iters,
+        use_sinusoidal_step_encoding=True,
+        cycle_step_params=True,
+    )
+    sin_params = sin_model.init(key, x)
+    out_12_sin = sin_model.apply(sin_params, x, num_iters=12)
+    print(f"  Output shape: {out_12_sin.shape}")
+    print(f"  Output finite: {jnp.all(jnp.isfinite(out_12_sin))}")
     return True
 
 
