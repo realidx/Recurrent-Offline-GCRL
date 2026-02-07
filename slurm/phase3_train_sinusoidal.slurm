@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=p3_sin_k8
 #SBATCH --partition=gpu-long
-#SBATCH --time=10:00:00
+#SBATCH --time=20:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=24G
 #SBATCH --gpus=1
@@ -98,7 +98,7 @@ AGENT_FLAGS=(
   "--agent.batch_size=1024"
   "--agent.critic_backbone=recur_tied"
   "--agent.critic_recur_iters=${KTRAIN}"
-  "--agent.critic_recur_max_iters=16"
+  "--agent.critic_recur_max_iters=24"
   "--agent.critic_recur_tied_ln=1"
   "--agent.critic_recur_sinusoidal=1"         # NEW: Enable sinusoidal encoding
   "--agent.critic_layerscale_init=1e-2"
