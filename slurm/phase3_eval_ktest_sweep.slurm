@@ -43,8 +43,8 @@ cd "${SLURM_SUBMIT_DIR}"
 #   refine (fastest) → ktest → seed (slowest)
 # ---------------------------------------------------------------------------
 SEEDS=(2)
-K_TESTS=(4 8 16)
-REFINE_STEPS=(10)
+K_TESTS=(4 8 12 16)
+REFINE_STEPS=(0)
 
 idx="${SLURM_ARRAY_TASK_ID}"
 refine_idx=$(( idx % ${#REFINE_STEPS[@]} ))
@@ -56,10 +56,10 @@ KTEST="${K_TESTS[ktest_idx]}"
 REFINE="${REFINE_STEPS[refine_idx]}"
 
 # ---------------------------------------------------------------------------
-# Source checkpoint (K_train=4, LR-decay run)
+# Source checkpoint (K_train=4, discrete encoding, LR-decay run)
 # ---------------------------------------------------------------------------
-TRAIN_RUN_GROUP="${TRAIN_RUN_GROUP:-P3_Sinusoidal_Incremental}"
-TRAIN_BASE_NAME="sd$(printf %03d ${SEED})_sin_k4_lrd1000000"
+TRAIN_RUN_GROUP="${TRAIN_RUN_GROUP:-P3_RecurTied_DynFiLM}"
+TRAIN_BASE_NAME="sd$(printf %03d ${SEED})_ktrain4_a01_lrd1000000"
 RESTORE_PATH="${SLURM_SUBMIT_DIR}/exp/OGBench/${TRAIN_RUN_GROUP}/${TRAIN_BASE_NAME}"
 RESTORE_EPOCH="${RESTORE_EPOCH:-1000000}"
 
@@ -78,8 +78,8 @@ EVAL_EPISODES="${EVAL_EPISODES:-50}"
 EVAL_ON_CPU="${EVAL_ON_CPU:-0}"
 DISABLE_TQDM="${DISABLE_TQDM:-1}"
 
-RUN_GROUP="${RUN_GROUP:-P3_Sinusoidal_TestTimeScaling}"
-EXP_NAME="sd$(printf %03d ${SEED})_ktrain4_ktest${KTEST}_ref${REFINE}"
+RUN_GROUP="${RUN_GROUP:-P3_Discrete_TestTimeScaling}"
+EXP_NAME="sd$(printf %03d ${SEED})_discrete_ktrain4_ktest${KTEST}_ref${REFINE}"
 
 export WANDB_SILENT="${WANDB_SILENT:-true}"
 export WANDB_RUN_ID="${WANDB_RUN_ID:-ogbench_${RUN_GROUP}_${EXP_NAME}}"
@@ -127,7 +127,7 @@ cmd=(
   "--agent.critic_recur_iters=4"
   "--agent.critic_recur_max_iters=16"
   "--agent.critic_recur_tied_ln=1"
-  "--agent.critic_recur_sinusoidal=1"
+  "--agent.critic_recur_sinusoidal=0"
   "--agent.critic_layerscale_init=1e-2"
   "--agent.critic_eval_num_iters=${KTEST}"
   "--agent.actor_p_randomgoal=0.5"
