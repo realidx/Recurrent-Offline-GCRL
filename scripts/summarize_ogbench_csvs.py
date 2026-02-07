@@ -127,6 +127,8 @@ class RunSummary:
     critic_partial_per_group_film: Optional[bool]
     critic_backbone_hidden_dim: Optional[int]
     critic_eval_num_iters: Optional[int]
+    contrastive_loss_type: Optional[str]
+    infonce_temperature: Optional[float]
 
     train_last_step: Optional[int]
 
@@ -183,6 +185,8 @@ class RunSummary:
             _get_nested(agent_cfg, ["critic_backbone_hidden_dim"]) if isinstance(agent_cfg, dict) else None
         )
         critic_eval_num_iters = _get_nested(agent_cfg, ["critic_eval_num_iters"]) if isinstance(agent_cfg, dict) else None
+        contrastive_loss_type = _get_nested(agent_cfg, ["contrastive_loss_type"]) if isinstance(agent_cfg, dict) else None
+        infonce_temperature = _get_nested(agent_cfg, ["infonce_temperature"]) if isinstance(agent_cfg, dict) else None
         if critic_backbone_hidden_dim in (0, 0.0, "0"):
             critic_backbone_hidden_dim = None
 
@@ -196,6 +200,10 @@ class RunSummary:
             discount = float(discount) if discount is not None else None
         except Exception:
             discount = None
+        try:
+            infonce_temperature = float(infonce_temperature) if infonce_temperature is not None else None
+        except Exception:
+            infonce_temperature = None
 
         train_last_step = None
         if train_path.exists():
@@ -241,6 +249,8 @@ class RunSummary:
                 int(critic_backbone_hidden_dim) if critic_backbone_hidden_dim is not None else None
             ),
             critic_eval_num_iters=int(critic_eval_num_iters) if critic_eval_num_iters is not None else None,
+            contrastive_loss_type=str(contrastive_loss_type) if contrastive_loss_type is not None else None,
+            infonce_temperature=infonce_temperature,
             train_last_step=train_last_step,
             eval_last_step=eval_last_step,
             eval_last_overall_success=eval_last_overall_success,
@@ -300,6 +310,8 @@ def main() -> None:
         "critic_partial_per_group_film",
         "critic_backbone_hidden_dim",
         "critic_eval_num_iters",
+        "contrastive_loss_type",
+        "infonce_temperature",
         "alpha",
         "discount",
         "train_last_step",

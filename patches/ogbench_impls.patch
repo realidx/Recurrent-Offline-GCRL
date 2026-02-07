@@ -1,8 +1,22 @@
 diff --git a/impls/agents/crl.py b/impls/agents/crl.py
-index 53109ab..374f45e 100644
+index 53109ab..79b95f3 100644
 --- a/impls/agents/crl.py
 +++ b/impls/agents/crl.py
-@@ -39,6 +39,13 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -22,7 +22,12 @@ class CRLAgent(flax.struct.PyTreeNode):
+     config: Any = nonpytree_field()
+ 
+     def contrastive_loss(self, batch, grad_params, module_name='critic'):
+-        """Compute the contrastive value loss for the Q or V function."""
++        """Compute the contrastive value loss for the Q or V function.
++
++        Supports two loss variants controlled by config['contrastive_loss_type']:
++        - 'bce': Sigmoid binary cross-entropy (default, treats pairs independently)
++        - 'infonce': InfoNCE with softmax (normalizes across all negatives)
++        """
+         batch_size = batch['observations'].shape[0]
+ 
+         if module_name == 'critic':
+@@ -39,33 +44,62 @@ class CRLAgent(flax.struct.PyTreeNode):
          if len(phi.shape) == 2:  # Non-ensemble.
              phi = phi[None, ...]
              psi = psi[None, ...]
@@ -13,11 +27,43 @@ index 53109ab..374f45e 100644
 +            # v_raw shape: (E, B). Track disagreement across ensemble members.
 +            ensemble_disagreement = jnp.mean(jnp.std(v_raw, axis=0))
 +
++        # Compute logits for all (state, goal) pairs in batch
          logits = jnp.einsum('eik,ejk->ije', phi, psi) / jnp.sqrt(phi.shape[-1])
          # logits.shape is (B, B, e) with one term for positive pair and (B - 1) terms for negative pairs in each row.
          I = jnp.eye(batch_size)
-@@ -50,22 +57,21 @@ class CRLAgent(flax.struct.PyTreeNode):
-         contrastive_loss = jnp.mean(contrastive_loss)
+-        contrastive_loss = jax.vmap(
+-            lambda _logits: optax.sigmoid_binary_cross_entropy(logits=_logits, labels=I),
+-            in_axes=-1,
+-            out_axes=-1,
+-        )(logits)
+-        contrastive_loss = jnp.mean(contrastive_loss)
++
++        # Choose loss type based on config (default: BCE for backward compatibility)
++        loss_type = self.config.get('contrastive_loss_type', 'bce')
++
++        if loss_type == 'infonce':
++            # InfoNCE: softmax cross-entropy normalized across all negatives
++            # Temperature scaling (default 0.1 following common practice)
++            temperature = self.config.get('infonce_temperature', 0.1)
++            temperature = jnp.asarray(temperature, dtype=logits.dtype)
++            temperature = jnp.maximum(temperature, jnp.asarray(1e-6, dtype=logits.dtype))
++            scaled_logits = logits / temperature
++
++            # For each ensemble member, compute softmax cross-entropy
++            contrastive_loss = jax.vmap(
++                lambda _logits: optax.softmax_cross_entropy(logits=_logits, labels=I),
++                in_axes=-1,
++                out_axes=-1,
++            )(scaled_logits)
++            contrastive_loss = jnp.mean(contrastive_loss)
++        else:
++            # Default: Sigmoid BCE (original implementation)
++            contrastive_loss = jax.vmap(
++                lambda _logits: optax.sigmoid_binary_cross_entropy(logits=_logits, labels=I),
++                in_axes=-1,
++                out_axes=-1,
++            )(logits)
++            contrastive_loss = jnp.mean(contrastive_loss)
  
          # Compute additional statistics.
 -        v = jnp.exp(v)
@@ -30,6 +76,7 @@ index 53109ab..374f45e 100644
 +        score_margin = logits_pos - logits_neg
  
          return contrastive_loss, {
++            'contrastive_loss_type': loss_type,
              'contrastive_loss': contrastive_loss,
              'v_mean': v.mean(),
 -            'v_max': v.max(),
@@ -44,7 +91,7 @@ index 53109ab..374f45e 100644
          }
  
      def actor_loss(self, batch, grad_params, rng=None):
-@@ -104,6 +110,7 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -104,6 +138,7 @@ class CRLAgent(flax.struct.PyTreeNode):
              assert not self.config['discrete']
  
              dist = self.network.select('actor')(batch['observations'], batch['actor_goals'], params=grad_params)
@@ -52,7 +99,7 @@ index 53109ab..374f45e 100644
              if self.config['const_std']:
                  q_actions = jnp.clip(dist.mode(), -1, 1)
              else:
-@@ -124,10 +131,7 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -124,10 +159,7 @@ class CRLAgent(flax.struct.PyTreeNode):
                  'q_loss': q_loss,
                  'bc_loss': bc_loss,
                  'q_mean': q.mean(),
@@ -64,7 +111,7 @@ index 53109ab..374f45e 100644
              }
          else:
              raise ValueError(f'Unsupported actor loss: {self.config["actor_loss"]}')
-@@ -231,6 +235,19 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -231,6 +263,19 @@ class CRLAgent(flax.struct.PyTreeNode):
                  state_encoder=encoders.get('critic_state'),
                  goal_encoder=encoders.get('critic_goal'),
                  action_dim=action_dim,
@@ -84,7 +131,7 @@ index 53109ab..374f45e 100644
              )
          else:
              critic_def = GCBilinearValue(
-@@ -241,6 +258,19 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -241,6 +286,19 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
                  state_encoder=encoders.get('critic_state'),
                  goal_encoder=encoders.get('critic_goal'),
@@ -104,7 +151,7 @@ index 53109ab..374f45e 100644
              )
  
          if config['actor_loss'] == 'awr':
-@@ -253,6 +283,19 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -253,6 +311,19 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
                  state_encoder=encoders.get('value_state'),
                  goal_encoder=encoders.get('value_goal'),
@@ -124,7 +171,7 @@ index 53109ab..374f45e 100644
              )
  
          if config['discrete']:
-@@ -282,7 +325,15 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -282,7 +353,15 @@ class CRLAgent(flax.struct.PyTreeNode):
          network_args = {k: v[1] for k, v in network_info.items()}
  
          network_def = ModuleDict(networks)
@@ -141,7 +188,7 @@ index 53109ab..374f45e 100644
          network_params = network_def.init(init_rng, **network_args)['params']
          network = TrainState.create(network_def, network_params, tx=network_tx)
  
-@@ -295,6 +346,8 @@ def get_config():
+@@ -295,6 +374,8 @@ def get_config():
              # Agent hyperparameters.
              agent_name='crl',  # Agent name.
              lr=3e-4,  # Learning rate.
@@ -150,7 +197,7 @@ index 53109ab..374f45e 100644
              batch_size=1024,  # Batch size.
              actor_hidden_dims=(512, 512, 512),  # Actor network hidden dimensions.
              value_hidden_dims=(512, 512, 512),  # Value network hidden dimensions.
-@@ -306,6 +359,19 @@ def get_config():
+@@ -306,6 +387,19 @@ def get_config():
              const_std=True,  # Whether to use constant standard deviation for the actor.
              discrete=False,  # Whether the action space is discrete.
              encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
@@ -170,6 +217,16 @@ index 53109ab..374f45e 100644
              # Dataset hyperparameters.
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
+@@ -319,6 +413,9 @@ def get_config():
+             gc_negative=False,  # Unused (defined for compatibility with GCDataset).
+             p_aug=0.0,  # Probability of applying image augmentation.
+             frame_stack=ml_collections.config_dict.placeholder(int),  # Number of frames to stack.
++            # Contrastive loss variant.
++            contrastive_loss_type='bce',  # 'bce' (default) | 'infonce'
++            infonce_temperature=0.1,  # Temperature for InfoNCE softmax cross-entropy.
+         )
+     )
+     return config
 diff --git a/impls/main.py b/impls/main.py
 index 3660e03..3116b0e 100644
 --- a/impls/main.py
@@ -1015,7 +1072,7 @@ index 9c421dd..3da1eab 100644
  
      return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..fc72ec0 100644
+index 4ee2b26..c4e6e05 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
 @@ -6,6 +6,8 @@ import flax.linen as nn
@@ -1027,7 +1084,7 @@ index 4ee2b26..fc72ec0 100644
  
  def default_init(scale=1.0):
      """Default kernel initializer."""
-@@ -60,6 +62,211 @@ class MLP(nn.Module):
+@@ -60,6 +62,213 @@ class MLP(nn.Module):
          return x
  
  
@@ -1173,8 +1230,9 @@ index 4ee2b26..fc72ec0 100644
 +        iters = total_iters if num_iters is None else int(num_iters)
 +        if total_iters > self.max_iters:
 +            raise ValueError(f'total_iters={total_iters} exceeds max_iters={self.max_iters}')
-+        if iters > total_iters:
-+            raise ValueError(f'num_iters={iters} exceeds total_iters={total_iters}')
++        # Allow test-time scaling beyond total_iters via cycling
++        if iters > self.max_iters:
++            raise ValueError(f'num_iters={iters} exceeds max_iters={self.max_iters}')
 +
 +        h = nn.Dense(self.hidden_dim)(x)
 +
@@ -1220,7 +1278,8 @@ index 4ee2b26..fc72ec0 100644
 +                else:
 +                    h1 = lns[k](h1)
 +
-+            g = k // int(self.iters_per_group)
++            # Support cycling: wrap group index when k >= total_iters
++            g = (k // int(self.iters_per_group)) % int(self.num_groups)
 +            if self.per_group_film:
 +                fc1_out = step_contributions[g][k] + film_fc1_h[g](h1)
 +                film = film_fc2[g](nn.silu(fc1_out))
@@ -1239,7 +1298,7 @@ index 4ee2b26..fc72ec0 100644
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -347,16 +554,99 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +556,99 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
@@ -1344,7 +1403,7 @@ index 4ee2b26..fc72ec0 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +654,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +656,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -1352,7 +1411,7 @@ index 4ee2b26..fc72ec0 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,8 +666,13 @@ class GCBilinearValue(nn.Module):
+@@ -375,8 +668,13 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
@@ -1368,7 +1427,7 @@ index 4ee2b26..fc72ec0 100644
  
          v = (phi * psi / jnp.sqrt(self.latent_dim)).sum(axis=-1)
  
-@@ -394,9 +690,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+@@ -394,9 +692,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
  
      action_dim: int = None
  

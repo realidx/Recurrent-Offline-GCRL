@@ -73,6 +73,8 @@ def _row_for_run_dir(run_dir: Path) -> Dict[str, Any]:
         critic_partial_per_group_film=_get_nested(flags, ["agent", "critic_partial_per_group_film"]),
         critic_backbone_hidden_dim=_get_nested(flags, ["agent", "critic_backbone_hidden_dim"]),
         critic_eval_num_iters=_get_nested(flags, ["agent", "critic_eval_num_iters"]),
+        contrastive_loss_type=_get_nested(flags, ["agent", "contrastive_loss_type"]),
+        infonce_temperature=_get_nested(flags, ["agent", "infonce_temperature"]),
         train_last_step=_last_step(run_dir / "train.csv"),
         eval_last_step=_last_step(run_dir / "eval.csv"),
     )
@@ -112,6 +114,8 @@ def main() -> None:
         "critic_partial_per_group_film",
         "critic_backbone_hidden_dim",
         "critic_eval_num_iters",
+        "contrastive_loss_type",
+        "infonce_temperature",
         "train_last_step",
         "eval_last_step",
     ]
