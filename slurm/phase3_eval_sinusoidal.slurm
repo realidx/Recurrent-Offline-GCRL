@@ -10,19 +10,10 @@
 #SBATCH --error=logs/phase_3/slurm-%x-%A_%a.err
 #SBATCH --array=0-2
 
-# Phase 3 — Sinusoidal Encoding Extrapolation Test
+# Phase 3 — Sinusoidal Encoding Evaluation (no K_test scaling)
 #
-# Evaluate sinusoidal K=4 checkpoint at K_test ∈ {4, 8}.
-# - K=4: Parity check (should match discrete baseline ~0.37)
-# - K=8: Extrapolation test (should be ≥90% of K=4 if it works)
-#
-# Prerequisites:
-#   1. Training completed: sbatch slurm/phase3_train_sinusoidal_k4.slurm
-#   2. Checkpoints exist: exp/OGBench/P3_Sinusoidal_Incremental/sd{000,001,002}_sin_k4_lrd1000000/
-#
-# Array layout:
-#   idx = seed (fastest) + K_test (slowest)
-#   6 jobs = 3 seeds × 2 K_test
+# Evaluates the restored checkpoint "as trained" (i.e., uses checkpoint config).
+# Supports refinement sweeps via `REFINE_STEPS_LIST`, but does not override K at eval.
 
 set -euo pipefail
 
@@ -30,35 +21,30 @@ cd "${SLURM_SUBMIT_DIR}"
 
 # -----------------------------------------------------------------------------
 # Sweep controls (override via `sbatch --export=ALL,...`)
-# - Set `REFINE_STEPS_LIST="2 5 10"` to sweep T with K fixed.
-# - Set `K_TESTS_LIST="4 8 12 16"` to sweep K (meaningful only if refine>0).
+# - Set `REFINE_STEPS_LIST="0 2 5 10"` to sweep refinement steps.
 # -----------------------------------------------------------------------------
-EVAL_SEEDS="${EVAL_SEEDS:-2}"
-K_TESTS_LIST="${K_TESTS_LIST:-4}"
+EVAL_SEEDS="${EVAL_SEEDS:-0 1 2}"
 REFINE_STEPS_LIST="${REFINE_STEPS_LIST:-0}"
 
 read -r -a SEEDS <<< "${EVAL_SEEDS}"
-read -r -a K_TESTS <<< "${K_TESTS_LIST}"
 read -r -a REFINE_STEPS <<< "${REFINE_STEPS_LIST}"
 
 idx="${SLURM_ARRAY_TASK_ID}"
-total=$(( ${#SEEDS[@]} * ${#K_TESTS[@]} * ${#REFINE_STEPS[@]} ))
+total=$(( ${#SEEDS[@]} * ${#REFINE_STEPS[@]} ))
 if (( idx < 0 || idx >= total )); then
-  echo "Error: SLURM_ARRAY_TASK_ID=${idx} out of range for total=${total} (seeds=${#SEEDS[@]} ktests=${#K_TESTS[@]} refine_steps=${#REFINE_STEPS[@]})." >&2
+  echo "Error: SLURM_ARRAY_TASK_ID=${idx} out of range for total=${total} (seeds=${#SEEDS[@]} refine_steps=${#REFINE_STEPS[@]})." >&2
   echo "Fix: resubmit with --array=0-$((total - 1)) or adjust *_LIST variables." >&2
   exit 2
 fi
 
-# Layout: refine (fastest) → ktest → seed (slowest)
+# Layout: refine (fastest) → seed (slowest)
 refine_idx=$(( idx % ${#REFINE_STEPS[@]} ))
-ktest_idx=$(( (idx / ${#REFINE_STEPS[@]}) % ${#K_TESTS[@]} ))
-seed_idx=$(( idx / (${#REFINE_STEPS[@]} * ${#K_TESTS[@]}) ))
+seed_idx=$(( idx / ${#REFINE_STEPS[@]} ))
 
 SEED="${SEEDS[seed_idx]}"
-KTEST="${K_TESTS[ktest_idx]}"
 REFINE="${REFINE_STEPS[refine_idx]}"
 
-# Source checkpoint from sinusoidal K=4 training
+# Source checkpoint from sinusoidal training
 TRAIN_RUN_GROUP="${TRAIN_RUN_GROUP:-P3_Sinusoidal}"
 KTRAIN="${KTRAIN:-4}"
 TRAIN_NAME_SUFFIX="${TRAIN_NAME_SUFFIX:-}"
@@ -84,7 +70,7 @@ REFINE_LR="${REFINE_LR:-0.01}"
 REFINE_L2="${REFINE_L2:-0.01}"
 
 RUN_GROUP="${RUN_GROUP:-P3_Sinusoidal_Eval}"
-EXP_NAME="${EXP_NAME:-sd$(printf %03d ${SEED})_sin_ktrain${KTRAIN}_ktest${KTEST}_ref${REFINE}}"
+EXP_NAME="${EXP_NAME:-sd$(printf %03d ${SEED})_sin_ktrain${KTRAIN}_ref${REFINE}}"
 
 export WANDB_SILENT="${WANDB_SILENT:-true}"
 export WANDB_RUN_ID="${WANDB_RUN_ID:-ogbench_${RUN_GROUP}_${EXP_NAME}}"
@@ -127,20 +113,9 @@ cmd=(
   "--eval_refine_lr=${REFINE_LR}"
   "--eval_refine_l2=${REFINE_L2}"
   "--agent=agents/crl.py"
-  # Architecture flags — must match training exactly
-  "--agent.critic_backbone=recur_tied"
-  "--agent.critic_recur_iters=${KTRAIN}"
-  "--agent.critic_recur_max_iters=16"
-  "--agent.critic_recur_tied_ln=1"
-  "--agent.critic_recur_sinusoidal=1"         # Match training config
-  "--agent.critic_layerscale_init=1e-2"
-  "--agent.critic_eval_num_iters=${KTEST}"   # Override K at eval (KEY!)
-  "--agent.actor_p_randomgoal=0.5"
-  "--agent.actor_p_trajgoal=0.5"
-  "--agent.alpha=0.1"
 )
 
-echo "SINUSOIDAL EVAL: seed=${SEED} ktest=${KTEST} refine=${REFINE} exp=${EXP_NAME} restore=${RESTORE_PATH}@${RESTORE_EPOCH}"
+echo "SINUSOIDAL EVAL: seed=${SEED} refine=${REFINE} exp=${EXP_NAME} restore=${RESTORE_PATH}@${RESTORE_EPOCH}"
 echo "${cmd[*]}"
 
 # Conda bootstrap
