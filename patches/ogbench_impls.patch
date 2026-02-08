@@ -231,7 +231,7 @@ index 53109ab..7f41e56 100644
      )
      return config
 diff --git a/impls/main.py b/impls/main.py
-index 3660e03..fa12cd2 100644
+index 3660e03..d7a5df6 100644
 --- a/impls/main.py
 +++ b/impls/main.py
 @@ -1,10 +1,14 @@
@@ -249,7 +249,7 @@ index 3660e03..fa12cd2 100644
  import numpy as np
  import tqdm
  import wandb
-@@ -23,28 +27,214 @@ flags.DEFINE_string('run_group', 'Debug', 'Run group.')
+@@ -23,28 +27,219 @@ flags.DEFINE_string('run_group', 'Debug', 'Run group.')
  flags.DEFINE_integer('seed', 0, 'Random seed.')
  flags.DEFINE_string('env_name', 'antmaze-large-navigate-v0', 'Environment (dataset) name.')
  flags.DEFINE_string('save_dir', 'exp/', 'Save directory.')
@@ -416,8 +416,13 @@ index 3660e03..fa12cd2 100644
 +                except Exception:
 +                    restore_flags = None
 +                if isinstance(restore_flags, dict):
-+                    # Prefer checkpoint env_name for correctness.
-+                    if restore_flags.get('env_name') is not None:
++                    # Prefer checkpoint env_name for correctness, unless explicitly overridden on the command line.
++                    try:
++                        env_flag = flags.FLAGS['env_name']
++                        env_was_set = bool(getattr(env_flag, 'present', False))
++                    except Exception:
++                        env_was_set = False
++                    if not env_was_set and restore_flags.get('env_name') is not None:
 +                        FLAGS.env_name = restore_flags.get('env_name')
 +
 +                    # Prefer checkpoint seed unless explicitly overridden.
@@ -465,7 +470,7 @@ index 3660e03..fa12cd2 100644
      setup_wandb(project='OGBench', group=FLAGS.run_group, name=exp_name)
  
      FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, FLAGS.run_group, exp_name)
-@@ -85,71 +275,221 @@ def main(_):
+@@ -85,71 +280,221 @@ def main(_):
      # Restore agent.
      if FLAGS.restore_path is not None:
          agent = restore_agent(agent, FLAGS.restore_path, FLAGS.restore_epoch)
