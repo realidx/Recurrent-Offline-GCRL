@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=p3_eval_2x2
+#SBATCH --job-name=p3_partial_eval
 #SBATCH --partition=gpu-long
 #SBATCH --time=5:00:00
 #SBATCH --cpus-per-task=8
@@ -10,22 +10,44 @@
 #SBATCH --error=logs/phase_3/slurm-%x-%A_%a.err
 #SBATCH --array=0-2
 
-# Evaluate 2×2 partial tying checkpoints at K=4 (fixed)
-# To compare with 1×4 sinusoidal and 4×1 untied baseline
+# Phase 3 — evaluate ANY partial_tied checkpoint (no K-test sweep)
+#
+# This script is architecture-agnostic: it restores the exact agent config from the checkpoint's `flags.json`
+# (restore_use_flags=1) so you don't need to pass `--agent.critic_partial_*` flags here.
+#
+# Usage examples:
+#   # Evaluate 1×2 partial tying (3 seeds)
+#   sbatch --array=0-2 --export=ALL,TRAIN_RUN_GROUP=P3_PartialTied_1x2,PARTIAL_GROUPS=1,PARTIAL_ITERS_PER_GROUP=2 slurm/phase3_eval_partial.slurm
+#
+#   # Evaluate 2×1 partial tying (3 seeds)
+#   sbatch --array=0-2 --export=ALL,TRAIN_RUN_GROUP=P3_PartialTied_2x1,PARTIAL_GROUPS=2,PARTIAL_ITERS_PER_GROUP=1 slurm/phase3_eval_partial.slurm
+#
+#   # Evaluate 1×4 (3 seeds)
+#   sbatch --array=0-2 --export=ALL,TRAIN_RUN_GROUP=P3_PartialTied_1x4,PARTIAL_GROUPS=1,PARTIAL_ITERS_PER_GROUP=4 slurm/phase3_eval_partial.slurm
 
 set -euo pipefail
 
 cd "${SLURM_SUBMIT_DIR}"
 
-# Array: 3 seeds
-SEEDS=(0 1 2)
+# -----------------------------------------------------------------------------
+# Seed selection
+# -----------------------------------------------------------------------------
+EVAL_SEEDS="${EVAL_SEEDS:-0 1 2}"
+read -r -a SEEDS <<< "${EVAL_SEEDS}"
 SEED="${SEEDS[SLURM_ARRAY_TASK_ID]}"
 
-# Source checkpoint from 2×2 partial tying training
-TRAIN_RUN_GROUP="P3_PartialTied_2x2"
-TRAIN_BASE_NAME="sd$(printf %03d ${SEED})_partial2x2"
-RESTORE_PATH="${SLURM_SUBMIT_DIR}/exp/OGBench/${TRAIN_RUN_GROUP}/${TRAIN_BASE_NAME}"
+# -----------------------------------------------------------------------------
+# Which run to restore
+# -----------------------------------------------------------------------------
+TRAIN_RUN_GROUP="${TRAIN_RUN_GROUP:-P3_PartialTied}"
+PARTIAL_GROUPS="${PARTIAL_GROUPS:-2}"
+PARTIAL_ITERS_PER_GROUP="${PARTIAL_ITERS_PER_GROUP:-2}"
+TRAIN_NAME_SUFFIX="${TRAIN_NAME_SUFFIX:-}"
+
+TRAIN_BASE_NAME="${TRAIN_BASE_NAME:-sd$(printf %03d ${SEED})_partial${PARTIAL_GROUPS}x${PARTIAL_ITERS_PER_GROUP}${TRAIN_NAME_SUFFIX}}"
+RESTORE_PATH="${RESTORE_PATH:-${SLURM_SUBMIT_DIR}/exp/OGBench/${TRAIN_RUN_GROUP}/${TRAIN_BASE_NAME}}"
 RESTORE_EPOCH="${RESTORE_EPOCH:-1000000}"
+RESTORE_USE_FLAGS="${RESTORE_USE_FLAGS:-1}"
 
 # Eval settings
 IMPL_DIR="${SLURM_SUBMIT_DIR}/third_party/ogbench/impls"
@@ -37,11 +59,16 @@ ENV_NAME="${ENV_NAME:-antmaze-large-stitch-v0}"
 SAVE_DIR="${SAVE_DIR:-${SLURM_SUBMIT_DIR}/exp}"
 DATASET_DIR="${DATASET_DIR:-${SLURM_SUBMIT_DIR}/.ogbench_data}"
 EVAL_EPISODES="${EVAL_EPISODES:-50}"
+EVAL_TASKS="${EVAL_TASKS:-5}"
+VIDEO_EPISODES="${VIDEO_EPISODES:-0}"
 EVAL_ON_CPU="${EVAL_ON_CPU:-0}"
 DISABLE_TQDM="${DISABLE_TQDM:-1}"
+EVAL_REFINE_STEPS="${EVAL_REFINE_STEPS:-0}"
+EVAL_REFINE_LR="${EVAL_REFINE_LR:-0.05}"
+EVAL_REFINE_L2="${EVAL_REFINE_L2:-0.0}"
 
-RUN_GROUP="P3_PartialTied_2x2_Eval"
-EXP_NAME="sd$(printf %03d ${SEED})_partial2x2_eval"
+RUN_GROUP="${RUN_GROUP:-P3_PartialTied_Eval}"
+EXP_NAME="${EXP_NAME:-sd$(printf %03d ${SEED})_partial${PARTIAL_GROUPS}x${PARTIAL_ITERS_PER_GROUP}_eval}"
 
 export WANDB_SILENT="${WANDB_SILENT:-true}"
 export WANDB_RUN_ID="${WANDB_RUN_ID:-ogbench_${RUN_GROUP}_${EXP_NAME}}"
@@ -73,27 +100,20 @@ cmd=(
   "--eval_only=1"
   "--restore_path=${RESTORE_PATH}"
   "--restore_epoch=${RESTORE_EPOCH}"
+  "--restore_use_flags=${RESTORE_USE_FLAGS}"
   "--exp_name=${EXP_NAME}"
   "--eval_episodes=${EVAL_EPISODES}"
-  "--eval_tasks=5"
+  "--eval_tasks=${EVAL_TASKS}"
+  "--video_episodes=${VIDEO_EPISODES}"
   "--disable_tqdm=${DISABLE_TQDM}"
   "--eval_on_cpu=${EVAL_ON_CPU}"
+  "--eval_refine_steps=${EVAL_REFINE_STEPS}"
+  "--eval_refine_lr=${EVAL_REFINE_LR}"
+  "--eval_refine_l2=${EVAL_REFINE_L2}"
   "--agent=agents/crl.py"
-  # Architecture flags — must match training
-  "--agent.critic_backbone=partial_tied"
-  "--agent.critic_partial_groups=2"
-  "--agent.critic_partial_iters_per_group=2"
-  "--agent.critic_partial_per_group_film=0"
-  "--agent.critic_recur_max_iters=16"
-  "--agent.critic_recur_tied_ln=1"
-  "--agent.critic_recur_sinusoidal=0"
-  "--agent.critic_layerscale_init=1e-2"
-  "--agent.actor_p_randomgoal=0.5"
-  "--agent.actor_p_trajgoal=0.5"
-  "--agent.alpha=0.1"
 )
 
-echo "PARTIAL 2×2 EVAL: seed=${SEED} exp=${EXP_NAME} restore=${RESTORE_PATH}@${RESTORE_EPOCH}"
+echo "PARTIAL EVAL: seed=${SEED} exp=${EXP_NAME} restore=${RESTORE_PATH}@${RESTORE_EPOCH} env=${ENV_NAME} refine=${EVAL_REFINE_STEPS}"
 echo "${cmd[*]}"
 
 # Conda bootstrap
