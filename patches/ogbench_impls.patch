@@ -1,5 +1,5 @@
 diff --git a/impls/agents/crl.py b/impls/agents/crl.py
-index 53109ab..7f41e56 100644
+index 53109ab..31f9a34 100644
 --- a/impls/agents/crl.py
 +++ b/impls/agents/crl.py
 @@ -22,7 +22,12 @@ class CRLAgent(flax.struct.PyTreeNode):
@@ -110,7 +110,7 @@ index 53109ab..7f41e56 100644
              }
          else:
              raise ValueError(f'Unsupported actor loss: {self.config["actor_loss"]}')
-@@ -231,6 +262,20 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -231,6 +262,21 @@ class CRLAgent(flax.struct.PyTreeNode):
                  state_encoder=encoders.get('critic_state'),
                  goal_encoder=encoders.get('critic_goal'),
                  action_dim=action_dim,
@@ -124,6 +124,7 @@ index 53109ab..7f41e56 100644
 +                partial_iters_per_group=int(config.get('critic_partial_iters_per_group', 2)),
 +                partial_per_group_film=bool(config.get('critic_partial_per_group_film', False)),
 +                partial_cycle_step_params=bool(config.get('critic_partial_cycle_step_params', True)),
++                partial_block_schedule=str(config.get('critic_partial_block_schedule', 'grouped')),
 +                layerscale_init=config['critic_layerscale_init'],
 +                backbone_hidden_dim=None
 +                if not config.get('critic_backbone_hidden_dim')
@@ -131,7 +132,7 @@ index 53109ab..7f41e56 100644
              )
          else:
              critic_def = GCBilinearValue(
-@@ -241,6 +286,20 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -241,6 +287,21 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
                  state_encoder=encoders.get('critic_state'),
                  goal_encoder=encoders.get('critic_goal'),
@@ -145,6 +146,7 @@ index 53109ab..7f41e56 100644
 +                partial_iters_per_group=int(config.get('critic_partial_iters_per_group', 2)),
 +                partial_per_group_film=bool(config.get('critic_partial_per_group_film', False)),
 +                partial_cycle_step_params=bool(config.get('critic_partial_cycle_step_params', True)),
++                partial_block_schedule=str(config.get('critic_partial_block_schedule', 'grouped')),
 +                layerscale_init=config['critic_layerscale_init'],
 +                backbone_hidden_dim=None
 +                if not config.get('critic_backbone_hidden_dim')
@@ -152,7 +154,7 @@ index 53109ab..7f41e56 100644
              )
  
          if config['actor_loss'] == 'awr':
-@@ -253,6 +312,20 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -253,6 +314,21 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
                  state_encoder=encoders.get('value_state'),
                  goal_encoder=encoders.get('value_goal'),
@@ -166,6 +168,7 @@ index 53109ab..7f41e56 100644
 +                partial_iters_per_group=int(config.get('critic_partial_iters_per_group', 2)),
 +                partial_per_group_film=bool(config.get('critic_partial_per_group_film', False)),
 +                partial_cycle_step_params=bool(config.get('critic_partial_cycle_step_params', True)),
++                partial_block_schedule=str(config.get('critic_partial_block_schedule', 'grouped')),
 +                layerscale_init=config['critic_layerscale_init'],
 +                backbone_hidden_dim=None
 +                if not config.get('critic_backbone_hidden_dim')
@@ -173,7 +176,7 @@ index 53109ab..7f41e56 100644
              )
  
          if config['discrete']:
-@@ -282,7 +355,15 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -282,7 +358,15 @@ class CRLAgent(flax.struct.PyTreeNode):
          network_args = {k: v[1] for k, v in network_info.items()}
  
          network_def = ModuleDict(networks)
@@ -190,7 +193,7 @@ index 53109ab..7f41e56 100644
          network_params = network_def.init(init_rng, **network_args)['params']
          network = TrainState.create(network_def, network_params, tx=network_tx)
  
-@@ -295,6 +376,8 @@ def get_config():
+@@ -295,6 +379,8 @@ def get_config():
              # Agent hyperparameters.
              agent_name='crl',  # Agent name.
              lr=3e-4,  # Learning rate.
@@ -199,7 +202,7 @@ index 53109ab..7f41e56 100644
              batch_size=1024,  # Batch size.
              actor_hidden_dims=(512, 512, 512),  # Actor network hidden dimensions.
              value_hidden_dims=(512, 512, 512),  # Value network hidden dimensions.
-@@ -306,6 +389,20 @@ def get_config():
+@@ -306,6 +392,21 @@ def get_config():
              const_std=True,  # Whether to use constant standard deviation for the actor.
              discrete=False,  # Whether the action space is discrete.
              encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
@@ -217,10 +220,11 @@ index 53109ab..7f41e56 100644
 +            critic_partial_iters_per_group=2,  # Iters per group for partial_tied backbone.
 +            critic_partial_per_group_film=False,  # If True, use separate FiLM per group for partial_tied.
 +            critic_partial_cycle_step_params=True,  # If True, cycle per-step params (alpha/step/LN) so K_test doesn't use untrained params.
++            critic_partial_block_schedule='grouped',  # 'grouped' (repeat each block consecutively) | 'stack' (Universal Transformer style)
              # Dataset hyperparameters.
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
-@@ -319,6 +416,9 @@ def get_config():
+@@ -319,6 +420,9 @@ def get_config():
              gc_negative=False,  # Unused (defined for compatibility with GCDataset).
              p_aug=0.0,  # Probability of applying image augmentation.
              frame_stack=ml_collections.config_dict.placeholder(int),  # Number of frames to stack.
@@ -1239,7 +1243,7 @@ index 9c421dd..3da1eab 100644
  
      return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..532ead2 100644
+index 4ee2b26..a9ae972 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
 @@ -6,6 +6,8 @@ import flax.linen as nn
@@ -1251,7 +1255,7 @@ index 4ee2b26..532ead2 100644
  
  def default_init(scale=1.0):
      """Default kernel initializer."""
-@@ -60,6 +62,233 @@ class MLP(nn.Module):
+@@ -60,6 +62,270 @@ class MLP(nn.Module):
          return x
  
  
@@ -1391,17 +1395,43 @@ index 4ee2b26..532ead2 100644
 +    per_group_film: bool = False
 +    use_sinusoidal_step_encoding: bool = False
 +    cycle_step_params: bool = True
++    block_schedule: str = 'grouped'  # 'grouped' (default) | 'stack'
 +    layerscale_init: float = 1e-2
 +
 +    @nn.compact
 +    def __call__(self, x, num_iters=None):
-+        total_iters = int(self.num_groups) * int(self.iters_per_group)
++        num_groups = int(self.num_groups)
++        iters_per_group = int(self.iters_per_group)
++        if num_groups <= 0 or iters_per_group <= 0:
++            raise ValueError(f'num_groups and iters_per_group must be positive. Got num_groups={num_groups} iters_per_group={iters_per_group}')
++
++        total_iters = num_groups * iters_per_group
 +        iters = total_iters if num_iters is None else int(num_iters)
-+        if total_iters > self.max_iters:
-+            raise ValueError(f'total_iters={total_iters} exceeds max_iters={self.max_iters}')
-+        # Allow test-time scaling beyond total_iters via cycling.
-+        if iters > self.max_iters:
-+            raise ValueError(f'num_iters={iters} exceeds max_iters={self.max_iters}')
++        if self.block_schedule not in ('grouped', 'stack'):
++            raise ValueError(f"Unsupported block_schedule={self.block_schedule!r}. Use 'grouped' or 'stack'.")
++
++        # For 'grouped', step-dependent parameters are indexed by unroll step k (0..total_iters-1),
++        # so we need total_iters <= max_iters.
++        #
++        # For 'stack', this backbone represents a stack of `num_groups` blocks iterated for
++        # `iters_per_group` outer steps (Universal Transformer style). Step-dependent parameters are
++        # indexed by outer step t (0..iters_per_group-1), so we need iters_per_group <= max_iters.
++        if self.block_schedule == 'grouped':
++            if total_iters > self.max_iters:
++                raise ValueError(f'total_iters={total_iters} exceeds max_iters={self.max_iters} for block_schedule=grouped')
++            max_allowed_iters = self.max_iters
++        else:  # 'stack'
++            if iters_per_group > self.max_iters:
++                raise ValueError(
++                    f'iters_per_group={iters_per_group} exceeds max_iters={self.max_iters} for block_schedule=stack'
++                )
++            # In stack mode, total unroll steps can exceed max_iters because step params are per outer step.
++            max_allowed_iters = num_groups * self.max_iters
++
++        # Allow optional test-time scaling beyond training steps. 'cycle_step_params' ensures we do not
++        # introduce new learned per-step parameters beyond training.
++        if iters > max_allowed_iters:
++            raise ValueError(f'num_iters={iters} exceeds supported maximum {max_allowed_iters} for block_schedule={self.block_schedule}')
 +
 +        h = nn.Dense(self.hidden_dim)(x)
 +
@@ -1452,17 +1482,28 @@ index 4ee2b26..532ead2 100644
 +                if ln is not None:
 +                    h1 = ln(h1)
 +                else:
-+                    h1 = lns[(k % total_iters) if self.cycle_step_params else k](h1)
++                    if self.block_schedule == 'grouped':
++                        step_idx = (k % total_iters) if self.cycle_step_params else k
++                    else:
++                        # Stack mode: t = outer iteration index.
++                        t = k // num_groups
++                        step_idx = (t % iters_per_group) if self.cycle_step_params else t
++                    h1 = lns[step_idx](h1)
 +
-+            # Wrap group index when k >= total_iters.
-+            g = (k // int(self.iters_per_group)) % int(self.num_groups)
-+
-+            # Cycle learnable per-step parameters (alpha / discrete step_embed / untied LNs) so K_test does not
-+            # introduce new parameters beyond training. Sinusoidal encoding still uses the absolute step k.
-+            k_param = (k % total_iters) if self.cycle_step_params else k
++            if self.block_schedule == 'grouped':
++                # "Chunked" schedule: apply group g for iters_per_group consecutive steps, then move to g+1.
++                g = (k // iters_per_group) % num_groups
++                k_param = (k % total_iters) if self.cycle_step_params else k
++                step_for_encoding = k  # keep legacy behavior (per-step encoding)
++            else:
++                # Universal Transformer schedule: apply the stack of blocks in order, then repeat the stack.
++                g = k % num_groups
++                t = k // num_groups
++                k_param = (t % iters_per_group) if self.cycle_step_params else t
++                step_for_encoding = t  # step encoding matches outer iteration
 +
 +            if self.use_sinusoidal_step_encoding:
-+                step_emb_k = sinusoidal_step_encoding(k, self.max_iters, self.hidden_dim)
++                step_emb_k = sinusoidal_step_encoding(step_for_encoding, self.max_iters, self.hidden_dim)
 +                step_contrib = film_fc1_step[g](step_emb_k) if self.per_group_film else film_fc1_step(step_emb_k)
 +            else:
 +                step_contrib = step_contributions[g][k_param] if self.per_group_film else step_contributions[k_param]
@@ -1485,7 +1526,7 @@ index 4ee2b26..532ead2 100644
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -347,16 +576,104 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +613,107 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
@@ -1500,6 +1541,7 @@ index 4ee2b26..532ead2 100644
 +    partial_iters_per_group: int = 2
 +    partial_per_group_film: bool = False
 +    partial_cycle_step_params: bool = True
++    partial_block_schedule: str = 'grouped'
 +    layerscale_init: float = 1e-2
  
      def setup(self):
@@ -1563,6 +1605,7 @@ index 4ee2b26..532ead2 100644
 +                per_group_film=bool(self.partial_per_group_film),
 +                use_sinusoidal_step_encoding=bool(self.recur_sinusoidal),
 +                cycle_step_params=bool(self.partial_cycle_step_params),
++                block_schedule=str(self.partial_block_schedule),
 +                layerscale_init=self.layerscale_init,
 +            )
 +            psi_kwargs = dict(
@@ -1576,6 +1619,7 @@ index 4ee2b26..532ead2 100644
 +                per_group_film=bool(self.partial_per_group_film),
 +                use_sinusoidal_step_encoding=bool(self.recur_sinusoidal),
 +                cycle_step_params=bool(self.partial_cycle_step_params),
++                block_schedule=str(self.partial_block_schedule),
 +                layerscale_init=self.layerscale_init,
 +            )
 +        else:
@@ -1595,7 +1639,7 @@ index 4ee2b26..532ead2 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +681,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +721,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -1603,7 +1647,7 @@ index 4ee2b26..532ead2 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,8 +693,13 @@ class GCBilinearValue(nn.Module):
+@@ -375,8 +733,13 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
@@ -1619,7 +1663,7 @@ index 4ee2b26..532ead2 100644
  
          v = (phi * psi / jnp.sqrt(self.latent_dim)).sum(axis=-1)
  
-@@ -394,9 +717,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+@@ -394,9 +757,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
  
      action_dim: int = None
  

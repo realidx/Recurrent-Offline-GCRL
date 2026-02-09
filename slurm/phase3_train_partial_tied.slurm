@@ -46,6 +46,7 @@ PARTIAL_GROUPS="${PARTIAL_GROUPS:-2}"
 PARTIAL_ITERS_PER_GROUP="${PARTIAL_ITERS_PER_GROUP:-4}"
 PARTIAL_PER_GROUP_FILM="${PARTIAL_PER_GROUP_FILM:-0}"
 PARTIAL_CYCLE_STEP_PARAMS="${PARTIAL_CYCLE_STEP_PARAMS:-1}"
+PARTIAL_BLOCK_SCHEDULE="${PARTIAL_BLOCK_SCHEDULE:-grouped}" # 'grouped' | 'stack' (Universal Transformer style)
 RECUR_MAX_ITERS="${RECUR_MAX_ITERS:-16}"
 RECUR_SINUSOIDAL="${RECUR_SINUSOIDAL:-1}"
 
@@ -99,6 +100,7 @@ AGENT_FLAGS=(
   "--agent.critic_partial_iters_per_group=${PARTIAL_ITERS_PER_GROUP}"
   "--agent.critic_partial_per_group_film=${PARTIAL_PER_GROUP_FILM}"
   "--agent.critic_partial_cycle_step_params=${PARTIAL_CYCLE_STEP_PARAMS}"
+  "--agent.critic_partial_block_schedule=${PARTIAL_BLOCK_SCHEDULE}"
   "--agent.critic_recur_max_iters=${RECUR_MAX_ITERS}"
   "--agent.critic_recur_tied_ln=1"
   "--agent.critic_recur_sinusoidal=${RECUR_SINUSOIDAL}"
