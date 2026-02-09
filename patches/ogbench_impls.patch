@@ -231,7 +231,7 @@ index 53109ab..7f41e56 100644
      )
      return config
 diff --git a/impls/main.py b/impls/main.py
-index 3660e03..854757a 100644
+index 3660e03..d7d8733 100644
 --- a/impls/main.py
 +++ b/impls/main.py
 @@ -1,10 +1,14 @@
@@ -470,7 +470,34 @@ index 3660e03..854757a 100644
      setup_wandb(project='OGBench', group=FLAGS.run_group, name=exp_name)
  
      FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, FLAGS.run_group, exp_name)
-@@ -85,71 +280,273 @@ def main(_):
+@@ -53,9 +248,15 @@ def main(_):
+     with open(os.path.join(FLAGS.save_dir, 'flags.json'), 'w') as f:
+         json.dump(flag_dict, f)
+ 
++    # Initialize RNGs early so env/dataset creation (and their initial resets) are reproducible.
++    random.seed(FLAGS.seed)
++    np.random.seed(FLAGS.seed)
++
+     # Set up environment and dataset.
+     config = FLAGS.agent
+-    env, train_dataset, val_dataset = make_env_and_datasets(FLAGS.env_name, frame_stack=config['frame_stack'])
++    env, train_dataset, val_dataset = make_env_and_datasets(
++        FLAGS.env_name, frame_stack=config['frame_stack'], seed=FLAGS.seed
++    )
+ 
+     dataset_class = {
+         'GCDataset': GCDataset,
+@@ -66,9 +267,6 @@ def main(_):
+         val_dataset = dataset_class(Dataset.create(**val_dataset), config)
+ 
+     # Initialize agent.
+-    random.seed(FLAGS.seed)
+-    np.random.seed(FLAGS.seed)
+-
+     example_batch = train_dataset.sample(1)
+     if config['discrete']:
+         # Fill with the maximum action to let the agent know the action space size.
+@@ -85,71 +283,274 @@ def main(_):
      # Restore agent.
      if FLAGS.restore_path is not None:
          agent = restore_agent(agent, FLAGS.restore_path, FLAGS.restore_epoch)
@@ -499,6 +526,7 @@ index 3660e03..854757a 100644
 +                refine_steps=FLAGS.eval_refine_steps,
 +                refine_lr=FLAGS.eval_refine_lr,
 +                refine_l2=FLAGS.eval_refine_l2,
++                episode_seed_base=FLAGS.seed,
 +            )
 +            renders.extend(cur_renders)
 +            metric_names = ['success', 'episode.return']
@@ -788,10 +816,19 @@ index 3660e03..854757a 100644
          # Save agent.
          if i % FLAGS.save_interval == 0:
 diff --git a/impls/utils/env_utils.py b/impls/utils/env_utils.py
-index 6b17e11..00ef632 100644
+index 6b17e11..863dd39 100644
 --- a/impls/utils/env_utils.py
 +++ b/impls/utils/env_utils.py
-@@ -87,7 +87,13 @@ def make_env_and_datasets(dataset_name, frame_stack=None):
+@@ -76,7 +76,7 @@ class FrameStackWrapper(gymnasium.Wrapper):
+         return self.get_observation(), reward, terminated, truncated, info
+ 
+ 
+-def make_env_and_datasets(dataset_name, frame_stack=None):
++def make_env_and_datasets(dataset_name, frame_stack=None, seed=None):
+     """Make OGBench environment and datasets.
+ 
+     Args:
+@@ -87,13 +87,27 @@ def make_env_and_datasets(dataset_name, frame_stack=None):
          A tuple of the environment, training dataset, and validation dataset.
      """
      # Use compact dataset to save memory.
@@ -806,8 +843,23 @@ index 6b17e11..00ef632 100644
      train_dataset = Dataset.create(**train_dataset)
      val_dataset = Dataset.create(**val_dataset)
  
+     if frame_stack is not None:
+         env = FrameStackWrapper(env, frame_stack)
+ 
+-    env.reset()
++    # Ensure the environment RNG is seeded deterministically when requested.
++    try:
++        if seed is None:
++            env.reset()
++        else:
++            env.reset(seed=int(seed))
++    except TypeError:
++        # Some envs may not support gymnasium's reset(seed=...).
++        env.reset()
+ 
+     return env, train_dataset, val_dataset
 diff --git a/impls/utils/evaluation.py b/impls/utils/evaluation.py
-index a3a9944..38115e1 100644
+index a3a9944..9f9f61c 100644
 --- a/impls/utils/evaluation.py
 +++ b/impls/utils/evaluation.py
 @@ -2,6 +2,7 @@ from collections import defaultdict
@@ -818,17 +870,18 @@ index a3a9944..38115e1 100644
  from tqdm import trange
  
  
-@@ -44,6 +45,9 @@ def evaluate(
+@@ -44,6 +45,10 @@ def evaluate(
      video_frame_skip=3,
      eval_temperature=0,
      eval_gaussian=None,
 +    refine_steps=0,
 +    refine_lr=0.05,
 +    refine_l2=0.0,
++    episode_seed_base=None,
  ):
      """Evaluate the agent in the environment.
  
-@@ -65,6 +69,144 @@ def evaluate(
+@@ -65,24 +70,179 @@ def evaluate(
      trajs = []
      stats = defaultdict(list)
  
@@ -973,7 +1026,22 @@ index a3a9944..38115e1 100644
      renders = []
      for i in trange(num_eval_episodes + num_video_episodes):
          traj = defaultdict(list)
-@@ -76,13 +218,20 @@ def evaluate(
+         should_render = i >= num_eval_episodes
+ 
+-        observation, info = env.reset(options=dict(task_id=task_id, render_goal=should_render))
++        reset_kwargs = dict(options=dict(task_id=task_id, render_goal=should_render))
++        if episode_seed_base is not None:
++            # Make evaluation reproducible and comparable across separate jobs/models.
++            # Use distinct seeds per (task, episode) so each model sees the same episode distribution.
++            reset_kwargs['seed'] = int(episode_seed_base) + int(task_id or 0) * 100_000 + int(i)
++        try:
++            observation, info = env.reset(**reset_kwargs)
++        except TypeError:
++            # Backwards-compat: env.reset may not accept a seed kwarg.
++            reset_kwargs.pop('seed', None)
++            observation, info = env.reset(**reset_kwargs)
+         goal = info.get('goal')
+         goal_frame = info.get('goal_rendered')
          done = False
          step = 0
          render = []
@@ -998,7 +1066,7 @@ index a3a9944..38115e1 100644
  
              next_observation, reward, terminated, truncated, info = env.step(action)
              done = terminated or truncated
-@@ -106,6 +255,22 @@ def evaluate(
+@@ -106,6 +266,22 @@ def evaluate(
              add_to(traj, transition)
              observation = next_observation
          if i < num_eval_episodes:
