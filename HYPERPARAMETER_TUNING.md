@@ -146,3 +146,12 @@ When moving to a new task (e.g., `antmaze-giant-navigate-v0`), keep everything c
 - discrete vs sinusoidal (only if you need “test-time scaling” story)
 
 Avoid adding new free knobs (width, batch size, alpha, etc.) unless you have a clear diagnostic reason.
+
+### 7.1 Actor depth scaling (explicit ablation)
+If you want to test whether a stronger actor can exploit a stronger critic, keep the critic fixed at the best setting
+(e.g., `recur_tied (G=1,T=4)` on `antmaze-large-stitch-v0`) and sweep only:
+- `--agent.actor_hidden_dims=(512,512,512)` vs `(512,512,512,512)`
+
+Important:
+- this breaks the “critic-only swap” main claim; keep it as an ablation
+- monitor `evaluation/policy_behavior_*` and `evaluation/action_saturation_frac` for OOD drift
