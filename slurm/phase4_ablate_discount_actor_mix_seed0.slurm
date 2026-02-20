@@ -4,8 +4,7 @@
 #SBATCH --time=10:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=24G
-#SBATCH --gpus=1
-#SBATCH --gres=gpu:1
+#SBATCH --gpus=h100-47
 #SBATCH --output=logs/phase_4/slurm-%x-%A_%a.out
 #SBATCH --error=logs/phase_4/slurm-%x-%A_%a.err
 #SBATCH --array=0-1
