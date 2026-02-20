@@ -67,10 +67,14 @@ EVAL_ON_CPU="${EVAL_ON_CPU:-0}"
 
 # Critic backbone settings.
 KTRAIN="${KTRAIN:-4}"                     # tied iterations at training time
-RECUR_MAX_ITERS="${RECUR_MAX_ITERS:-16}"  # allocated step-params (alpha/LN/step-embed) slots
+RECUR_MAX_ITERS="${RECUR_MAX_ITERS:-24}"  # allocated step-params (alpha/LN/step-embed) slots (keep consistent across runs)
 SINUSOIDAL="${SINUSOIDAL:-1}"             # 1 => sinusoidal encoding, 0 => discrete lookup
 TIED_LN="${TIED_LN:-1}"                   # 1 => single LN shared across iterations
 LAYERSCALE_INIT="${LAYERSCALE_INIT:-1e-2}"
+
+# LR schedule. (Set LR_DECAY_STEPS=0 to disable and use constant LR.)
+LR_DECAY_STEPS="${LR_DECAY_STEPS:-${TRAIN_STEPS}}"
+LR_MIN="${LR_MIN:-1e-5}"
 
 # Navigate task defaults (from OGBench impls/hyperparameters.sh):
 # - antmaze-giant-navigate-v0: alpha=0.1, discount=0.995
@@ -113,6 +117,10 @@ EXP_NAME="${EXP_NAME:-sd$(printf %03d ${SEED})_${ENV_TAG}_recur1x4}"
 export WANDB_RUN_ID="${WANDB_RUN_ID:-ogbench_${RUN_GROUP}_${EXP_NAME}}"
 export WANDB_RESUME="${WANDB_RESUME:-allow}"
 
+# Optional goal-mix overrides (leave empty to use agent defaults).
+ACTOR_P_RANDOMGOAL="${ACTOR_P_RANDOMGOAL:0.5}"
+ACTOR_P_TRAJGOAL="${ACTOR_P_TRAJGOAL:0.5}"
+
 AGENT_FLAGS=(
   "--agent.alpha=${ALPHA}"
   "--agent.discount=${DISCOUNT}"
@@ -123,7 +131,16 @@ AGENT_FLAGS=(
   "--agent.critic_recur_tied_ln=${TIED_LN}"
   "--agent.critic_recur_sinusoidal=${SINUSOIDAL}"
   "--agent.critic_layerscale_init=${LAYERSCALE_INIT}"
+  "--agent.lr_decay_steps=${LR_DECAY_STEPS}"
+  "--agent.lr_min=${LR_MIN}"
 )
+
+if [[ -n "${ACTOR_P_RANDOMGOAL}" ]]; then
+  AGENT_FLAGS+=("--agent.actor_p_randomgoal=${ACTOR_P_RANDOMGOAL}")
+fi
+if [[ -n "${ACTOR_P_TRAJGOAL}" ]]; then
+  AGENT_FLAGS+=("--agent.actor_p_trajgoal=${ACTOR_P_TRAJGOAL}")
+fi
 
 cd "${IMPL_DIR}"
 
@@ -225,4 +242,3 @@ if command -v nvidia-smi >/dev/null 2>&1; then
 fi
 
 "${CONDA_EXE}" run -n "${CONDA_ENV}" env WANDB_MODE="${WANDB_MODE}" "${cmd[@]}"
-
