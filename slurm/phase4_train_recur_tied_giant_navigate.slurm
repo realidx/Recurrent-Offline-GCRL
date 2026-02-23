@@ -90,7 +90,7 @@ if [[ -z "${DISCOUNT}" ]]; then
 fi
 if [[ -z "${ALPHA}" ]]; then
   if [[ "${ENV_NAME}" == pointmaze-* ]]; then
-    ALPHA="0.03"
+    ALPHA="0.1"
   else
     ALPHA="0.1"
   fi
@@ -117,9 +117,12 @@ EXP_NAME="${EXP_NAME:-sd$(printf %03d ${SEED})_${ENV_TAG}_recur1x4}"
 export WANDB_RUN_ID="${WANDB_RUN_ID:-ogbench_${RUN_GROUP}_${EXP_NAME}}"
 export WANDB_RESUME="${WANDB_RESUME:-allow}"
 
-# Optional goal-mix overrides (leave empty to use agent defaults).
-ACTOR_P_RANDOMGOAL="${ACTOR_P_RANDOMGOAL:0.5}"
-ACTOR_P_TRAJGOAL="${ACTOR_P_TRAJGOAL:0.5}"
+# Optional actor goal-mix overrides.
+# Defaults to 0.5/0.5 (your current preferred setting); override via sbatch --export.
+ACTOR_P_RANDOMGOAL="${ACTOR_P_RANDOMGOAL:-0.5}"
+ACTOR_P_TRAJGOAL="${ACTOR_P_TRAJGOAL:-0.5}"
+# Optional: geometric sampling for actor future (traj) goals (0/1). Default is CRL config default.
+ACTOR_GEOM_SAMPLE="${ACTOR_GEOM_SAMPLE:-}"
 
 AGENT_FLAGS=(
   "--agent.alpha=${ALPHA}"
@@ -140,6 +143,9 @@ if [[ -n "${ACTOR_P_RANDOMGOAL}" ]]; then
 fi
 if [[ -n "${ACTOR_P_TRAJGOAL}" ]]; then
   AGENT_FLAGS+=("--agent.actor_p_trajgoal=${ACTOR_P_TRAJGOAL}")
+fi
+if [[ -n "${ACTOR_GEOM_SAMPLE}" ]]; then
+  AGENT_FLAGS+=("--agent.actor_geom_sample=${ACTOR_GEOM_SAMPLE}")
 fi
 
 cd "${IMPL_DIR}"
