@@ -19,6 +19,10 @@
 # 2) CRL recurrent 1x4 on humanoidmaze-large-stitch (3 seeds):
 #    sbatch --array=0-2 --export="ALL,SEEDS='0 1 2',ENV_NAME=humanoidmaze-large-stitch-v0,RUN_GROUP=P4_HumanoidLargeStitch_Recur1x4,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_MAX_ITERS=24,SINUSOIDAL=1,TIED_LN=1,ALPHA=0.1,DISCOUNT=0.995,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online" \
 #      slurm/phase4_train_crl_generic_array.slurm
+#
+# 3) CRL recurrent stacked 4-block x 4-iter:
+#    sbatch --array=0-2 --export="ALL,SEEDS='0 1 2',ENV_NAME=humanoidmaze-large-stitch-v0,RUN_GROUP=P4_HumanoidLargeStitch_Recur4x4,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_BLOCKS=4,RECUR_MAX_ITERS=24,SINUSOIDAL=1,TIED_LN=1,ALPHA=0.1,DISCOUNT=0.995,WANDB_MODE=online" \
+#      slurm/phase4_train_crl_generic_array.slurm
 
 set -euo pipefail
 
@@ -80,6 +84,7 @@ RESNET_DEPTH="${RESNET_DEPTH:-3}"
 
 # recurrent tied options.
 KTRAIN="${KTRAIN:-4}"
+RECUR_NUM_BLOCKS="${RECUR_NUM_BLOCKS:-1}"
 RECUR_MAX_ITERS="${RECUR_MAX_ITERS:-24}"
 SINUSOIDAL="${SINUSOIDAL:-1}"
 TIED_LN="${TIED_LN:-1}"
@@ -150,6 +155,7 @@ case "${CRITIC_BACKBONE}" in
   recur_tied)
     AGENT_FLAGS+=(
       "--agent.critic_recur_iters=${KTRAIN}"
+      "--agent.critic_recur_num_blocks=${RECUR_NUM_BLOCKS}"
       "--agent.critic_recur_max_iters=${RECUR_MAX_ITERS}"
       "--agent.critic_recur_sinusoidal=${SINUSOIDAL}"
       "--agent.critic_recur_tied_ln=${TIED_LN}"

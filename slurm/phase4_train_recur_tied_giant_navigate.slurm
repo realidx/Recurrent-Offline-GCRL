@@ -67,6 +67,7 @@ EVAL_ON_CPU="${EVAL_ON_CPU:-0}"
 
 # Critic backbone settings.
 KTRAIN="${KTRAIN:-4}"                     # tied iterations at training time
+RECUR_NUM_BLOCKS="${RECUR_NUM_BLOCKS:-1}" # stacked residual blocks per tied iteration
 RECUR_MAX_ITERS="${RECUR_MAX_ITERS:-24}"  # allocated step-params (alpha/LN/step-embed) slots (keep consistent across runs)
 SINUSOIDAL="${SINUSOIDAL:-1}"             # 1 => sinusoidal encoding, 0 => discrete lookup
 TIED_LN="${TIED_LN:-1}"                   # 1 => single LN shared across iterations
@@ -130,6 +131,7 @@ AGENT_FLAGS=(
   "--agent.batch_size=1024"
   "--agent.critic_backbone=recur_tied"
   "--agent.critic_recur_iters=${KTRAIN}"
+  "--agent.critic_recur_num_blocks=${RECUR_NUM_BLOCKS}"
   "--agent.critic_recur_max_iters=${RECUR_MAX_ITERS}"
   "--agent.critic_recur_tied_ln=${TIED_LN}"
   "--agent.critic_recur_sinusoidal=${SINUSOIDAL}"
