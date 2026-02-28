@@ -17,7 +17,7 @@
 #   3..5 -> 2x4 seeds 0,1,2
 #
 # Example:
-# sbatch --export="ALL,ENV_NAME=humanoidmaze-large-stitch-v0,RUN_GROUP_PREFIX=P4_HumanoidLargeStitch_ActorDeep,ACTOR_HIDDEN_DIMS=(512,512,512,512,512),ALPHA=0.1,DISCOUNT=0.995,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online" \
+# sbatch --export="ALL,ENV_NAME=humanoidmaze-large-stitch-v0,RUN_GROUP_PREFIX=P4_HumanoidLargeStitch_ActorDeep,ACTOR_HIDDEN_DIMS=512x512x512x512x512,ALPHA=0.1,DISCOUNT=0.995,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online" \
 #   slurm/phase4_train_actor_deeper_recur_compare_array.slurm
 
 set -euo pipefail
@@ -38,7 +38,7 @@ fi
 SEED="${SEEDS[SEED_IDX]}"
 ENV_NAME="${ENV_NAME:-humanoidmaze-large-stitch-v0}"
 RUN_GROUP_PREFIX="${RUN_GROUP_PREFIX:-P4_ActorDeep_RecurCompare}"
-ACTOR_HIDDEN_DIMS="${ACTOR_HIDDEN_DIMS:-"(512,512,512,512,512)"}"
+ACTOR_HIDDEN_DIMS="${ACTOR_HIDDEN_DIMS:-512x512x512x512x512}"
 
 case "${VARIANT_IDX}" in
   0)

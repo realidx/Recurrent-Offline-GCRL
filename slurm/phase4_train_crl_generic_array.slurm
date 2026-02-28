@@ -67,7 +67,7 @@ DISABLE_TQDM="${DISABLE_TQDM:-1}"
 ALPHA="${ALPHA:-0.1}"
 DISCOUNT="${DISCOUNT:-0.99}"
 BATCH_SIZE="${BATCH_SIZE:-1024}"
-ACTOR_HIDDEN_DIMS="${ACTOR_HIDDEN_DIMS:-}"
+ACTOR_HIDDEN_DIMS="${ACTOR_HIDDEN_DIMS:-}"   # Safe format for sbatch --export: e.g., 512x512x512x512
 ACTOR_P_CURGOAL="${ACTOR_P_CURGOAL:-0.0}"
 ACTOR_P_TRAJGOAL="${ACTOR_P_TRAJGOAL:-1.0}"
 ACTOR_P_RANDOMGOAL="${ACTOR_P_RANDOMGOAL:-0.0}"
@@ -140,7 +140,24 @@ AGENT_FLAGS=(
 )
 
 if [[ -n "${ACTOR_HIDDEN_DIMS}" ]]; then
-  AGENT_FLAGS+=("--agent.actor_hidden_dims=${ACTOR_HIDDEN_DIMS}")
+  if [[ "${ACTOR_HIDDEN_DIMS}" == *","* || "${ACTOR_HIDDEN_DIMS}" == *"("* || "${ACTOR_HIDDEN_DIMS}" == *")"* ]]; then
+    echo "Error: ACTOR_HIDDEN_DIMS='${ACTOR_HIDDEN_DIMS}' uses commas/parentheses, which breaks sbatch --export parsing." >&2
+    echo "Use 'x'-separated format instead, e.g. ACTOR_HIDDEN_DIMS=512x512x512x512" >&2
+    exit 2
+  fi
+  IFS='x' read -r -a ACTOR_DIMS <<< "${ACTOR_HIDDEN_DIMS}"
+  if [[ "${#ACTOR_DIMS[@]}" -eq 0 ]]; then
+    echo "Error: ACTOR_HIDDEN_DIMS is set but no dimensions were parsed." >&2
+    exit 2
+  fi
+  for dim in "${ACTOR_DIMS[@]}"; do
+    if [[ ! "${dim}" =~ ^[0-9]+$ ]]; then
+      echo "Error: ACTOR_HIDDEN_DIMS contains non-integer token '${dim}'." >&2
+      echo "Use format like 512x512x512x512" >&2
+      exit 2
+    fi
+    AGENT_FLAGS+=("--agent.actor_hidden_dims=${dim}")
+  done
 fi
 
 if [[ -n "${ACTOR_GEOM_SAMPLE}" ]]; then
