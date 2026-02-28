@@ -67,6 +67,7 @@ DISABLE_TQDM="${DISABLE_TQDM:-1}"
 ALPHA="${ALPHA:-0.1}"
 DISCOUNT="${DISCOUNT:-0.99}"
 BATCH_SIZE="${BATCH_SIZE:-1024}"
+ACTOR_HIDDEN_DIMS="${ACTOR_HIDDEN_DIMS:-}"
 ACTOR_P_CURGOAL="${ACTOR_P_CURGOAL:-0.0}"
 ACTOR_P_TRAJGOAL="${ACTOR_P_TRAJGOAL:-1.0}"
 ACTOR_P_RANDOMGOAL="${ACTOR_P_RANDOMGOAL:-0.0}"
@@ -137,6 +138,10 @@ AGENT_FLAGS=(
   "--agent.lr_decay_steps=${LR_DECAY_STEPS}"
   "--agent.lr_min=${LR_MIN}"
 )
+
+if [[ -n "${ACTOR_HIDDEN_DIMS}" ]]; then
+  AGENT_FLAGS+=("--agent.actor_hidden_dims=${ACTOR_HIDDEN_DIMS}")
+fi
 
 if [[ -n "${ACTOR_GEOM_SAMPLE}" ]]; then
   AGENT_FLAGS+=("--agent.actor_geom_sample=${ACTOR_GEOM_SAMPLE}")
