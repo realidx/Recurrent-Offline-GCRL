@@ -1,5 +1,5 @@
 diff --git a/impls/agents/crl.py b/impls/agents/crl.py
-index 53109ab..db334bc 100644
+index 53109ab..49cf524 100644
 --- a/impls/agents/crl.py
 +++ b/impls/agents/crl.py
 @@ -22,7 +22,12 @@ class CRLAgent(flax.struct.PyTreeNode):
@@ -213,7 +213,7 @@ index 53109ab..db334bc 100644
 +            critic_backbone='mlp',  # 'mlp' | 'resnet' | 'recur_tied' | 'partial_tied'
 +            critic_resnet_depth=3,  # Untied ResNet blocks (used if critic_backbone='resnet').
 +            critic_recur_iters=4,  # Tied iterations K_train (used if critic_backbone='recur_tied').
-+            critic_recur_num_blocks=1,  # Stacked residual blocks per tied iteration (recur_tied only).
++            critic_recur_num_blocks=1,  # Number of 2-layer MLP pairs inside each tied recurrent residual update.
 +            critic_eval_num_iters=ml_collections.config_dict.placeholder(int),  # Optional K_test override for evaluation-only (tied-only test-time compute knob).
 +            critic_recur_max_iters=16,  # Max step embedding table size.
 +            critic_layerscale_init=1e-2,  # LayerScale init for resnet/recur.
@@ -1247,7 +1247,7 @@ index 9c421dd..3da1eab 100644
  
      return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..8ffee64 100644
+index 4ee2b26..71ce0d7 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
 @@ -6,6 +6,8 @@ import flax.linen as nn
@@ -1259,7 +1259,7 @@ index 4ee2b26..8ffee64 100644
  
  def default_init(scale=1.0):
      """Default kernel initializer."""
-@@ -60,6 +62,316 @@ class MLP(nn.Module):
+@@ -60,6 +62,318 @@ class MLP(nn.Module):
          return x
  
  
@@ -1375,53 +1375,55 @@ index 4ee2b26..8ffee64 100644
 +                u = tied_fc2(nn.silu(tied_fc1(h_film)))
 +                h = h + alpha[k] * u
 +        else:
-+            # Stacked recurrent blocks: each iteration applies `num_blocks` distinct residual blocks.
-+            alpha = self.param('alpha', nn.initializers.constant(self.layerscale_init), (num_blocks, self.max_iters))
++            # Deeper tied residual branch: each recurrent iteration reuses the SAME FiLM, sinusoidal
++            # conditioning, and residual update, but the residual branch itself has 2 * num_blocks
++            # dense layers. E.g. num_blocks=2 => 4 dense layers per iteration.
++            alpha = self.param('alpha', nn.initializers.constant(self.layerscale_init), (self.max_iters,))
 +
-+            film_fc1_step = [
-+                nn.Dense(self.hidden_dim, use_bias=False, name=f'block{b}_film_fc1_step') for b in range(num_blocks)
++            film_fc1_step = nn.Dense(self.hidden_dim, use_bias=False)
++            film_fc1_h = nn.Dense(self.hidden_dim)
++            film_fc2 = nn.Dense(2 * self.hidden_dim)
++
++            tied_layers = [
++                nn.Dense(self.hidden_dim, name=f'tied_fc{i + 1}') for i in range(2 * num_blocks)
 +            ]
-+            film_fc1_h = [nn.Dense(self.hidden_dim, name=f'block{b}_film_fc1_h') for b in range(num_blocks)]
-+            film_fc2 = [nn.Dense(2 * self.hidden_dim, name=f'block{b}_film_fc2') for b in range(num_blocks)]
-+            block_fc1 = [nn.Dense(self.hidden_dim, name=f'block{b}_fc1') for b in range(num_blocks)]
-+            block_fc2 = [nn.Dense(self.hidden_dim, name=f'block{b}_fc2') for b in range(num_blocks)]
 +
 +            ln = None
 +            lns = None
 +            if self.layer_norm:
 +                if self.tied_layer_norm:
-+                    ln = [nn.LayerNorm(name=f'block{b}_ln') for b in range(num_blocks)]
++                    ln = nn.LayerNorm(name='ln')
 +                else:
-+                    lns = [
-+                        [nn.LayerNorm(name=f'block{b}_LayerNorm_{k}') for k in range(int(self.max_iters))]
-+                        for b in range(num_blocks)
-+                    ]
++                    lns = [nn.LayerNorm(name=f'LayerNorm_{k}') for k in range(int(self.max_iters))]
 +
 +            if not self.use_sinusoidal_step_encoding:
-+                step_contributions = [film_fc1_step[b](step_embed) for b in range(num_blocks)]
++                step_contributions = film_fc1_step(step_embed)  # (max_iters, hidden_dim)
 +
 +            for k in range(iters):
-+                for b in range(num_blocks):
-+                    h1 = h
-+                    if self.layer_norm:
-+                        if ln is not None:
-+                            h1 = ln[b](h1)
-+                        else:
-+                            h1 = lns[b][k](h1)
-+
-+                    if not self.use_sinusoidal_step_encoding:
-+                        step_contrib_k = step_contributions[b][k]
++                h1 = h
++                if self.layer_norm:
++                    if ln is not None:
++                        h1 = ln(h1)
 +                    else:
-+                        step_emb_k = sinusoidal_step_encoding(k, self.max_iters, self.hidden_dim)
-+                        step_contrib_k = film_fc1_step[b](step_emb_k)
++                        h1 = lns[k](h1)
 +
-+                    fc1_out = step_contrib_k + film_fc1_h[b](h1)
-+                    film = film_fc2[b](nn.silu(fc1_out))
-+                    gamma, beta = jnp.split(film, 2, axis=-1)
-+                    h_film = (1.0 + gamma) * h1 + beta
++                if not self.use_sinusoidal_step_encoding:
++                    step_contrib_k = step_contributions[k]
++                else:
++                    step_emb_k = sinusoidal_step_encoding(k, self.max_iters, self.hidden_dim)
++                    step_contrib_k = film_fc1_step(step_emb_k)
 +
-+                    u = block_fc2[b](nn.silu(block_fc1[b](h_film)))
-+                    h = h + alpha[b, k] * u
++                fc1_out = step_contrib_k + film_fc1_h(h1)
++                film = film_fc2(nn.silu(fc1_out))
++                gamma, beta = jnp.split(film, 2, axis=-1)
++                u = (1.0 + gamma) * h1 + beta
++
++                for layer_index, layer in enumerate(tied_layers):
++                    u = layer(u)
++                    if layer_index < len(tied_layers) - 1:
++                        u = nn.silu(u)
++
++                h = h + alpha[k] * u
 +
 +        return nn.Dense(self.out_dim)(h)
 +
@@ -1576,7 +1578,7 @@ index 4ee2b26..8ffee64 100644
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -347,16 +659,110 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +661,110 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
@@ -1692,7 +1694,7 @@ index 4ee2b26..8ffee64 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +770,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +772,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -1700,7 +1702,7 @@ index 4ee2b26..8ffee64 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,8 +782,13 @@ class GCBilinearValue(nn.Module):
+@@ -375,8 +784,13 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
@@ -1716,7 +1718,7 @@ index 4ee2b26..8ffee64 100644
  
          v = (phi * psi / jnp.sqrt(self.latent_dim)).sum(axis=-1)
  
-@@ -394,9 +806,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+@@ -394,9 +808,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
  
      action_dim: int = None
  
