@@ -67,7 +67,7 @@ EVAL_ON_CPU="${EVAL_ON_CPU:-0}"
 
 # Critic backbone settings.
 KTRAIN="${KTRAIN:-4}"                     # tied iterations at training time
-RECUR_NUM_BLOCKS="${RECUR_NUM_BLOCKS:-1}" # stacked residual blocks per tied iteration
+RECUR_NUM_BLOCKS="${RECUR_NUM_BLOCKS:-1}" # Number of 2-layer MLP pairs inside each tied recurrent residual update.
 RECUR_MAX_ITERS="${RECUR_MAX_ITERS:-24}"  # allocated step-params (alpha/LN/step-embed) slots (keep consistent across runs)
 SINUSOIDAL="${SINUSOIDAL:-1}"             # 1 => sinusoidal encoding, 0 => discrete lookup
 TIED_LN="${TIED_LN:-1}"                   # 1 => single LN shared across iterations
