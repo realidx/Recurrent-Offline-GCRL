@@ -68,6 +68,7 @@ ALPHA="${ALPHA:-0.1}"
 DISCOUNT="${DISCOUNT:-0.99}"
 BATCH_SIZE="${BATCH_SIZE:-1024}"
 ACTOR_HIDDEN_DIMS="${ACTOR_HIDDEN_DIMS:-}"   # Safe format for sbatch --export: e.g., 512x512x512x512
+VALUE_HIDDEN_DIMS="${VALUE_HIDDEN_DIMS:-}"   # Safe format for critic/value MLP dims: e.g., 512x512x512x512x512
 ACTOR_P_CURGOAL="${ACTOR_P_CURGOAL:-0.0}"
 ACTOR_P_TRAJGOAL="${ACTOR_P_TRAJGOAL:-1.0}"
 ACTOR_P_RANDOMGOAL="${ACTOR_P_RANDOMGOAL:-0.0}"
@@ -157,6 +158,27 @@ if [[ -n "${ACTOR_HIDDEN_DIMS}" ]]; then
       exit 2
     fi
     AGENT_FLAGS+=("--agent.actor_hidden_dims=${dim}")
+  done
+fi
+
+if [[ -n "${VALUE_HIDDEN_DIMS}" ]]; then
+  if [[ "${VALUE_HIDDEN_DIMS}" == *","* || "${VALUE_HIDDEN_DIMS}" == *"("* || "${VALUE_HIDDEN_DIMS}" == *")"* ]]; then
+    echo "Error: VALUE_HIDDEN_DIMS='${VALUE_HIDDEN_DIMS}' uses commas/parentheses, which breaks sbatch --export parsing." >&2
+    echo "Use 'x'-separated format instead, e.g. VALUE_HIDDEN_DIMS=512x512x512x512" >&2
+    exit 2
+  fi
+  IFS='x' read -r -a VALUE_DIMS <<< "${VALUE_HIDDEN_DIMS}"
+  if [[ "${#VALUE_DIMS[@]}" -eq 0 ]]; then
+    echo "Error: VALUE_HIDDEN_DIMS is set but no dimensions were parsed." >&2
+    exit 2
+  fi
+  for dim in "${VALUE_DIMS[@]}"; do
+    if [[ ! "${dim}" =~ ^[0-9]+$ ]]; then
+      echo "Error: VALUE_HIDDEN_DIMS contains non-integer token '${dim}'." >&2
+      echo "Use format like 512x512x512x512" >&2
+      exit 2
+    fi
+    AGENT_FLAGS+=("--agent.value_hidden_dims=${dim}")
   done
 fi
 
