@@ -69,4 +69,11 @@ if ! grep -q "critic_backbone" "${OGBENCH_DIR}/impls/agents/crl.py"; then
   exit 5
 fi
 
+if grep -q "positional_encoding" "${OGBENCH_DIR}/impls/utils/networks.py" && [[ ! -f "${OGBENCH_DIR}/impls/utils/positional_encoding.py" ]]; then
+  echo "Error: bootstrap finished, but impls/utils/positional_encoding.py is missing." >&2
+  echo "Fix: make sure patches/ogbench_impls.patch is up to date, then re-run:" >&2
+  echo "  ./scripts/bootstrap_ogbench.sh CLEAN=1" >&2
+  exit 6
+fi
+
 echo "OK: OGBench ready at ${OGBENCH_DIR} (${short_sha})"
