@@ -16,13 +16,23 @@
 #    sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=humanoidmaze-large-navigate-v0,RUN_GROUP=P4_HumanoidLargeNav_MLP,CRITIC_BACKBONE=mlp,ALPHA=0.1,DISCOUNT=0.995,ACTOR_P_TRAJGOAL=1.0,ACTOR_P_RANDOMGOAL=0.0,WANDB_MODE=online" \
 #      slurm/phase4_train_crl_generic_array.slurm
 #
-# 2) CRL recurrent 1x4 on humanoidmaze-large-stitch (3 seeds):
-#    sbatch --array=0-2 --export="ALL,SEEDS='0 1 2',ENV_NAME=humanoidmaze-large-stitch-v0,RUN_GROUP=P4_HumanoidLargeStitch_Recur1x4,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_MAX_ITERS=24,SINUSOIDAL=1,TIED_LN=1,ALPHA=0.1,DISCOUNT=0.995,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online" \
+# 2) CRL recurrent 2x4 on humanoidmaze-large-stitch (2 dense layers per recurrent update, 4 iterations):
+#    sbatch --array=0-2 --export="ALL,SEEDS='0 1 2',ENV_NAME=humanoidmaze-large-stitch-v0,RUN_GROUP=P4_HumanoidLargeStitch_Recur3x4,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=3,RECUR_MAX_ITERS=24,SINUSOIDAL=1,TIED_LN=1,ALPHA=0.1,DISCOUNT=0.995,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online" \
 #      slurm/phase4_train_crl_generic_array.slurm
 #
-# 3) CRL recurrent with an 8-dense-layer tied residual branch (RECUR_NUM_BLOCKS=4) repeated 4 times:
-#    sbatch --array=0-2 --export="ALL,SEEDS='0 1 2',ENV_NAME=humanoidmaze-large-stitch-v0,RUN_GROUP=P4_HumanoidLargeStitch_Recur8DenseX4,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_BLOCKS=4,RECUR_MAX_ITERS=24,SINUSOIDAL=1,TIED_LN=1,ALPHA=0.1,DISCOUNT=0.995,WANDB_MODE=online" \
+# 3) CRL recurrent with an 8-dense-layer tied residual branch repeated 4 times:
+#    sbatch --array=0-2 --export="ALL,SEEDS='0 1 2',ENV_NAME=humanoidmaze-large-stitch-v0,RUN_GROUP=P4_HumanoidLargeStitch_Recur6x4,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=6,RECUR_MAX_ITERS=24,SINUSOIDAL=1,TIED_LN=1,ALPHA=0.1,DISCOUNT=0.995,WANDB_MODE=online" \
 #      slurm/phase4_train_crl_generic_array.slurm
+#
+# 4) MLP critic + 32-layer actor without typing 32 copies of 512:
+#    sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=P4_AntMaze_MLP_Actor32L,CRITIC_BACKBONE=mlp,ACTOR_NUM_LAYERS=32,ACTOR_LAYER_WIDTH=512,ALPHA=0.1,DISCOUNT=0.99,WANDB_MODE=online" \
+#      slurm/phase4_train_crl_generic_array.slurm
+#
+# 5) Residual actor with 16 Dense layers and 4-layer residual spans:
+#    sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=humanoidmaze-large-stitch-v0,RUN_GROUP=P4_Humanoid_ResActor16,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,ACTOR_BACKBONE=residual_dense,ACTOR_NUM_LAYERS=16,ACTOR_LAYER_WIDTH=512,ALPHA=0.1,DISCOUNT=0.995,WANDB_MODE=online" \
+#      slurm/phase4_train_crl_generic_array.slurm
+#
+# Explicit x-separated dims still work and take precedence if both forms are set.
 
 set -euo pipefail
 
@@ -69,6 +79,14 @@ DISCOUNT="${DISCOUNT:-0.99}"
 BATCH_SIZE="${BATCH_SIZE:-1024}"
 ACTOR_HIDDEN_DIMS="${ACTOR_HIDDEN_DIMS:-}"   # Safe format for sbatch --export: e.g., 512x512x512x512
 VALUE_HIDDEN_DIMS="${VALUE_HIDDEN_DIMS:-}"   # Safe format for critic/value MLP dims: e.g., 512x512x512x512x512
+ACTOR_NUM_LAYERS="${ACTOR_NUM_LAYERS:-}"     # Shortcut: e.g., 32
+ACTOR_LAYER_WIDTH="${ACTOR_LAYER_WIDTH:-512}" # Shortcut width used with ACTOR_NUM_LAYERS
+VALUE_NUM_LAYERS="${VALUE_NUM_LAYERS:-}"     # Shortcut: e.g., 32
+VALUE_LAYER_WIDTH="${VALUE_LAYER_WIDTH:-512}" # Shortcut width used with VALUE_NUM_LAYERS
+ACTOR_BACKBONE="${ACTOR_BACKBONE:-mlp}"      # mlp | residual_dense
+ACTOR_BACKBONE_HIDDEN_DIM="${ACTOR_BACKBONE_HIDDEN_DIM:-0}"
+ACTOR_RESIDUAL_NUM_DENSE_LAYERS="${ACTOR_RESIDUAL_NUM_DENSE_LAYERS:-}"
+ACTOR_RESIDUAL_SPAN="${ACTOR_RESIDUAL_SPAN:-4}"
 ACTOR_P_CURGOAL="${ACTOR_P_CURGOAL:-0.0}"
 ACTOR_P_TRAJGOAL="${ACTOR_P_TRAJGOAL:-1.0}"
 ACTOR_P_RANDOMGOAL="${ACTOR_P_RANDOMGOAL:-0.0}"
@@ -86,10 +104,12 @@ RESNET_DEPTH="${RESNET_DEPTH:-3}"
 
 # recurrent tied options.
 KTRAIN="${KTRAIN:-4}"
-RECUR_NUM_BLOCKS="${RECUR_NUM_BLOCKS:-1}"   # Number of 2-layer MLP pairs inside each tied recurrent residual update.
+RECUR_NUM_DENSE_LAYERS="${RECUR_NUM_DENSE_LAYERS:-}" # User-facing N in NxK: dense layers inside each tied recurrent residual update.
+RECUR_NUM_BLOCKS="${RECUR_NUM_BLOCKS:-1}"   # Deprecated fallback: number of 2-layer pairs inside each tied recurrent residual update.
 RECUR_MAX_ITERS="${RECUR_MAX_ITERS:-24}"
 SINUSOIDAL="${SINUSOIDAL:-1}"
 TIED_LN="${TIED_LN:-1}"
+RECUR_USE_FILM="${RECUR_USE_FILM:-1}"
 
 # partial tied options.
 PARTIAL_GROUPS="${PARTIAL_GROUPS:-2}"
@@ -138,7 +158,54 @@ AGENT_FLAGS=(
   "--agent.critic_layerscale_init=${LAYERSCALE_INIT}"
   "--agent.lr_decay_steps=${LR_DECAY_STEPS}"
   "--agent.lr_min=${LR_MIN}"
+  "--agent.actor_backbone=${ACTOR_BACKBONE}"
 )
+
+if [[ ! "${ACTOR_BACKBONE}" =~ ^(mlp|residual_dense)$ ]]; then
+  echo "Error: ACTOR_BACKBONE='${ACTOR_BACKBONE}' is invalid. Use mlp or residual_dense." >&2
+  exit 2
+fi
+
+if [[ -n "${ACTOR_NUM_LAYERS}" && ! "${ACTOR_NUM_LAYERS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Error: ACTOR_NUM_LAYERS='${ACTOR_NUM_LAYERS}' is not a positive integer." >&2
+  exit 2
+fi
+if [[ ! "${ACTOR_LAYER_WIDTH}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Error: ACTOR_LAYER_WIDTH='${ACTOR_LAYER_WIDTH}' is not a positive integer." >&2
+  exit 2
+fi
+
+if [[ "${ACTOR_BACKBONE}" == "mlp" ]]; then
+  if [[ -z "${ACTOR_HIDDEN_DIMS}" && -n "${ACTOR_NUM_LAYERS}" ]]; then
+    ACTOR_DIMS=()
+    for ((i = 0; i < ACTOR_NUM_LAYERS; i++)); do
+      ACTOR_DIMS+=("${ACTOR_LAYER_WIDTH}")
+    done
+    ACTOR_HIDDEN_DIMS="$(IFS=x; echo "${ACTOR_DIMS[*]}")"
+  fi
+else
+  if [[ -z "${ACTOR_RESIDUAL_NUM_DENSE_LAYERS}" && -n "${ACTOR_NUM_LAYERS}" ]]; then
+    ACTOR_RESIDUAL_NUM_DENSE_LAYERS="${ACTOR_NUM_LAYERS}"
+  fi
+  if [[ -z "${ACTOR_RESIDUAL_NUM_DENSE_LAYERS}" ]]; then
+    ACTOR_RESIDUAL_NUM_DENSE_LAYERS="4"
+  fi
+  if [[ ! "${ACTOR_RESIDUAL_NUM_DENSE_LAYERS}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: ACTOR_RESIDUAL_NUM_DENSE_LAYERS='${ACTOR_RESIDUAL_NUM_DENSE_LAYERS}' is not a positive integer." >&2
+    exit 2
+  fi
+  if [[ ! "${ACTOR_RESIDUAL_SPAN}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: ACTOR_RESIDUAL_SPAN='${ACTOR_RESIDUAL_SPAN}' is not a positive integer." >&2
+    exit 2
+  fi
+  if (( ACTOR_BACKBONE_HIDDEN_DIM == 0 )); then
+    ACTOR_BACKBONE_HIDDEN_DIM="${ACTOR_LAYER_WIDTH}"
+  fi
+  AGENT_FLAGS+=(
+    "--agent.actor_num_dense_layers=${ACTOR_RESIDUAL_NUM_DENSE_LAYERS}"
+    "--agent.actor_residual_span=${ACTOR_RESIDUAL_SPAN}"
+  )
+fi
 
 if [[ -n "${ACTOR_HIDDEN_DIMS}" ]]; then
   if [[ "${ACTOR_HIDDEN_DIMS}" == *","* || "${ACTOR_HIDDEN_DIMS}" == *"("* || "${ACTOR_HIDDEN_DIMS}" == *")"* ]]; then
@@ -159,6 +226,30 @@ if [[ -n "${ACTOR_HIDDEN_DIMS}" ]]; then
     fi
     AGENT_FLAGS+=("--agent.actor_hidden_dims=${dim}")
   done
+fi
+
+if [[ "${ACTOR_BACKBONE_HIDDEN_DIM}" != "0" ]]; then
+  if [[ ! "${ACTOR_BACKBONE_HIDDEN_DIM}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: ACTOR_BACKBONE_HIDDEN_DIM='${ACTOR_BACKBONE_HIDDEN_DIM}' is not a positive integer." >&2
+    exit 2
+  fi
+  AGENT_FLAGS+=("--agent.actor_backbone_hidden_dim=${ACTOR_BACKBONE_HIDDEN_DIM}")
+fi
+
+if [[ -z "${VALUE_HIDDEN_DIMS}" && -n "${VALUE_NUM_LAYERS}" ]]; then
+  if [[ ! "${VALUE_NUM_LAYERS}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: VALUE_NUM_LAYERS='${VALUE_NUM_LAYERS}' is not a positive integer." >&2
+    exit 2
+  fi
+  if [[ ! "${VALUE_LAYER_WIDTH}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: VALUE_LAYER_WIDTH='${VALUE_LAYER_WIDTH}' is not a positive integer." >&2
+    exit 2
+  fi
+  VALUE_DIMS=()
+  for ((i = 0; i < VALUE_NUM_LAYERS; i++)); do
+    VALUE_DIMS+=("${VALUE_LAYER_WIDTH}")
+  done
+  VALUE_HIDDEN_DIMS="$(IFS=x; echo "${VALUE_DIMS[*]}")"
 fi
 
 if [[ -n "${VALUE_HIDDEN_DIMS}" ]]; then
@@ -190,6 +281,15 @@ if [[ "${CRITIC_BACKBONE_HIDDEN_DIM}" != "0" ]]; then
   AGENT_FLAGS+=("--agent.critic_backbone_hidden_dim=${CRITIC_BACKBONE_HIDDEN_DIM}")
 fi
 
+if [[ -n "${RECUR_NUM_DENSE_LAYERS}" ]]; then
+  if [[ ! "${RECUR_NUM_DENSE_LAYERS}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: RECUR_NUM_DENSE_LAYERS='${RECUR_NUM_DENSE_LAYERS}' is not a positive integer." >&2
+    exit 2
+  fi
+else
+  RECUR_NUM_DENSE_LAYERS="$(( RECUR_NUM_BLOCKS * 2 ))"
+fi
+
 case "${CRITIC_BACKBONE}" in
   mlp)
     ;;
@@ -199,10 +299,11 @@ case "${CRITIC_BACKBONE}" in
   recur_tied)
     AGENT_FLAGS+=(
       "--agent.critic_recur_iters=${KTRAIN}"
-      "--agent.critic_recur_num_blocks=${RECUR_NUM_BLOCKS}"
+      "--agent.critic_recur_num_dense_layers=${RECUR_NUM_DENSE_LAYERS}"
       "--agent.critic_recur_max_iters=${RECUR_MAX_ITERS}"
       "--agent.critic_recur_sinusoidal=${SINUSOIDAL}"
       "--agent.critic_recur_tied_ln=${TIED_LN}"
+      "--agent.critic_recur_use_film=${RECUR_USE_FILM}"
     )
     ;;
   partial_tied)

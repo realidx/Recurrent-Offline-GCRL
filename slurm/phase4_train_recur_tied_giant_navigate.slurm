@@ -66,11 +66,13 @@ VIDEO_EPISODES="${VIDEO_EPISODES:-0}"
 EVAL_ON_CPU="${EVAL_ON_CPU:-0}"
 
 # Critic backbone settings.
-KTRAIN="${KTRAIN:-4}"                     # tied iterations at training time
-RECUR_NUM_BLOCKS="${RECUR_NUM_BLOCKS:-1}" # Number of 2-layer MLP pairs inside each tied recurrent residual update.
+KTRAIN="${KTRAIN:-4}"                      # K in NxK: recurrent iterations at training time
+RECUR_NUM_DENSE_LAYERS="${RECUR_NUM_DENSE_LAYERS:-}" # N in NxK: dense layers inside each tied recurrent residual update
+RECUR_NUM_BLOCKS="${RECUR_NUM_BLOCKS:-1}"  # Deprecated fallback: number of 2-layer MLP pairs inside each tied recurrent residual update.
 RECUR_MAX_ITERS="${RECUR_MAX_ITERS:-24}"  # allocated step-params (alpha/LN/step-embed) slots (keep consistent across runs)
 SINUSOIDAL="${SINUSOIDAL:-1}"             # 1 => sinusoidal encoding, 0 => discrete lookup
 TIED_LN="${TIED_LN:-1}"                   # 1 => single LN shared across iterations
+RECUR_USE_FILM="${RECUR_USE_FILM:-1}"     # 1 => FiLM modulation, 0 => additive no-FiLM ablation
 LAYERSCALE_INIT="${LAYERSCALE_INIT:-1e-2}"
 
 # LR schedule. (Set LR_DECAY_STEPS=0 to disable and use constant LR.)
@@ -113,10 +115,6 @@ SEED="${SEEDS[idx]}"
 # Deterministic exp_name makes resume trivial (re-submitting array resumes into the same dir).
 ENV_TAG="${ENV_NAME%-v0}"
 ENV_TAG="${ENV_TAG//-/_}"
-EXP_NAME="${EXP_NAME:-sd$(printf %03d ${SEED})_${ENV_TAG}_recur1x4}"
-
-export WANDB_RUN_ID="${WANDB_RUN_ID:-ogbench_${RUN_GROUP}_${EXP_NAME}}"
-export WANDB_RESUME="${WANDB_RESUME:-allow}"
 
 # Optional actor goal-mix overrides.
 # Defaults to 0.5/0.5 (your current preferred setting); override via sbatch --export.
@@ -124,6 +122,28 @@ ACTOR_P_RANDOMGOAL="${ACTOR_P_RANDOMGOAL:-0.5}"
 ACTOR_P_TRAJGOAL="${ACTOR_P_TRAJGOAL:-0.5}"
 # Optional: geometric sampling for actor future (traj) goals (0/1). Default is CRL config default.
 ACTOR_GEOM_SAMPLE="${ACTOR_GEOM_SAMPLE:-}"
+ACTOR_BACKBONE="${ACTOR_BACKBONE:-mlp}"            # mlp | residual_dense
+ACTOR_BACKBONE_HIDDEN_DIM="${ACTOR_BACKBONE_HIDDEN_DIM:-0}"
+ACTOR_NUM_LAYERS="${ACTOR_NUM_LAYERS:-}"           # MLP hidden layers or residual actor dense-layer count
+ACTOR_LAYER_WIDTH="${ACTOR_LAYER_WIDTH:-512}"
+ACTOR_HIDDEN_DIMS="${ACTOR_HIDDEN_DIMS:-}"         # Optional explicit x-separated MLP dims
+ACTOR_RESIDUAL_NUM_DENSE_LAYERS="${ACTOR_RESIDUAL_NUM_DENSE_LAYERS:-}"
+ACTOR_RESIDUAL_SPAN="${ACTOR_RESIDUAL_SPAN:-4}"
+
+if [[ -n "${RECUR_NUM_DENSE_LAYERS}" ]]; then
+  if [[ ! "${RECUR_NUM_DENSE_LAYERS}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: RECUR_NUM_DENSE_LAYERS='${RECUR_NUM_DENSE_LAYERS}' is not a positive integer." >&2
+    exit 2
+  fi
+else
+  RECUR_NUM_DENSE_LAYERS="$(( RECUR_NUM_BLOCKS * 2 ))"
+fi
+
+EFFECTIVE_DENSE_LAYERS="${RECUR_NUM_DENSE_LAYERS}"
+EXP_NAME="${EXP_NAME:-sd$(printf %03d ${SEED})_${ENV_TAG}_recur${EFFECTIVE_DENSE_LAYERS}x${KTRAIN}}"
+
+export WANDB_RUN_ID="${WANDB_RUN_ID:-ogbench_${RUN_GROUP}_${EXP_NAME}}"
+export WANDB_RESUME="${WANDB_RESUME:-allow}"
 
 AGENT_FLAGS=(
   "--agent.alpha=${ALPHA}"
@@ -131,14 +151,84 @@ AGENT_FLAGS=(
   "--agent.batch_size=1024"
   "--agent.critic_backbone=recur_tied"
   "--agent.critic_recur_iters=${KTRAIN}"
-  "--agent.critic_recur_num_blocks=${RECUR_NUM_BLOCKS}"
+  "--agent.critic_recur_num_dense_layers=${RECUR_NUM_DENSE_LAYERS}"
   "--agent.critic_recur_max_iters=${RECUR_MAX_ITERS}"
   "--agent.critic_recur_tied_ln=${TIED_LN}"
   "--agent.critic_recur_sinusoidal=${SINUSOIDAL}"
+  "--agent.critic_recur_use_film=${RECUR_USE_FILM}"
   "--agent.critic_layerscale_init=${LAYERSCALE_INIT}"
   "--agent.lr_decay_steps=${LR_DECAY_STEPS}"
   "--agent.lr_min=${LR_MIN}"
+  "--agent.actor_backbone=${ACTOR_BACKBONE}"
 )
+
+if [[ ! "${ACTOR_BACKBONE}" =~ ^(mlp|residual_dense)$ ]]; then
+  echo "Error: ACTOR_BACKBONE='${ACTOR_BACKBONE}' is invalid. Use mlp or residual_dense." >&2
+  exit 2
+fi
+
+if [[ -n "${ACTOR_NUM_LAYERS}" && ! "${ACTOR_NUM_LAYERS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Error: ACTOR_NUM_LAYERS='${ACTOR_NUM_LAYERS}' is not a positive integer." >&2
+  exit 2
+fi
+if [[ ! "${ACTOR_LAYER_WIDTH}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Error: ACTOR_LAYER_WIDTH='${ACTOR_LAYER_WIDTH}' is not a positive integer." >&2
+  exit 2
+fi
+
+if [[ "${ACTOR_BACKBONE}" == "mlp" ]]; then
+  if [[ -z "${ACTOR_HIDDEN_DIMS}" && -n "${ACTOR_NUM_LAYERS}" ]]; then
+    ACTOR_DIMS=()
+    for ((i = 0; i < ACTOR_NUM_LAYERS; i++)); do
+      ACTOR_DIMS+=("${ACTOR_LAYER_WIDTH}")
+    done
+    ACTOR_HIDDEN_DIMS="$(IFS=x; echo "${ACTOR_DIMS[*]}")"
+  fi
+  if [[ -n "${ACTOR_HIDDEN_DIMS}" ]]; then
+    if [[ "${ACTOR_HIDDEN_DIMS}" == *","* || "${ACTOR_HIDDEN_DIMS}" == *"("* || "${ACTOR_HIDDEN_DIMS}" == *")"* ]]; then
+      echo "Error: ACTOR_HIDDEN_DIMS='${ACTOR_HIDDEN_DIMS}' must use x-separated format, e.g. 512x512x512." >&2
+      exit 2
+    fi
+    IFS='x' read -r -a ACTOR_DIMS <<< "${ACTOR_HIDDEN_DIMS}"
+    for dim in "${ACTOR_DIMS[@]}"; do
+      if [[ ! "${dim}" =~ ^[0-9]+$ ]]; then
+        echo "Error: ACTOR_HIDDEN_DIMS contains non-integer token '${dim}'." >&2
+        exit 2
+      fi
+      AGENT_FLAGS+=("--agent.actor_hidden_dims=${dim}")
+    done
+  fi
+else
+  if [[ -z "${ACTOR_RESIDUAL_NUM_DENSE_LAYERS}" && -n "${ACTOR_NUM_LAYERS}" ]]; then
+    ACTOR_RESIDUAL_NUM_DENSE_LAYERS="${ACTOR_NUM_LAYERS}"
+  fi
+  if [[ -z "${ACTOR_RESIDUAL_NUM_DENSE_LAYERS}" ]]; then
+    ACTOR_RESIDUAL_NUM_DENSE_LAYERS="4"
+  fi
+  if [[ ! "${ACTOR_RESIDUAL_NUM_DENSE_LAYERS}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: ACTOR_RESIDUAL_NUM_DENSE_LAYERS='${ACTOR_RESIDUAL_NUM_DENSE_LAYERS}' is not a positive integer." >&2
+    exit 2
+  fi
+  if [[ ! "${ACTOR_RESIDUAL_SPAN}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: ACTOR_RESIDUAL_SPAN='${ACTOR_RESIDUAL_SPAN}' is not a positive integer." >&2
+    exit 2
+  fi
+  if (( ACTOR_BACKBONE_HIDDEN_DIM == 0 )); then
+    ACTOR_BACKBONE_HIDDEN_DIM="${ACTOR_LAYER_WIDTH}"
+  fi
+  AGENT_FLAGS+=(
+    "--agent.actor_num_dense_layers=${ACTOR_RESIDUAL_NUM_DENSE_LAYERS}"
+    "--agent.actor_residual_span=${ACTOR_RESIDUAL_SPAN}"
+  )
+fi
+
+if [[ "${ACTOR_BACKBONE_HIDDEN_DIM}" != "0" ]]; then
+  if [[ ! "${ACTOR_BACKBONE_HIDDEN_DIM}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: ACTOR_BACKBONE_HIDDEN_DIM='${ACTOR_BACKBONE_HIDDEN_DIM}' is not a positive integer." >&2
+    exit 2
+  fi
+  AGENT_FLAGS+=("--agent.actor_backbone_hidden_dim=${ACTOR_BACKBONE_HIDDEN_DIM}")
+fi
 
 if [[ -n "${ACTOR_P_RANDOMGOAL}" ]]; then
   AGENT_FLAGS+=("--agent.actor_p_randomgoal=${ACTOR_P_RANDOMGOAL}")
@@ -217,7 +307,7 @@ if [[ -n "${RESTORE_EPOCH}" ]]; then
   cmd+=("--restore_epoch=${RESTORE_EPOCH}")
 fi
 
-echo "PHASE4: env=${ENV_NAME} seed=${SEED} ktrain=${KTRAIN} alpha=${ALPHA} discount=${DISCOUNT} exp_name=${EXP_NAME} cwd=$(pwd) WANDB_MODE=${WANDB_MODE}"
+echo "PHASE4: env=${ENV_NAME} seed=${SEED} nxk=${EFFECTIVE_DENSE_LAYERS}x${KTRAIN} alpha=${ALPHA} discount=${DISCOUNT} exp_name=${EXP_NAME} cwd=$(pwd) WANDB_MODE=${WANDB_MODE}"
 echo "${cmd[*]}"
 
 if ! command -v "${CONDA_EXE}" >/dev/null 2>&1; then
