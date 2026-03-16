@@ -109,6 +109,7 @@ RECUR_NUM_BLOCKS="${RECUR_NUM_BLOCKS:-1}"   # Deprecated fallback: number of 2-l
 RECUR_MAX_ITERS="${RECUR_MAX_ITERS:-24}"
 SINUSOIDAL="${SINUSOIDAL:-1}"
 TIED_LN="${TIED_LN:-1}"
+RECUR_LN_MODE="${RECUR_LN_MODE:-per_layer}" # pre_loop | per_layer
 RECUR_USE_FILM="${RECUR_USE_FILM:-1}"
 
 # partial tied options.
@@ -303,6 +304,7 @@ case "${CRITIC_BACKBONE}" in
       "--agent.critic_recur_max_iters=${RECUR_MAX_ITERS}"
       "--agent.critic_recur_sinusoidal=${SINUSOIDAL}"
       "--agent.critic_recur_tied_ln=${TIED_LN}"
+      "--agent.critic_recur_ln_mode=${RECUR_LN_MODE}"
       "--agent.critic_recur_use_film=${RECUR_USE_FILM}"
     )
     ;;

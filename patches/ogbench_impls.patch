@@ -1,5 +1,5 @@
 diff --git a/impls/agents/crl.py b/impls/agents/crl.py
-index 53109ab..9638c4e 100644
+index 53109ab..6ecf54e 100644
 --- a/impls/agents/crl.py
 +++ b/impls/agents/crl.py
 @@ -22,7 +22,12 @@ class CRLAgent(flax.struct.PyTreeNode):
@@ -110,7 +110,7 @@ index 53109ab..9638c4e 100644
              }
          else:
              raise ValueError(f'Unsupported actor loss: {self.config["actor_loss"]}')
-@@ -231,6 +262,28 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -231,6 +262,29 @@ class CRLAgent(flax.struct.PyTreeNode):
                  state_encoder=encoders.get('critic_state'),
                  goal_encoder=encoders.get('critic_goal'),
                  action_dim=action_dim,
@@ -125,6 +125,7 @@ index 53109ab..9638c4e 100644
 +                ),
 +                recur_max_iters=config['critic_recur_max_iters'],
 +                recur_tied_layer_norm=bool(config.get('critic_recur_tied_ln', True)),
++                recur_ln_mode=str(config.get('critic_recur_ln_mode', 'per_layer')),
 +                recur_sinusoidal=bool(config.get('critic_recur_sinusoidal', False)),
 +                recur_use_film=bool(config.get('critic_recur_use_film', True)),
 +                partial_num_groups=int(config.get('critic_partial_groups', 2)),
@@ -139,7 +140,7 @@ index 53109ab..9638c4e 100644
              )
          else:
              critic_def = GCBilinearValue(
-@@ -241,6 +294,28 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -241,6 +295,29 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
                  state_encoder=encoders.get('critic_state'),
                  goal_encoder=encoders.get('critic_goal'),
@@ -154,6 +155,7 @@ index 53109ab..9638c4e 100644
 +                ),
 +                recur_max_iters=config['critic_recur_max_iters'],
 +                recur_tied_layer_norm=bool(config.get('critic_recur_tied_ln', True)),
++                recur_ln_mode=str(config.get('critic_recur_ln_mode', 'per_layer')),
 +                recur_sinusoidal=bool(config.get('critic_recur_sinusoidal', False)),
 +                recur_use_film=bool(config.get('critic_recur_use_film', True)),
 +                partial_num_groups=int(config.get('critic_partial_groups', 2)),
@@ -168,7 +170,7 @@ index 53109ab..9638c4e 100644
              )
  
          if config['actor_loss'] == 'awr':
-@@ -253,6 +328,28 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -253,6 +330,29 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
                  state_encoder=encoders.get('value_state'),
                  goal_encoder=encoders.get('value_goal'),
@@ -183,6 +185,7 @@ index 53109ab..9638c4e 100644
 +                ),
 +                recur_max_iters=config['critic_recur_max_iters'],
 +                recur_tied_layer_norm=bool(config.get('critic_recur_tied_ln', True)),
++                recur_ln_mode=str(config.get('critic_recur_ln_mode', 'per_layer')),
 +                recur_sinusoidal=bool(config.get('critic_recur_sinusoidal', False)),
 +                recur_use_film=bool(config.get('critic_recur_use_film', True)),
 +                partial_num_groups=int(config.get('critic_partial_groups', 2)),
@@ -197,7 +200,7 @@ index 53109ab..9638c4e 100644
              )
  
          if config['discrete']:
-@@ -260,6 +357,12 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -260,6 +360,12 @@ class CRLAgent(flax.struct.PyTreeNode):
                  hidden_dims=config['actor_hidden_dims'],
                  action_dim=action_dim,
                  gc_encoder=encoders.get('actor'),
@@ -210,7 +213,7 @@ index 53109ab..9638c4e 100644
              )
          else:
              actor_def = GCActor(
-@@ -268,6 +371,12 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -268,6 +374,12 @@ class CRLAgent(flax.struct.PyTreeNode):
                  state_dependent_std=False,
                  const_std=config['const_std'],
                  gc_encoder=encoders.get('actor'),
@@ -223,7 +226,7 @@ index 53109ab..9638c4e 100644
              )
  
          network_info = dict(
-@@ -282,7 +391,15 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -282,7 +394,15 @@ class CRLAgent(flax.struct.PyTreeNode):
          network_args = {k: v[1] for k, v in network_info.items()}
  
          network_def = ModuleDict(networks)
@@ -240,7 +243,7 @@ index 53109ab..9638c4e 100644
          network_params = network_def.init(init_rng, **network_args)['params']
          network = TrainState.create(network_def, network_params, tx=network_tx)
  
-@@ -295,8 +412,14 @@ def get_config():
+@@ -295,8 +415,14 @@ def get_config():
              # Agent hyperparameters.
              agent_name='crl',  # Agent name.
              lr=3e-4,  # Learning rate.
@@ -255,7 +258,7 @@ index 53109ab..9638c4e 100644
              value_hidden_dims=(512, 512, 512),  # Value network hidden dimensions.
              latent_dim=512,  # Latent dimension for phi and psi.
              layer_norm=True,  # Whether to use layer normalization.
-@@ -306,6 +429,24 @@ def get_config():
+@@ -306,6 +432,25 @@ def get_config():
              const_std=True,  # Whether to use constant standard deviation for the actor.
              discrete=False,  # Whether the action space is discrete.
              encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
@@ -269,7 +272,8 @@ index 53109ab..9638c4e 100644
 +            critic_recur_max_iters=16,  # Max step embedding table size.
 +            critic_layerscale_init=1e-2,  # LayerScale init for resnet/recur.
 +            critic_backbone_hidden_dim=0,  # Optional override (e.g., param-match resnet vs recur). 0 disables.
-+            critic_recur_tied_ln=True,  # Tie LayerNorm across iterations for recur_tied (set False to load old checkpoints).
++            critic_recur_tied_ln=True,  # Tie LayerNorm modules across iterations for recur_tied.
++            critic_recur_ln_mode='per_layer',  # 'pre_loop' | 'per_layer' for recur_tied LayerNorm placement.
 +            critic_recur_sinusoidal=False,  # Use sinusoidal positional encoding (extrapolatable) instead of discrete step_embed.
 +            critic_recur_use_film=True,  # Use FiLM modulation inside recur_tied; disable for no-FiLM ablations.
 +            critic_partial_groups=2,  # Groups for partial_tied backbone.
@@ -280,7 +284,7 @@ index 53109ab..9638c4e 100644
              # Dataset hyperparameters.
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
-@@ -319,6 +460,9 @@ def get_config():
+@@ -319,6 +464,9 @@ def get_config():
              gc_negative=False,  # Unused (defined for compatibility with GCDataset).
              p_aug=0.0,  # Probability of applying image augmentation.
              frame_stack=ml_collections.config_dict.placeholder(int),  # Number of frames to stack.
@@ -1299,7 +1303,7 @@ index 9c421dd..3da1eab 100644
  
      return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..9fba975 100644
+index 4ee2b26..fd593fb 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
 @@ -6,6 +6,8 @@ import flax.linen as nn
@@ -1311,7 +1315,7 @@ index 4ee2b26..9fba975 100644
  
  def default_init(scale=1.0):
      """Default kernel initializer."""
-@@ -60,6 +62,312 @@ class MLP(nn.Module):
+@@ -60,6 +62,335 @@ class MLP(nn.Module):
          return x
  
  
@@ -1392,6 +1396,7 @@ index 4ee2b26..9fba975 100644
 +    max_iters: int = 16
 +    layer_norm: bool = True
 +    tied_layer_norm: bool = True
++    ln_mode: str = 'per_layer'
 +    layerscale_init: float = 1e-2
 +    use_sinusoidal_step_encoding: bool = False  # Enable continuous positional encoding
 +    use_film: bool = True
@@ -1404,6 +1409,8 @@ index 4ee2b26..9fba975 100644
 +            raise ValueError(f'num_dense_layers must be positive. Got {num_dense_layers}.')
 +        if iters > self.max_iters:
 +            raise ValueError(f'num_iters={iters} exceeds max_iters={self.max_iters}')
++        if self.ln_mode not in ('pre_loop', 'per_layer'):
++            raise ValueError(f"Unsupported ln_mode={self.ln_mode!r}. Use 'pre_loop' or 'per_layer'.")
 +
 +        h = nn.Dense(self.hidden_dim)(x)
 +
@@ -1431,22 +1438,39 @@ index 4ee2b26..9fba975 100644
 +
 +        tied_layer_norms = None
 +        untied_loop_norms = None
++        untied_hidden_layer_norms = None
 +        if self.layer_norm:
-+            if self.tied_layer_norm:
-+                tied_layer_norms = []
-+                for layer_index in range(num_dense_layers - 1):
-+                    ln_name = 'ln' if layer_index == 0 else f'ln_{layer_index + 1}'
-+                    tied_layer_norms.append(nn.LayerNorm(name=ln_name))
++            if self.ln_mode == 'pre_loop':
++                if self.tied_layer_norm:
++                    tied_layer_norms = [nn.LayerNorm(name='ln')]
++                else:
++                    untied_loop_norms = [nn.LayerNorm(name=f'LayerNorm_{k}') for k in range(int(self.max_iters))]
 +            else:
-+                untied_loop_norms = [nn.LayerNorm(name=f'LayerNorm_{k}') for k in range(int(self.max_iters))]
++                if self.tied_layer_norm:
++                    tied_layer_norms = []
++                    for layer_index in range(num_dense_layers - 1):
++                        ln_name = 'ln' if layer_index == 0 else f'ln_{layer_index + 1}'
++                        tied_layer_norms.append(nn.LayerNorm(name=ln_name))
++                else:
++                    untied_hidden_layer_norms = []
++                    for k in range(int(self.max_iters)):
++                        untied_hidden_layer_norms.append(
++                            [
++                                nn.LayerNorm(name=f'LayerNorm_{k}_{layer_index}')
++                                for layer_index in range(num_dense_layers - 1)
++                            ]
++                        )
 +
 +        if not self.use_sinusoidal_step_encoding:
 +            step_contributions = step_proj(step_embed)  # (max_iters, hidden_dim)
 +
 +        for k in range(iters):
 +            h1 = h
-+            if self.layer_norm and untied_loop_norms is not None:
-+                h1 = untied_loop_norms[k](h1)
++            if self.layer_norm and self.ln_mode == 'pre_loop':
++                if tied_layer_norms is not None:
++                    h1 = tied_layer_norms[0](h1)
++                elif untied_loop_norms is not None:
++                    h1 = untied_loop_norms[k](h1)
 +
 +            if not self.use_sinusoidal_step_encoding:
 +                step_contrib_k = step_contributions[k]
@@ -1465,8 +1489,11 @@ index 4ee2b26..9fba975 100644
 +            for layer_index, layer in enumerate(tied_layers):
 +                u = layer(u)
 +                if layer_index < len(tied_layers) - 1:
-+                    if tied_layer_norms is not None:
-+                        u = tied_layer_norms[layer_index](u)
++                    if self.layer_norm and self.ln_mode == 'per_layer':
++                        if tied_layer_norms is not None:
++                            u = tied_layer_norms[layer_index](u)
++                        elif untied_hidden_layer_norms is not None:
++                            u = untied_hidden_layer_norms[k][layer_index](u)
 +                    u = nn.silu(u)
 +
 +            h = h + alpha[k] * u
@@ -1624,7 +1651,7 @@ index 4ee2b26..9fba975 100644
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -164,9 +472,28 @@ class GCActor(nn.Module):
+@@ -164,9 +495,28 @@ class GCActor(nn.Module):
      const_std: bool = True
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -1654,7 +1681,7 @@ index 4ee2b26..9fba975 100644
          self.mean_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
          if self.state_dependent_std:
              self.log_std_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
-@@ -230,9 +557,28 @@ class GCDiscreteActor(nn.Module):
+@@ -230,9 +580,28 @@ class GCDiscreteActor(nn.Module):
      action_dim: int
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -1684,7 +1711,7 @@ index 4ee2b26..9fba975 100644
          self.logit_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
  
      def __call__(
-@@ -347,16 +693,114 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +716,117 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
@@ -1696,6 +1723,7 @@ index 4ee2b26..9fba975 100644
 +    recur_num_blocks: int = 1
 +    recur_max_iters: int = 16
 +    recur_tied_layer_norm: bool = True
++    recur_ln_mode: str = 'per_layer'
 +    recur_sinusoidal: bool = False  # Use sinusoidal positional encoding for recur_tied
 +    recur_use_film: bool = True
 +    partial_num_groups: int = 2
@@ -1740,6 +1768,7 @@ index 4ee2b26..9fba975 100644
 +                max_iters=int(self.recur_max_iters),
 +                layer_norm=self.layer_norm,
 +                tied_layer_norm=bool(self.recur_tied_layer_norm),
++                ln_mode=str(self.recur_ln_mode),
 +                use_sinusoidal_step_encoding=bool(self.recur_sinusoidal),
 +                use_film=bool(self.recur_use_film),
 +                layerscale_init=self.layerscale_init,
@@ -1752,6 +1781,7 @@ index 4ee2b26..9fba975 100644
 +                max_iters=int(self.recur_max_iters),
 +                layer_norm=self.layer_norm,
 +                tied_layer_norm=bool(self.recur_tied_layer_norm),
++                ln_mode=str(self.recur_ln_mode),
 +                use_sinusoidal_step_encoding=bool(self.recur_sinusoidal),
 +                use_film=bool(self.recur_use_film),
 +                layerscale_init=self.layerscale_init,
@@ -1804,7 +1834,7 @@ index 4ee2b26..9fba975 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +808,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +834,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -1812,7 +1842,7 @@ index 4ee2b26..9fba975 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,8 +820,13 @@ class GCBilinearValue(nn.Module):
+@@ -375,8 +846,13 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
@@ -1828,7 +1858,7 @@ index 4ee2b26..9fba975 100644
  
          v = (phi * psi / jnp.sqrt(self.latent_dim)).sum(axis=-1)
  
-@@ -394,9 +844,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+@@ -394,9 +870,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
  
      action_dim: int = None
  
@@ -1840,30 +1870,3 @@ index 4ee2b26..9fba975 100644
  
  
  class GCMRNValue(nn.Module):
-diff --git a/impls/utils/positional_encoding.py b/impls/utils/positional_encoding.py
-new file mode 100644
-index 0000000..5f5a5e4
---- /dev/null
-+++ b/impls/utils/positional_encoding.py
-@@ -0,0 +1,21 @@
-+import jax.numpy as jnp
-+
-+
-+def sinusoidal_step_encoding(step, max_steps, dim):
-+    """Return a sinusoidal encoding vector of shape (dim,)."""
-+    del max_steps  # Kept for API compatibility with current callers.
-+
-+    step = jnp.asarray(step, dtype=jnp.float32)
-+    half_dim = dim // 2
-+    if half_dim == 0:
-+        return jnp.zeros((dim,), dtype=jnp.float32)
-+
-+    freq = jnp.arange(half_dim, dtype=jnp.float32)
-+    scale = jnp.maximum(1, half_dim - 1)
-+    inv_freq = jnp.exp(-jnp.log(10000.0) * freq / scale)
-+    angles = step * inv_freq
-+
-+    embedding = jnp.concatenate([jnp.sin(angles), jnp.cos(angles)], axis=0)
-+    if dim % 2 == 1:
-+        embedding = jnp.pad(embedding, (0, 1))
-+    return embedding
