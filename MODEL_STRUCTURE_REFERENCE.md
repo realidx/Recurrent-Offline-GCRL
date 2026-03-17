@@ -48,7 +48,45 @@ Notes:
 - `actor_hidden_dims` defines hidden width/depth
 - default is `(512, 512, 512)`
 
-### 2. `actor_backbone=residual_dense`
+### 2. `actor_backbone=resnet`
+
+Untied residual actor backbone.
+
+Structure:
+
+```text
+input
+-> Dense(hidden_dim)
+-> repeat actor_resnet_depth times:
+     ResNetBlock
+-> output head
+```
+
+Each actor `ResNetBlock` does:
+
+```text
+h
+-> Dense(hidden_dim)
+-> LayerNorm
+-> SiLU
+-> Dense(hidden_dim)
+-> LayerNorm
+-> SiLU
+-> Dense(hidden_dim)
+-> LayerNorm
+-> SiLU
+-> Dense(hidden_dim)
+-> LayerNorm
+-> SiLU
+-> residual add
+```
+
+Properties:
+- 4 Dense layers per residual block
+- LayerNorm is applied after every Dense layer in the branch
+- final action head remains unchanged
+
+### 3. `actor_backbone=residual_dense`
 
 Residual MLP actor for deep-actor experiments.
 
@@ -75,6 +113,7 @@ Key actor flags:
 - `actor_backbone`
 - `actor_hidden_dims`
 - `actor_backbone_hidden_dim`
+- `actor_resnet_depth`
 - `actor_num_dense_layers`
 - `actor_residual_span`
 
@@ -119,17 +158,25 @@ Each `ResNetBlock` does:
 
 ```text
 h
--> optional LayerNorm
+-> optional FiLM(block_index, h)
 -> Dense(hidden_dim)
+-> LayerNorm
 -> SiLU
 -> Dense(hidden_dim)
--> LayerScale(alpha)
+-> LayerNorm
+-> SiLU
+-> Dense(hidden_dim)
+-> LayerNorm
+-> SiLU
+-> Dense(hidden_dim)
+-> LayerNorm
+-> SiLU
 -> residual add
 ```
 
 Key critic flags:
 - `critic_resnet_depth`
-- `critic_layerscale_init`
+- `critic_resnet_use_film`
 - `critic_backbone_hidden_dim`
 
 ### 3. `critic_backbone=recur_tied`
@@ -239,7 +286,7 @@ Key critic flags:
 
 ### FiLM
 
-Used by `recur_tied` and optionally grouped in `partial_tied`.
+Used by `recur_tied`, optionally in `resnet`, and optionally grouped in `partial_tied`.
 
 Role:
 - modulates hidden state using step information and current state
@@ -247,6 +294,10 @@ Role:
 `recur_tied`:
 - enabled by `critic_recur_use_film=True`
 - disabled cleanly for no-FiLM ablation with `False`
+
+`resnet`:
+- enabled by `critic_resnet_use_film=True`
+- uses block-index conditioning inside each residual block
 
 ### Step Encoding
 

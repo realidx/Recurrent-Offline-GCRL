@@ -206,7 +206,7 @@ index 53109ab..f0ef188 100644
              )
  
          if config['discrete']:
-@@ -260,6 +366,12 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -260,6 +366,13 @@ class CRLAgent(flax.struct.PyTreeNode):
                  hidden_dims=config['actor_hidden_dims'],
                  action_dim=action_dim,
                  gc_encoder=encoders.get('actor'),
@@ -220,7 +220,7 @@ index 53109ab..f0ef188 100644
              )
          else:
              actor_def = GCActor(
-@@ -268,6 +380,12 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -268,6 +380,13 @@ class CRLAgent(flax.struct.PyTreeNode):
                  state_dependent_std=False,
                  const_std=config['const_std'],
                  gc_encoder=encoders.get('actor'),
@@ -251,7 +251,7 @@ index 53109ab..f0ef188 100644
          network_params = network_def.init(init_rng, **network_args)['params']
          network = TrainState.create(network_def, network_params, tx=network_tx)
  
-@@ -295,8 +421,14 @@ def get_config():
+@@ -295,8 +421,15 @@ def get_config():
              # Agent hyperparameters.
              agent_name='crl',  # Agent name.
              lr=3e-4,  # Learning rate.
@@ -1674,7 +1674,7 @@ index 4ee2b26..467e69f 100644
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -164,9 +507,28 @@ class GCActor(nn.Module):
+@@ -164,9 +507,41 @@ class GCActor(nn.Module):
      const_std: bool = True
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -1717,7 +1717,7 @@ index 4ee2b26..467e69f 100644
          self.mean_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
          if self.state_dependent_std:
              self.log_std_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
-@@ -230,9 +592,28 @@ class GCDiscreteActor(nn.Module):
+@@ -230,9 +592,41 @@ class GCDiscreteActor(nn.Module):
      action_dim: int
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
