@@ -57,7 +57,7 @@ Structure:
 ```text
 input
 -> Dense(hidden_dim)
--> repeat actor_resnet_depth times:
+-> repeat actor_resnet_depth residual blocks:
      ResNetBlock
 -> output head
 ```
@@ -84,6 +84,7 @@ h
 Properties:
 - 4 Dense layers per residual block
 - LayerNorm is applied after every Dense layer in the branch
+- `actor_resnet_depth` counts residual blocks, not total Dense layers
 - final action head remains unchanged
 
 ### 3. `actor_backbone=residual_dense`
@@ -149,7 +150,7 @@ Structure:
 ```text
 input
 -> Dense(hidden_dim)
--> repeat critic_resnet_depth times:
+-> repeat critic_resnet_depth residual blocks:
      ResNetBlock
 -> Dense(out_dim)
 ```
@@ -178,6 +179,10 @@ Key critic flags:
 - `critic_resnet_depth`
 - `critic_resnet_use_film`
 - `critic_backbone_hidden_dim`
+
+Notes:
+- `critic_resnet_depth` counts residual blocks, not total Dense layers
+- `critic_layerscale_init` does not affect the current ResNet path
 
 ### 3. `critic_backbone=recur_tied`
 

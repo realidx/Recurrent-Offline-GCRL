@@ -1343,8 +1343,6 @@ index 4ee2b26..467e69f 100644
 +    @nn.compact
 +    def __call__(self, h, step_embed=None):
 +        h1 = h
-+        if self.layer_norm:
-+            h1 = nn.LayerNorm()(h1)
 +        if self.use_film:
 +            if step_embed is None:
 +                raise ValueError('ResNetBlock with use_film=True requires step_embed.')
@@ -1355,12 +1353,12 @@ index 4ee2b26..467e69f 100644
 +            film = film_fc2(nn.silu(fc1_out))
 +            gamma, beta = jnp.split(film, 2, axis=-1)
 +            h1 = (1.0 + gamma) * h1 + beta
-+        u = nn.Dense(self.hidden_dim)(h1)
-+        u = nn.silu(u)
-+        u = nn.Dense(self.hidden_dim)(u)
-+
-+        scale = self.param('layerscale', nn.initializers.constant(self.layerscale_init), (self.hidden_dim,))
-+        u = u * scale
++        u = h1
++        for layer_idx in range(4):
++            u = nn.Dense(self.hidden_dim, name=f'fc_{layer_idx + 1}')(u)
++            if self.layer_norm:
++                u = nn.LayerNorm(name=f'ln_{layer_idx + 1}')(u)
++            u = nn.silu(u)
 +        return h + u
 +
 +
