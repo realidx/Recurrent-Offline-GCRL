@@ -83,8 +83,9 @@ ACTOR_NUM_LAYERS="${ACTOR_NUM_LAYERS:-}"     # Shortcut: e.g., 32
 ACTOR_LAYER_WIDTH="${ACTOR_LAYER_WIDTH:-512}" # Shortcut width used with ACTOR_NUM_LAYERS
 VALUE_NUM_LAYERS="${VALUE_NUM_LAYERS:-}"     # Shortcut: e.g., 32
 VALUE_LAYER_WIDTH="${VALUE_LAYER_WIDTH:-512}" # Shortcut width used with VALUE_NUM_LAYERS
-ACTOR_BACKBONE="${ACTOR_BACKBONE:-mlp}"      # mlp | residual_dense
+ACTOR_BACKBONE="${ACTOR_BACKBONE:-mlp}"      # mlp | resnet | residual_dense
 ACTOR_BACKBONE_HIDDEN_DIM="${ACTOR_BACKBONE_HIDDEN_DIM:-0}"
+ACTOR_RESNET_DEPTH="${ACTOR_RESNET_DEPTH:-3}"
 ACTOR_RESIDUAL_NUM_DENSE_LAYERS="${ACTOR_RESIDUAL_NUM_DENSE_LAYERS:-}"
 ACTOR_RESIDUAL_SPAN="${ACTOR_RESIDUAL_SPAN:-4}"
 ACTOR_P_CURGOAL="${ACTOR_P_CURGOAL:-0.0}"
@@ -101,6 +102,7 @@ LAYERSCALE_INIT="${LAYERSCALE_INIT:-1e-2}"
 
 # ResNet options.
 RESNET_DEPTH="${RESNET_DEPTH:-3}"
+RESNET_USE_FILM="${RESNET_USE_FILM:-0}"
 
 # recurrent tied options.
 KTRAIN="${KTRAIN:-4}"
@@ -110,7 +112,9 @@ RECUR_MAX_ITERS="${RECUR_MAX_ITERS:-24}"
 SINUSOIDAL="${SINUSOIDAL:-1}"
 TIED_LN="${TIED_LN:-1}"
 RECUR_LN_MODE="${RECUR_LN_MODE:-per_layer}" # pre_loop | per_layer
+RECUR_USE_STEP_INFO="${RECUR_USE_STEP_INFO:-1}"
 RECUR_USE_FILM="${RECUR_USE_FILM:-1}"
+RECUR_USE_LAYERSCALE="${RECUR_USE_LAYERSCALE:-1}"
 
 # partial tied options.
 PARTIAL_GROUPS="${PARTIAL_GROUPS:-2}"
@@ -162,8 +166,8 @@ AGENT_FLAGS=(
   "--agent.actor_backbone=${ACTOR_BACKBONE}"
 )
 
-if [[ ! "${ACTOR_BACKBONE}" =~ ^(mlp|residual_dense)$ ]]; then
-  echo "Error: ACTOR_BACKBONE='${ACTOR_BACKBONE}' is invalid. Use mlp or residual_dense." >&2
+if [[ ! "${ACTOR_BACKBONE}" =~ ^(mlp|resnet|residual_dense)$ ]]; then
+  echo "Error: ACTOR_BACKBONE='${ACTOR_BACKBONE}' is invalid. Use mlp, resnet, or residual_dense." >&2
   exit 2
 fi
 
@@ -184,6 +188,15 @@ if [[ "${ACTOR_BACKBONE}" == "mlp" ]]; then
     done
     ACTOR_HIDDEN_DIMS="$(IFS=x; echo "${ACTOR_DIMS[*]}")"
   fi
+elif [[ "${ACTOR_BACKBONE}" == "resnet" ]]; then
+  if [[ -n "${ACTOR_NUM_LAYERS}" ]]; then
+    ACTOR_RESNET_DEPTH="${ACTOR_NUM_LAYERS}"
+  fi
+  if [[ ! "${ACTOR_RESNET_DEPTH}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: ACTOR_RESNET_DEPTH='${ACTOR_RESNET_DEPTH}' is not a positive integer." >&2
+    exit 2
+  fi
+  AGENT_FLAGS+=("--agent.actor_resnet_depth=${ACTOR_RESNET_DEPTH}")
 else
   if [[ -z "${ACTOR_RESIDUAL_NUM_DENSE_LAYERS}" && -n "${ACTOR_NUM_LAYERS}" ]]; then
     ACTOR_RESIDUAL_NUM_DENSE_LAYERS="${ACTOR_NUM_LAYERS}"
@@ -295,17 +308,22 @@ case "${CRITIC_BACKBONE}" in
   mlp)
     ;;
   resnet)
-    AGENT_FLAGS+=("--agent.critic_resnet_depth=${RESNET_DEPTH}")
+    AGENT_FLAGS+=(
+      "--agent.critic_resnet_depth=${RESNET_DEPTH}"
+      "--agent.critic_resnet_use_film=${RESNET_USE_FILM}"
+    )
     ;;
   recur_tied)
     AGENT_FLAGS+=(
       "--agent.critic_recur_iters=${KTRAIN}"
       "--agent.critic_recur_num_dense_layers=${RECUR_NUM_DENSE_LAYERS}"
       "--agent.critic_recur_max_iters=${RECUR_MAX_ITERS}"
+      "--agent.critic_recur_use_step_info=${RECUR_USE_STEP_INFO}"
       "--agent.critic_recur_sinusoidal=${SINUSOIDAL}"
       "--agent.critic_recur_tied_ln=${TIED_LN}"
       "--agent.critic_recur_ln_mode=${RECUR_LN_MODE}"
       "--agent.critic_recur_use_film=${RECUR_USE_FILM}"
+      "--agent.critic_recur_use_layerscale=${RECUR_USE_LAYERSCALE}"
     )
     ;;
   partial_tied)

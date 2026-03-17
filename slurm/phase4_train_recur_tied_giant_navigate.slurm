@@ -73,7 +73,9 @@ RECUR_MAX_ITERS="${RECUR_MAX_ITERS:-24}"  # allocated step-params (alpha/LN/step
 SINUSOIDAL="${SINUSOIDAL:-1}"             # 1 => sinusoidal encoding, 0 => discrete lookup
 TIED_LN="${TIED_LN:-1}"                   # 1 => single LN shared across iterations
 RECUR_LN_MODE="${RECUR_LN_MODE:-per_layer}" # pre_loop | per_layer
+RECUR_USE_STEP_INFO="${RECUR_USE_STEP_INFO:-1}" # 1 => use loop-step conditioning
 RECUR_USE_FILM="${RECUR_USE_FILM:-1}"     # 1 => FiLM modulation, 0 => additive no-FiLM ablation
+RECUR_USE_LAYERSCALE="${RECUR_USE_LAYERSCALE:-1}" # 1 => learnable residual scaling alpha_k
 LAYERSCALE_INIT="${LAYERSCALE_INIT:-1e-2}"
 
 # LR schedule. (Set LR_DECAY_STEPS=0 to disable and use constant LR.)
@@ -154,10 +156,12 @@ AGENT_FLAGS=(
   "--agent.critic_recur_iters=${KTRAIN}"
   "--agent.critic_recur_num_dense_layers=${RECUR_NUM_DENSE_LAYERS}"
   "--agent.critic_recur_max_iters=${RECUR_MAX_ITERS}"
+  "--agent.critic_recur_use_step_info=${RECUR_USE_STEP_INFO}"
   "--agent.critic_recur_tied_ln=${TIED_LN}"
   "--agent.critic_recur_ln_mode=${RECUR_LN_MODE}"
   "--agent.critic_recur_sinusoidal=${SINUSOIDAL}"
   "--agent.critic_recur_use_film=${RECUR_USE_FILM}"
+  "--agent.critic_recur_use_layerscale=${RECUR_USE_LAYERSCALE}"
   "--agent.critic_layerscale_init=${LAYERSCALE_INIT}"
   "--agent.lr_decay_steps=${LR_DECAY_STEPS}"
   "--agent.lr_min=${LR_MIN}"
