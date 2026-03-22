@@ -267,7 +267,7 @@ index 53109ab..f0ef188 100644
 +            lr_min=1e-5,  # Minimum LR at end of cosine decay.
              batch_size=1024,  # Batch size.
              actor_hidden_dims=(512, 512, 512),  # Actor network hidden dimensions.
-+            actor_backbone='mlp',  # 'mlp' | 'resnet' | 'residual_dense'
++            actor_backbone='mlp',  # 'mlp' | 'resnet' | 'residual_dense' | 'dense_ln'
 +            actor_backbone_hidden_dim=0,  # Optional hidden width override for non-MLP actor backbones. 0 disables.
 +            actor_resnet_depth=3,  # Untied ResNet blocks for actor_backbone='resnet'.
 +            actor_num_dense_layers=4,  # Total Dense layers inside the residual actor backbone.
@@ -1713,7 +1713,7 @@ index 4ee2b26..467e69f 100644
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -164,9 +507,43 @@ class GCActor(nn.Module):
+@@ -164,9 +507,56 @@ class GCActor(nn.Module):
      const_std: bool = True
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -1753,12 +1753,25 @@ index 4ee2b26..467e69f 100644
 +                residual_span=int(self.residual_span),
 +                use_residual=bool(self.residual_use_skip),
 +            )
++        elif self.backbone == 'dense_ln':
++            hidden_dim = (
++                int(self.backbone_hidden_dim)
++                if self.backbone_hidden_dim is not None
++                else int(self.hidden_dims[-1])
++            )
++            self.actor_net = ResidualDenseBackbone(
++                hidden_dim=hidden_dim,
++                out_dim=hidden_dim,
++                num_dense_layers=int(self.residual_num_dense_layers),
++                residual_span=int(self.residual_span),
++                use_residual=False,
++            )
 +        else:
 +            raise ValueError(f'Unsupported actor backbone: {self.backbone!r}')
          self.mean_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
          if self.state_dependent_std:
              self.log_std_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
-@@ -230,9 +592,43 @@ class GCDiscreteActor(nn.Module):
+@@ -230,9 +592,56 @@ class GCDiscreteActor(nn.Module):
      action_dim: int
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -1797,6 +1810,19 @@ index 4ee2b26..467e69f 100644
 +                num_dense_layers=int(self.residual_num_dense_layers),
 +                residual_span=int(self.residual_span),
 +                use_residual=bool(self.residual_use_skip),
++            )
++        elif self.backbone == 'dense_ln':
++            hidden_dim = (
++                int(self.backbone_hidden_dim)
++                if self.backbone_hidden_dim is not None
++                else int(self.hidden_dims[-1])
++            )
++            self.actor_net = ResidualDenseBackbone(
++                hidden_dim=hidden_dim,
++                out_dim=hidden_dim,
++                num_dense_layers=int(self.residual_num_dense_layers),
++                residual_span=int(self.residual_span),
++                use_residual=False,
 +            )
 +        else:
 +            raise ValueError(f'Unsupported actor backbone: {self.backbone!r}')

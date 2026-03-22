@@ -83,7 +83,7 @@ ACTOR_NUM_LAYERS="${ACTOR_NUM_LAYERS:-}"     # Shortcut: e.g., 32
 ACTOR_LAYER_WIDTH="${ACTOR_LAYER_WIDTH:-512}" # Shortcut width used with ACTOR_NUM_LAYERS
 VALUE_NUM_LAYERS="${VALUE_NUM_LAYERS:-}"     # Shortcut: e.g., 32
 VALUE_LAYER_WIDTH="${VALUE_LAYER_WIDTH:-512}" # Shortcut width used with VALUE_NUM_LAYERS
-ACTOR_BACKBONE="${ACTOR_BACKBONE:-mlp}"      # mlp | resnet | residual_dense
+ACTOR_BACKBONE="${ACTOR_BACKBONE:-mlp}"      # mlp | resnet | residual_dense | dense_ln
 ACTOR_BACKBONE_HIDDEN_DIM="${ACTOR_BACKBONE_HIDDEN_DIM:-0}"
 ACTOR_RESNET_DEPTH="${ACTOR_RESNET_DEPTH:-3}" # Residual block count for actor_backbone=resnet.
 ACTOR_RESIDUAL_NUM_DENSE_LAYERS="${ACTOR_RESIDUAL_NUM_DENSE_LAYERS:-}"
@@ -168,8 +168,8 @@ AGENT_FLAGS=(
   "--agent.actor_backbone=${ACTOR_BACKBONE}"
 )
 
-if [[ ! "${ACTOR_BACKBONE}" =~ ^(mlp|resnet|residual_dense)$ ]]; then
-  echo "Error: ACTOR_BACKBONE='${ACTOR_BACKBONE}' is invalid. Use mlp, resnet, or residual_dense." >&2
+if [[ ! "${ACTOR_BACKBONE}" =~ ^(mlp|resnet|residual_dense|dense_ln)$ ]]; then
+  echo "Error: ACTOR_BACKBONE='${ACTOR_BACKBONE}' is invalid. Use mlp, resnet, residual_dense, or dense_ln." >&2
   exit 2
 fi
 
@@ -216,6 +216,9 @@ else
   fi
   if (( ACTOR_BACKBONE_HIDDEN_DIM == 0 )); then
     ACTOR_BACKBONE_HIDDEN_DIM="${ACTOR_LAYER_WIDTH}"
+  fi
+  if [[ "${ACTOR_BACKBONE}" == "dense_ln" ]]; then
+    ACTOR_RESIDUAL_USE_SKIP="0"
   fi
   AGENT_FLAGS+=(
     "--agent.actor_num_dense_layers=${ACTOR_RESIDUAL_NUM_DENSE_LAYERS}"

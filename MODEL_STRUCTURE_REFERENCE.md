@@ -111,6 +111,11 @@ Properties:
 - residual adds can be disabled via `actor_residual_use_skip=False` for a plain LN+SiLU MLP ablation
 - final action head remains unchanged
 
+### 4. `actor_backbone=dense_ln`
+
+Plain deep LN+SiLU actor with the same constant-width stack used by `residual_dense`,
+but with residual adds disabled.
+
 Key actor flags:
 - `actor_backbone`
 - `actor_hidden_dims`
