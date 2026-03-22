@@ -88,6 +88,7 @@ ACTOR_BACKBONE_HIDDEN_DIM="${ACTOR_BACKBONE_HIDDEN_DIM:-0}"
 ACTOR_RESNET_DEPTH="${ACTOR_RESNET_DEPTH:-3}" # Residual block count for actor_backbone=resnet.
 ACTOR_RESIDUAL_NUM_DENSE_LAYERS="${ACTOR_RESIDUAL_NUM_DENSE_LAYERS:-}"
 ACTOR_RESIDUAL_SPAN="${ACTOR_RESIDUAL_SPAN:-4}"
+ACTOR_RESIDUAL_USE_SKIP="${ACTOR_RESIDUAL_USE_SKIP:-1}"
 ACTOR_P_CURGOAL="${ACTOR_P_CURGOAL:-0.0}"
 ACTOR_P_TRAJGOAL="${ACTOR_P_TRAJGOAL:-1.0}"
 ACTOR_P_RANDOMGOAL="${ACTOR_P_RANDOMGOAL:-0.0}"
@@ -115,6 +116,7 @@ RECUR_LN_MODE="${RECUR_LN_MODE:-per_layer}" # pre_loop | per_layer
 RECUR_USE_STEP_INFO="${RECUR_USE_STEP_INFO:-1}"
 RECUR_USE_FILM="${RECUR_USE_FILM:-1}"
 RECUR_USE_LAYERSCALE="${RECUR_USE_LAYERSCALE:-1}"
+RECUR_SHARED_ALPHA="${RECUR_SHARED_ALPHA:-0}"
 
 # partial tied options.
 PARTIAL_GROUPS="${PARTIAL_GROUPS:-2}"
@@ -218,6 +220,7 @@ else
   AGENT_FLAGS+=(
     "--agent.actor_num_dense_layers=${ACTOR_RESIDUAL_NUM_DENSE_LAYERS}"
     "--agent.actor_residual_span=${ACTOR_RESIDUAL_SPAN}"
+    "--agent.actor_residual_use_skip=${ACTOR_RESIDUAL_USE_SKIP}"
   )
 fi
 
@@ -324,6 +327,7 @@ case "${CRITIC_BACKBONE}" in
       "--agent.critic_recur_ln_mode=${RECUR_LN_MODE}"
       "--agent.critic_recur_use_film=${RECUR_USE_FILM}"
       "--agent.critic_recur_use_layerscale=${RECUR_USE_LAYERSCALE}"
+      "--agent.critic_recur_shared_alpha=${RECUR_SHARED_ALPHA}"
     )
     ;;
   partial_tied)

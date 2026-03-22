@@ -108,6 +108,7 @@ Properties:
 - LayerNorm is mandatory inside the residual actor backbone
 - activation is `SiLU`
 - residual span is configurable via `actor_residual_span`
+- residual adds can be disabled via `actor_residual_use_skip=False` for a plain LN+SiLU MLP ablation
 - final action head remains unchanged
 
 Key actor flags:
@@ -117,6 +118,7 @@ Key actor flags:
 - `actor_resnet_depth`
 - `actor_num_dense_layers`
 - `actor_residual_span`
+- `actor_residual_use_skip`
 
 ---
 
@@ -251,6 +253,7 @@ Key critic flags:
 - `critic_recur_tied_ln`
 - `critic_recur_sinusoidal`
 - `critic_recur_use_film`
+- `critic_recur_shared_alpha`
 - `critic_layerscale_init`
 - `critic_backbone_hidden_dim`
 
@@ -337,6 +340,7 @@ Flag:
 Interpretation:
 - scales residual updates
 - set near zero for conservative residual start
+- `critic_recur_shared_alpha=True` changes recur_tied from per-step `alpha[k]` to one shared scalar `alpha`
 
 ---
 
@@ -378,6 +382,7 @@ Most important current architecture ablations:
 - `actor_backbone`
 - `actor_num_dense_layers`
 - `actor_residual_span`
+- `actor_residual_use_skip`
 
 ---
 

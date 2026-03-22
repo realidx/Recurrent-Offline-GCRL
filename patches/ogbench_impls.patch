@@ -110,7 +110,7 @@ index 53109ab..f0ef188 100644
              }
          else:
              raise ValueError(f'Unsupported actor loss: {self.config["actor_loss"]}')
-@@ -231,6 +262,32 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -231,6 +262,33 @@ class CRLAgent(flax.struct.PyTreeNode):
                  state_encoder=encoders.get('critic_state'),
                  goal_encoder=encoders.get('critic_goal'),
                  action_dim=action_dim,
@@ -130,6 +130,7 @@ index 53109ab..f0ef188 100644
 +                recur_sinusoidal=bool(config.get('critic_recur_sinusoidal', False)),
 +                recur_use_film=bool(config.get('critic_recur_use_film', True)),
 +                recur_use_layerscale=bool(config.get('critic_recur_use_layerscale', True)),
++                recur_shared_alpha=bool(config.get('critic_recur_shared_alpha', False)),
 +                partial_num_groups=int(config.get('critic_partial_groups', 2)),
 +                partial_iters_per_group=int(config.get('critic_partial_iters_per_group', 2)),
 +                partial_per_group_film=bool(config.get('critic_partial_per_group_film', False)),
@@ -143,7 +144,7 @@ index 53109ab..f0ef188 100644
              )
          else:
              critic_def = GCBilinearValue(
-@@ -241,6 +297,32 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -241,6 +297,33 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
                  state_encoder=encoders.get('critic_state'),
                  goal_encoder=encoders.get('critic_goal'),
@@ -163,6 +164,7 @@ index 53109ab..f0ef188 100644
 +                recur_sinusoidal=bool(config.get('critic_recur_sinusoidal', False)),
 +                recur_use_film=bool(config.get('critic_recur_use_film', True)),
 +                recur_use_layerscale=bool(config.get('critic_recur_use_layerscale', True)),
++                recur_shared_alpha=bool(config.get('critic_recur_shared_alpha', False)),
 +                partial_num_groups=int(config.get('critic_partial_groups', 2)),
 +                partial_iters_per_group=int(config.get('critic_partial_iters_per_group', 2)),
 +                partial_per_group_film=bool(config.get('critic_partial_per_group_film', False)),
@@ -176,7 +178,7 @@ index 53109ab..f0ef188 100644
              )
  
          if config['actor_loss'] == 'awr':
-@@ -253,6 +334,32 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -253,6 +334,33 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
                  state_encoder=encoders.get('value_state'),
                  goal_encoder=encoders.get('value_goal'),
@@ -196,6 +198,7 @@ index 53109ab..f0ef188 100644
 +                recur_sinusoidal=bool(config.get('critic_recur_sinusoidal', False)),
 +                recur_use_film=bool(config.get('critic_recur_use_film', True)),
 +                recur_use_layerscale=bool(config.get('critic_recur_use_layerscale', True)),
++                recur_shared_alpha=bool(config.get('critic_recur_shared_alpha', False)),
 +                partial_num_groups=int(config.get('critic_partial_groups', 2)),
 +                partial_iters_per_group=int(config.get('critic_partial_iters_per_group', 2)),
 +                partial_per_group_film=bool(config.get('critic_partial_per_group_film', False)),
@@ -209,7 +212,7 @@ index 53109ab..f0ef188 100644
              )
  
          if config['discrete']:
-@@ -260,6 +366,13 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -260,6 +366,14 @@ class CRLAgent(flax.struct.PyTreeNode):
                  hidden_dims=config['actor_hidden_dims'],
                  action_dim=action_dim,
                  gc_encoder=encoders.get('actor'),
@@ -220,10 +223,11 @@ index 53109ab..f0ef188 100644
 +                resnet_num_blocks=int(config.get('actor_resnet_depth', 3)),
 +                residual_num_dense_layers=int(config.get('actor_num_dense_layers', 4)),
 +                residual_span=int(config.get('actor_residual_span', 4)),
++                residual_use_skip=bool(config.get('actor_residual_use_skip', True)),
              )
          else:
              actor_def = GCActor(
-@@ -268,6 +380,13 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -268,6 +380,14 @@ class CRLAgent(flax.struct.PyTreeNode):
                  state_dependent_std=False,
                  const_std=config['const_std'],
                  gc_encoder=encoders.get('actor'),
@@ -234,6 +238,7 @@ index 53109ab..f0ef188 100644
 +                resnet_num_blocks=int(config.get('actor_resnet_depth', 3)),
 +                residual_num_dense_layers=int(config.get('actor_num_dense_layers', 4)),
 +                residual_span=int(config.get('actor_residual_span', 4)),
++                residual_use_skip=bool(config.get('actor_residual_use_skip', True)),
              )
  
          network_info = dict(
@@ -254,7 +259,7 @@ index 53109ab..f0ef188 100644
          network_params = network_def.init(init_rng, **network_args)['params']
          network = TrainState.create(network_def, network_params, tx=network_tx)
  
-@@ -295,8 +421,15 @@ def get_config():
+@@ -295,8 +421,16 @@ def get_config():
              # Agent hyperparameters.
              agent_name='crl',  # Agent name.
              lr=3e-4,  # Learning rate.
@@ -267,10 +272,11 @@ index 53109ab..f0ef188 100644
 +            actor_resnet_depth=3,  # Untied ResNet blocks for actor_backbone='resnet'.
 +            actor_num_dense_layers=4,  # Total Dense layers inside the residual actor backbone.
 +            actor_residual_span=4,  # Residual skip frequency for residual actor (Dense layers per residual span).
++            actor_residual_use_skip=True,  # If False, residual_dense becomes a plain LN+SiLU MLP of the same width/depth.
              value_hidden_dims=(512, 512, 512),  # Value network hidden dimensions.
              latent_dim=512,  # Latent dimension for phi and psi.
              layer_norm=True,  # Whether to use layer normalization.
-@@ -306,6 +438,28 @@ def get_config():
+@@ -306,6 +438,29 @@ def get_config():
              const_std=True,  # Whether to use constant standard deviation for the actor.
              discrete=False,  # Whether the action space is discrete.
              encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
@@ -291,6 +297,7 @@ index 53109ab..f0ef188 100644
 +            critic_recur_sinusoidal=False,  # Use sinusoidal positional encoding (extrapolatable) instead of discrete step_embed.
 +            critic_recur_use_film=True,  # Use FiLM modulation inside recur_tied; when step info is disabled this becomes hidden-only FiLM.
 +            critic_recur_use_layerscale=True,  # Use learnable residual scaling alpha_k in recur_tied.
++            critic_recur_shared_alpha=False,  # If True, share one residual scaling alpha across all recur_tied iterations.
 +            critic_partial_groups=2,  # Groups for partial_tied backbone.
 +            critic_partial_iters_per_group=2,  # Iters per group for partial_tied backbone.
 +            critic_partial_per_group_film=False,  # If True, use separate FiLM per group for partial_tied.
@@ -1330,7 +1337,7 @@ index 4ee2b26..467e69f 100644
  
  def default_init(scale=1.0):
      """Default kernel initializer."""
-@@ -60,6 +62,371 @@ class MLP(nn.Module):
+@@ -60,6 +62,375 @@ class MLP(nn.Module):
          return x
  
  
@@ -1398,6 +1405,7 @@ index 4ee2b26..467e69f 100644
 +    num_dense_layers: int
 +    residual_span: int = 4
 +    activations: Any = nn.silu
++    use_residual: bool = True
 +
 +    @nn.compact
 +    def __call__(self, x):
@@ -1420,7 +1428,7 @@ index 4ee2b26..467e69f 100644
 +            is_span_end = (layer_index + 1) % residual_span == 0
 +            is_last_layer = layer_index + 1 == num_dense_layers
 +            if is_span_end or is_last_layer:
-+                h = residual + branch
++                h = residual + branch if self.use_residual else branch
 +                residual = h
 +                branch = h
 +
@@ -1441,6 +1449,7 @@ index 4ee2b26..467e69f 100644
 +    use_sinusoidal_step_encoding: bool = False  # Enable continuous positional encoding
 +    use_film: bool = True
 +    use_layerscale: bool = True
++    shared_alpha: bool = False
 +
 +    @nn.compact
 +    def __call__(self, x, num_iters=None):
@@ -1469,7 +1478,8 @@ index 4ee2b26..467e69f 100644
 +
 +        alpha = None
 +        if self.use_layerscale:
-+            alpha = self.param('alpha', nn.initializers.constant(self.layerscale_init), (self.max_iters,))
++            alpha_shape = (1,) if self.shared_alpha else (self.max_iters,)
++            alpha = self.param('alpha', nn.initializers.constant(self.layerscale_init), alpha_shape)
 +
 +        step_proj = nn.Dense(self.hidden_dim, use_bias=False, name='step_proj') if self.use_step_info else None
 +        film_fc1_h = nn.Dense(self.hidden_dim) if self.use_film else None
@@ -1545,7 +1555,8 @@ index 4ee2b26..467e69f 100644
 +                    u = nn.silu(u)
 +
 +            if self.use_layerscale:
-+                h = h + alpha[k] * u
++                alpha_k = alpha[0] if self.shared_alpha else alpha[k]
++                h = h + alpha_k * u
 +            else:
 +                h = h + u
 +
@@ -1702,7 +1713,7 @@ index 4ee2b26..467e69f 100644
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -164,9 +507,41 @@ class GCActor(nn.Module):
+@@ -164,9 +507,43 @@ class GCActor(nn.Module):
      const_std: bool = True
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -1711,6 +1722,7 @@ index 4ee2b26..467e69f 100644
 +    resnet_num_blocks: int = 3
 +    residual_num_dense_layers: int = 4
 +    residual_span: int = 4
++    residual_use_skip: bool = True
  
      def setup(self):
 -        self.actor_net = MLP(self.hidden_dims, activate_final=True)
@@ -1739,13 +1751,14 @@ index 4ee2b26..467e69f 100644
 +                out_dim=hidden_dim,
 +                num_dense_layers=int(self.residual_num_dense_layers),
 +                residual_span=int(self.residual_span),
++                use_residual=bool(self.residual_use_skip),
 +            )
 +        else:
 +            raise ValueError(f'Unsupported actor backbone: {self.backbone!r}')
          self.mean_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
          if self.state_dependent_std:
              self.log_std_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
-@@ -230,9 +592,41 @@ class GCDiscreteActor(nn.Module):
+@@ -230,9 +592,43 @@ class GCDiscreteActor(nn.Module):
      action_dim: int
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -1754,6 +1767,7 @@ index 4ee2b26..467e69f 100644
 +    resnet_num_blocks: int = 3
 +    residual_num_dense_layers: int = 4
 +    residual_span: int = 4
++    residual_use_skip: bool = True
  
      def setup(self):
 -        self.actor_net = MLP(self.hidden_dims, activate_final=True)
@@ -1782,13 +1796,14 @@ index 4ee2b26..467e69f 100644
 +                out_dim=hidden_dim,
 +                num_dense_layers=int(self.residual_num_dense_layers),
 +                residual_span=int(self.residual_span),
++                use_residual=bool(self.residual_use_skip),
 +            )
 +        else:
 +            raise ValueError(f'Unsupported actor backbone: {self.backbone!r}')
          self.logit_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
  
      def __call__(
-@@ -347,16 +728,126 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +728,129 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
@@ -1806,6 +1821,7 @@ index 4ee2b26..467e69f 100644
 +    recur_sinusoidal: bool = False  # Use sinusoidal positional encoding for recur_tied
 +    recur_use_film: bool = True
 +    recur_use_layerscale: bool = True
++    recur_shared_alpha: bool = False
 +    partial_num_groups: int = 2
 +    partial_iters_per_group: int = 2
 +    partial_per_group_film: bool = False
@@ -1855,6 +1871,7 @@ index 4ee2b26..467e69f 100644
 +                use_sinusoidal_step_encoding=bool(self.recur_sinusoidal),
 +                use_film=bool(self.recur_use_film),
 +                use_layerscale=bool(self.recur_use_layerscale),
++                shared_alpha=bool(self.recur_shared_alpha),
 +                layerscale_init=self.layerscale_init,
 +            )
 +            psi_kwargs = dict(
@@ -1870,6 +1887,7 @@ index 4ee2b26..467e69f 100644
 +                use_sinusoidal_step_encoding=bool(self.recur_sinusoidal),
 +                use_film=bool(self.recur_use_film),
 +                use_layerscale=bool(self.recur_use_layerscale),
++                shared_alpha=bool(self.recur_shared_alpha),
 +                layerscale_init=self.layerscale_init,
 +            )
 +        elif backbone == 'partial_tied':
