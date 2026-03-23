@@ -4,7 +4,7 @@ index 53109ab..75123d7 100644
 +++ b/impls/agents/crl.py
 @@ -22,7 +22,12 @@ class CRLAgent(flax.struct.PyTreeNode):
      config: Any = nonpytree_field()
-
+ 
      def contrastive_loss(self, batch, grad_params, module_name='critic'):
 -        """Compute the contrastive value loss for the Q or V function."""
 +        """Compute the contrastive value loss for the Q or V function.
@@ -14,7 +14,7 @@ index 53109ab..75123d7 100644
 +        - 'infonce': InfoNCE with softmax (normalizes across all negatives)
 +        """
          batch_size = batch['observations'].shape[0]
-
+ 
          if module_name == 'critic':
 @@ -39,33 +44,61 @@ class CRLAgent(flax.struct.PyTreeNode):
          if len(phi.shape) == 2:  # Non-ensemble.
@@ -64,7 +64,7 @@ index 53109ab..75123d7 100644
 +                out_axes=-1,
 +            )(logits)
 +            contrastive_loss = jnp.mean(contrastive_loss)
-
+ 
          # Compute additional statistics.
 -        v = jnp.exp(v)
 +        v = jnp.exp(v_raw)
@@ -74,7 +74,7 @@ index 53109ab..75123d7 100644
          logits_pos = jnp.sum(logits * I) / jnp.sum(I)
          logits_neg = jnp.sum(logits * (1 - I)) / jnp.sum(1 - I)
 +        score_margin = logits_pos - logits_neg
-
+ 
          return contrastive_loss, {
              'contrastive_loss': contrastive_loss,
              'v_mean': v.mean(),
@@ -88,11 +88,11 @@ index 53109ab..75123d7 100644
 -            'logits': logits.mean(),
 +            'score_margin': score_margin,
          }
-
+ 
      def actor_loss(self, batch, grad_params, rng=None):
 @@ -104,6 +137,7 @@ class CRLAgent(flax.struct.PyTreeNode):
              assert not self.config['discrete']
-
+ 
              dist = self.network.select('actor')(batch['observations'], batch['actor_goals'], params=grad_params)
 +            action_mode = dist.mode()
              if self.config['const_std']:
@@ -176,7 +176,7 @@ index 53109ab..75123d7 100644
 +                if not config.get('critic_backbone_hidden_dim')
 +                else int(config.get('critic_backbone_hidden_dim')),
              )
-
+ 
          if config['actor_loss'] == 'awr':
 @@ -253,6 +338,33 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
@@ -210,7 +210,7 @@ index 53109ab..75123d7 100644
 +                if not config.get('critic_backbone_hidden_dim')
 +                else int(config.get('critic_backbone_hidden_dim')),
              )
-
+ 
          if config['discrete']:
 @@ -260,6 +372,14 @@ class CRLAgent(flax.struct.PyTreeNode):
                  hidden_dims=config['actor_hidden_dims'],
@@ -240,11 +240,11 @@ index 53109ab..75123d7 100644
 +                residual_span=int(config.get('actor_residual_span', 4)),
 +                residual_use_skip=bool(config.get('actor_residual_use_skip', True)),
              )
-
+ 
          network_info = dict(
 @@ -282,7 +410,15 @@ class CRLAgent(flax.struct.PyTreeNode):
          network_args = {k: v[1] for k, v in network_info.items()}
-
+ 
          network_def = ModuleDict(networks)
 -        network_tx = optax.adam(learning_rate=config['lr'])
 +        if config['lr_decay_steps'] > 0:
@@ -258,7 +258,7 @@ index 53109ab..75123d7 100644
 +        network_tx = optax.adam(learning_rate=lr_schedule)
          network_params = network_def.init(init_rng, **network_args)['params']
          network = TrainState.create(network_def, network_params, tx=network_tx)
-
+ 
 @@ -295,8 +431,16 @@ def get_config():
              # Agent hyperparameters.
              agent_name='crl',  # Agent name.
@@ -416,7 +416,7 @@ index 79852cb..d231c41 100644
 +                residual_span=int(config.get('actor_residual_span', 4)),
 +                residual_use_skip=bool(config.get('actor_residual_use_skip', True)),
              )
-
+ 
          # Define the dual lambda variable.
 @@ -299,6 +369,12 @@ def get_config():
              lr=3e-4,  # Learning rate.
@@ -461,7 +461,7 @@ index 79852cb..d231c41 100644
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
 diff --git a/impls/main.py b/impls/main.py
-index 3660e03..1af37da 100644
+index 3660e03..a3f68b3 100644
 --- a/impls/main.py
 +++ b/impls/main.py
 @@ -1,10 +1,14 @@
@@ -473,7 +473,7 @@ index 3660e03..1af37da 100644
 +import signal
  import time
  from collections import defaultdict
-
+ 
  import jax
 +import jax.numpy as jnp
  import numpy as np
@@ -486,7 +486,7 @@ index 3660e03..1af37da 100644
 +flags.DEFINE_string('exp_name', None, 'Experiment name override (useful for resuming into the same directory).')
  flags.DEFINE_string('restore_path', None, 'Restore path.')
  flags.DEFINE_integer('restore_epoch', None, 'Restore epoch.')
-
+ 
  flags.DEFINE_integer('train_steps', 1000000, 'Number of training steps.')
  flags.DEFINE_integer('log_interval', 5000, 'Logging interval.')
 +flags.DEFINE_integer(
@@ -497,7 +497,7 @@ index 3660e03..1af37da 100644
  flags.DEFINE_integer('eval_interval', 100000, 'Evaluation interval.')
  flags.DEFINE_integer('save_interval', 1000000, 'Saving interval.')
 +flags.DEFINE_bool('disable_tqdm', False, 'Disable tqdm progress bars (reduces stderr spam).')
-
+ 
  flags.DEFINE_integer('eval_tasks', None, 'Number of tasks to evaluate (None for all).')
  flags.DEFINE_integer('eval_episodes', 20, 'Number of episodes for each task.')
  flags.DEFINE_float('eval_temperature', 0, 'Actor temperature for evaluation.')
@@ -514,10 +514,10 @@ index 3660e03..1af37da 100644
 +    True,
 +    'If restore_path points to a run dir with flags.json, merge agent config/env_name from it (helps eval/resume).',
 +)
-
+ 
  config_flags.DEFINE_config_file('agent', 'agents/gciql.py', lock_config=False)
-
-
+ 
+ 
 +def _infer_latest_epoch_from_dir(restore_dir: str) -> int | None:
 +    try:
 +        epochs = []
@@ -698,12 +698,12 @@ index 3660e03..1af37da 100644
 -    exp_name = get_exp_name(FLAGS.seed)
 +    exp_name = FLAGS.exp_name or get_exp_name(FLAGS.seed)
      setup_wandb(project='OGBench', group=FLAGS.run_group, name=exp_name)
-
+ 
      FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, FLAGS.run_group, exp_name)
 @@ -53,9 +248,15 @@ def main(_):
      with open(os.path.join(FLAGS.save_dir, 'flags.json'), 'w') as f:
          json.dump(flag_dict, f)
-
+ 
 +    # Initialize RNGs early so env/dataset creation (and their initial resets) are reproducible.
 +    random.seed(FLAGS.seed)
 +    np.random.seed(FLAGS.seed)
@@ -714,12 +714,12 @@ index 3660e03..1af37da 100644
 +    env, train_dataset, val_dataset = make_env_and_datasets(
 +        FLAGS.env_name, frame_stack=config['frame_stack'], seed=FLAGS.seed
 +    )
-
+ 
      dataset_class = {
          'GCDataset': GCDataset,
 @@ -66,9 +267,6 @@ def main(_):
          val_dataset = dataset_class(Dataset.create(**val_dataset), config)
-
+ 
      # Initialize agent.
 -    random.seed(FLAGS.seed)
 -    np.random.seed(FLAGS.seed)
@@ -727,7 +727,7 @@ index 3660e03..1af37da 100644
      example_batch = train_dataset.sample(1)
      if config['discrete']:
          # Fill with the maximum action to let the agent know the action space size.
-@@ -85,71 +283,284 @@ def main(_):
+@@ -85,71 +283,288 @@ def main(_):
      # Restore agent.
      if FLAGS.restore_path is not None:
          agent = restore_agent(agent, FLAGS.restore_path, FLAGS.restore_epoch)
@@ -789,7 +789,11 @@ index 3660e03..1af37da 100644
 +        eval_batch = train_dataset.sample(config['batch_size'])
 +        if config['discrete']:
 +            eval_batch['actions'] = np.full_like(eval_batch['actions'], env.action_space.n - 1)
-+        if 'critic' in eval_agent.network.params:
++        modules = getattr(getattr(eval_agent.network, 'model_def', None), 'modules', {})
++        has_critic = hasattr(modules, 'keys') and 'critic' in modules
++        has_value = hasattr(modules, 'keys') and 'value' in modules
++        q_vals = None
++        if has_critic:
 +            critic_eval_num_iters = config.get('critic_eval_num_iters', None)
 +            q_vals = eval_agent.network.select('critic')(
 +                eval_batch['observations'],
@@ -801,7 +805,7 @@ index 3660e03..1af37da 100644
 +            eval_metrics['evaluation/Q_mean'] = float(q_vals.mean())
 +            eval_metrics['evaluation/Q_std'] = float(q_vals.std())
 +            eval_metrics['evaluation/Q_abs_max'] = float(np.abs(q_vals).max())
-+        elif 'value' in eval_agent.network.params:
++        elif has_value:
 +            v_vals = eval_agent.network.select('value')(
 +                eval_batch['observations'],
 +                eval_batch['value_goals'],
@@ -867,7 +871,7 @@ index 3660e03..1af37da 100644
 +        eval_metrics['time/total_time'] = time.time() - first_time
 +        wandb.log(eval_metrics, step=step)
 +        eval_logger.log(eval_metrics, step=step)
-
+ 
      # Train agent.
      train_logger = CsvLogger(os.path.join(FLAGS.save_dir, 'train.csv'))
      eval_logger = CsvLogger(os.path.join(FLAGS.save_dir, 'eval.csv'))
@@ -941,7 +945,7 @@ index 3660e03..1af37da 100644
          # Update agent.
          batch = train_dataset.sample(config['batch_size'])
          agent, update_info = agent.update(batch)
-
+ 
 +        # One-time debug: dump param/grad key structure so we can fix per-module grad norms.
 +        if i == start_i:
 +            def _key_structure(tree, prefix=''):
@@ -995,7 +999,7 @@ index 3660e03..1af37da 100644
 +
              wandb.log(train_metrics, step=i)
              train_logger.log(train_metrics, step=i)
-
+ 
 +        # If the job is about to be killed (time limit / preemption), save once and exit cleanly.
 +        if terminate_requested['flag']:
 +            try:
@@ -1052,7 +1056,7 @@ index 3660e03..1af37da 100644
 +                except Exception:
 +                    print('Warning: eval_on_cpu requested but CPU backend unavailable; evaluating on current device.')
 +            run_evaluation(step=i, eval_agent=eval_agent)
-
+ 
          # Save agent.
          if i % FLAGS.save_interval == 0:
 diff --git a/impls/utils/env_utils.py b/impls/utils/env_utils.py
@@ -1061,12 +1065,12 @@ index 6b17e11..863dd39 100644
 +++ b/impls/utils/env_utils.py
 @@ -76,7 +76,7 @@ class FrameStackWrapper(gymnasium.Wrapper):
          return self.get_observation(), reward, terminated, truncated, info
-
-
+ 
+ 
 -def make_env_and_datasets(dataset_name, frame_stack=None):
 +def make_env_and_datasets(dataset_name, frame_stack=None, seed=None):
      """Make OGBench environment and datasets.
-
+ 
      Args:
 @@ -87,13 +87,27 @@ def make_env_and_datasets(dataset_name, frame_stack=None):
          A tuple of the environment, training dataset, and validation dataset.
@@ -1082,10 +1086,10 @@ index 6b17e11..863dd39 100644
 +        )
      train_dataset = Dataset.create(**train_dataset)
      val_dataset = Dataset.create(**val_dataset)
-
+ 
      if frame_stack is not None:
          env = FrameStackWrapper(env, frame_stack)
-
+ 
 -    env.reset()
 +    # Ensure the environment RNG is seeded deterministically when requested.
 +    try:
@@ -1096,20 +1100,20 @@ index 6b17e11..863dd39 100644
 +    except TypeError:
 +        # Some envs may not support gymnasium's reset(seed=...).
 +        env.reset()
-
+ 
      return env, train_dataset, val_dataset
 diff --git a/impls/utils/evaluation.py b/impls/utils/evaluation.py
-index a3a9944..9f9f61c 100644
+index a3a9944..5183029 100644
 --- a/impls/utils/evaluation.py
 +++ b/impls/utils/evaluation.py
 @@ -2,6 +2,7 @@ from collections import defaultdict
-
+ 
  import jax
  import numpy as np
 +import jax.numpy as jnp
  from tqdm import trange
-
-
+ 
+ 
 @@ -44,6 +45,10 @@ def evaluate(
      video_frame_skip=3,
      eval_temperature=0,
@@ -1120,11 +1124,11 @@ index a3a9944..9f9f61c 100644
 +    episode_seed_base=None,
  ):
      """Evaluate the agent in the environment.
-
-@@ -65,24 +70,179 @@ def evaluate(
+ 
+@@ -65,24 +70,193 @@ def evaluate(
      trajs = []
      stats = defaultdict(list)
-
+ 
 +    def _cfg_get(key, default=None):
 +        if config is None:
 +            return default
@@ -1137,6 +1141,10 @@ index a3a9944..9f9f61c 100644
 +                return default
 +
 +    critic_eval_num_iters = _cfg_get('critic_eval_num_iters', None)
++    modules = getattr(getattr(agent.network, 'model_def', None), 'modules', {})
++    has_critic = hasattr(modules, 'keys') and 'critic' in modules
++    has_value = hasattr(modules, 'keys') and 'value' in modules
++    has_dynamics = hasattr(modules, 'keys') and 'dynamics' in modules
 +
 +    def _is_finite(x) -> bool:
 +        try:
@@ -1145,13 +1153,23 @@ index a3a9944..9f9f61c 100644
 +            return False
 +
 +    def _critic_score(ob, goal, action):
-+        # CRL critic outputs an ensemble of bilinear scores; match actor loss aggregation (min over ensemble).
-+        v = agent.network.select('critic')(
-+            ob[None, ...],
-+            goal[None, ...],
-+            action[None, ...],
-+            num_iters=critic_eval_num_iters,
-+        )
++        if has_critic:
++            # CRL critic outputs an ensemble of bilinear scores; match actor loss aggregation (min over ensemble).
++            v = agent.network.select('critic')(
++                ob[None, ...],
++                goal[None, ...],
++                action[None, ...],
++                num_iters=critic_eval_num_iters,
++            )
++        elif has_value and has_dynamics:
++            # QRL has no action-conditioned critic. Score actions through latent dynamics followed by negative value.
++            _, ob_reps, goal_reps = agent.network.select('value')(ob[None, ...], goal[None, ...], info=True)
++            pred_next_ob_reps = ob_reps + agent.network.select('dynamics')(
++                jnp.concatenate([ob_reps, action[None, ...]], axis=-1)
++            )
++            v = -agent.network.select('value')(pred_next_ob_reps, goal_reps, is_phi=True)
++        else:
++            raise ValueError('Action refinement requires either a critic module or a value+dynamics pair.')
 +        if hasattr(v, 'ndim') and v.ndim >= 2:
 +            # v shape: (E, B) or (B,). For B=1, take min over ensemble.
 +            if v.ndim == 2:
@@ -1267,7 +1285,7 @@ index a3a9944..9f9f61c 100644
      for i in trange(num_eval_episodes + num_video_episodes):
          traj = defaultdict(list)
          should_render = i >= num_eval_episodes
-
+ 
 -        observation, info = env.reset(options=dict(task_id=task_id, render_goal=should_render))
 +        reset_kwargs = dict(options=dict(task_id=task_id, render_goal=should_render))
 +        if episode_seed_base is not None:
@@ -1303,10 +1321,10 @@ index a3a9944..9f9f61c 100644
 +                action, refine_info = _refine_action(observation, goal, action0)
 +                if refine_info is not None:
 +                    refine_step_stats.append(refine_info)
-
+ 
              next_observation, reward, terminated, truncated, info = env.step(action)
              done = terminated or truncated
-@@ -106,6 +266,22 @@ def evaluate(
+@@ -106,6 +280,22 @@ def evaluate(
              add_to(traj, transition)
              observation = next_observation
          if i < num_eval_episodes:
@@ -1339,12 +1357,12 @@ index 48d8b11..4187a64 100644
  import pickle
 +import re
  from typing import Any, Dict, Mapping, Sequence
-
+ 
  import flax
 @@ -136,25 +137,24 @@ class TrainState(flax.struct.PyTreeNode):
          """
          grads, info = jax.grad(loss_fn, has_aux=True)(self.params)
-
+ 
 -        grad_max = jax.tree_util.tree_map(jnp.max, grads)
 -        grad_min = jax.tree_util.tree_map(jnp.min, grads)
 -        grad_norm = jax.tree_util.tree_map(jnp.linalg.norm, grads)
@@ -1382,16 +1400,16 @@ index 48d8b11..4187a64 100644
 +                            break
 +                if sub is not None:
 +                    info[f'grad/{module_name}_global_norm'] = optax.global_norm(sub)
-
+ 
          return self.apply_gradients(grads=grads), info
-
+ 
 @@ -187,16 +187,31 @@ def restore_agent(agent, restore_path, restore_epoch):
          restore_epoch: Epoch number.
      """
      candidates = glob.glob(restore_path)
 -
      assert len(candidates) == 1, f'Found {len(candidates)} candidates: {candidates}'
-
+ 
 -    restore_path = candidates[0] + f'/params_{restore_epoch}.pkl'
 -
 -    with open(restore_path, 'rb') as f:
@@ -1415,12 +1433,12 @@ index 48d8b11..4187a64 100644
 +
 +    with open(params_path, 'rb') as f:
          load_dict = pickle.load(f)
-
+ 
      agent = flax.serialization.from_state_dict(agent, load_dict['agent'])
-
+ 
 -    print(f'Restored from {restore_path}')
 +    print(f'Restored from {params_path}')
-
+ 
      return agent
 diff --git a/impls/utils/log_utils.py b/impls/utils/log_utils.py
 index 9c421dd..3da1eab 100644
@@ -1445,7 +1463,7 @@ index 9c421dd..3da1eab 100644
 +            # Fall back to fresh logging.
 +            self.header = None
 +            self.file = None
-
+ 
      def log(self, row, step):
          row['step'] = step
 @@ -64,9 +79,15 @@ def setup_wandb(
@@ -1464,11 +1482,11 @@ index 9c421dd..3da1eab 100644
 +
      wandb_output_dir = tempfile.mkdtemp()
      tags = [group] if group is not None else None
-
+ 
 @@ -86,6 +107,12 @@ def setup_wandb(
          save_code=True,
      )
-
+ 
 +    # Optional: allow resuming the same W&B run across SLURM preemptions/timeouts.
 +    # If WANDB_RUN_ID is set, W&B will append to the same run (resume=allow by default).
 +    if wandb_run_id:
@@ -1476,25 +1494,25 @@ index 9c421dd..3da1eab 100644
 +        init_kwargs['resume'] = wandb_resume or 'allow'
 +
      run = wandb.init(**init_kwargs)
-
+ 
      return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..c792131 100644
+index 4ee2b26..af71cd7 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
 @@ -6,6 +6,8 @@ import flax.linen as nn
  import jax
  import jax.numpy as jnp
-
+ 
 +from .positional_encoding import sinusoidal_step_encoding
 +
-
+ 
  def default_init(scale=1.0):
      """Default kernel initializer."""
-@@ -60,6 +62,375 @@ class MLP(nn.Module):
+@@ -60,6 +62,384 @@ class MLP(nn.Module):
          return x
-
-
+ 
+ 
 +class ResNetBlock(nn.Module):
 +    hidden_dim: int
 +    layer_norm: bool = True
@@ -1611,10 +1629,19 @@ index 4ee2b26..c792131 100644
 +        num_dense_layers = int(self.num_dense_layers)
 +        if num_dense_layers <= 0:
 +            raise ValueError(f'num_dense_layers must be positive. Got {num_dense_layers}.')
-+        if iters > self.max_iters:
-+            raise ValueError(f'num_iters={iters} exceeds max_iters={self.max_iters}')
 +        if self.ln_mode not in ('pre_loop', 'per_layer'):
 +            raise ValueError(f"Unsupported ln_mode={self.ln_mode!r}. Use 'pre_loop' or 'per_layer'.")
++
++        # `max_iters` is only a hard limit when the backbone materializes per-iteration
++        # parameters. Fully shared configs can safely extrapolate to larger `num_iters`.
++        has_discrete_step_params = self.use_step_info and not self.use_sinusoidal_step_encoding
++        has_per_iter_alpha = self.use_layerscale and not self.shared_alpha
++        has_per_iter_ln = self.layer_norm and not self.tied_layer_norm
++        requires_iter_bound = has_discrete_step_params or has_per_iter_alpha or has_per_iter_ln
++        if requires_iter_bound and iters > self.max_iters:
++            raise ValueError(
++                f'num_iters={iters} exceeds max_iters={self.max_iters} for recur_tied with per-iteration parameters'
++            )
 +
 +        h = nn.Dense(self.hidden_dim)(x)
 +
@@ -1866,8 +1893,8 @@ index 4ee2b26..c792131 100644
 +
  class LengthNormalize(nn.Module):
      """Length normalization layer.
-
-@@ -164,9 +535,56 @@ class GCActor(nn.Module):
+ 
+@@ -164,9 +544,56 @@ class GCActor(nn.Module):
      const_std: bool = True
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -1877,7 +1904,7 @@ index 4ee2b26..c792131 100644
 +    residual_num_dense_layers: int = 4
 +    residual_span: int = 4
 +    residual_use_skip: bool = True
-
+ 
      def setup(self):
 -        self.actor_net = MLP(self.hidden_dims, activate_final=True)
 +        if self.backbone == 'mlp':
@@ -1925,7 +1952,7 @@ index 4ee2b26..c792131 100644
          self.mean_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
          if self.state_dependent_std:
              self.log_std_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
-@@ -230,9 +648,56 @@ class GCDiscreteActor(nn.Module):
+@@ -230,9 +657,56 @@ class GCDiscreteActor(nn.Module):
      action_dim: int
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -1935,7 +1962,7 @@ index 4ee2b26..c792131 100644
 +    residual_num_dense_layers: int = 4
 +    residual_span: int = 4
 +    residual_use_skip: bool = True
-
+ 
      def setup(self):
 -        self.actor_net = MLP(self.hidden_dims, activate_final=True)
 +        if self.backbone == 'mlp':
@@ -1981,9 +2008,9 @@ index 4ee2b26..c792131 100644
 +        else:
 +            raise ValueError(f'Unsupported actor backbone: {self.backbone!r}')
          self.logit_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
-
+ 
      def __call__(
-@@ -347,16 +812,129 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +821,129 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
@@ -2008,7 +2035,7 @@ index 4ee2b26..c792131 100644
 +    partial_cycle_step_params: bool = True
 +    partial_block_schedule: str = 'grouped'
 +    layerscale_init: float = 1e-2
-
+ 
      def setup(self):
 -        mlp_module = MLP
 +        backbone = self.backbone
@@ -2107,18 +2134,18 @@ index 4ee2b26..c792131 100644
          if self.ensemble:
 -            mlp_module = ensemblize(mlp_module, 2)
 +            module_cls = ensemblize(module_cls, 2)
-
+ 
 -        self.phi = mlp_module((*self.hidden_dims, self.latent_dim), activate_final=False, layer_norm=self.layer_norm)
 -        self.psi = mlp_module((*self.hidden_dims, self.latent_dim), activate_final=False, layer_norm=self.layer_norm)
 +        self.phi = module_cls(**phi_kwargs)
 +        self.psi = module_cls(**psi_kwargs)
-
+ 
 -    def __call__(self, observations, goals, actions=None, info=False):
 +    def __call__(self, observations, goals, actions=None, info=False, *, num_iters=None):
          """Return the value/critic function.
-
+ 
          Args:
-@@ -364,6 +942,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +951,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -2126,10 +2153,10 @@ index 4ee2b26..c792131 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,8 +954,13 @@ class GCBilinearValue(nn.Module):
+@@ -375,8 +963,13 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
-
+ 
 -        phi = self.phi(phi_inputs)
 -        psi = self.psi(goals)
 +        if self.backbone in ('recur_tied', 'partial_tied'):
@@ -2139,22 +2166,22 @@ index 4ee2b26..c792131 100644
 +        else:
 +            phi = self.phi(phi_inputs)
 +            psi = self.psi(goals)
-
+ 
          v = (phi * psi / jnp.sqrt(self.latent_dim)).sum(axis=-1)
-
-@@ -394,9 +978,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
-
+ 
+@@ -394,9 +987,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+ 
      action_dim: int = None
-
+ 
 -    def __call__(self, observations, goals=None, actions=None, info=False):
 +    def __call__(self, observations, goals=None, actions=None, info=False, *, num_iters=None):
          actions = jnp.eye(self.action_dim)[actions]
 -        return super().__call__(observations, goals, actions, info)
 +        return super().__call__(observations, goals, actions, info, num_iters=num_iters)
-
-
+ 
+ 
  class GCMRNValue(nn.Module):
-@@ -416,9 +1000,87 @@ class GCMRNValue(nn.Module):
+@@ -416,9 +1009,87 @@ class GCMRNValue(nn.Module):
      latent_dim: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -2178,7 +2205,7 @@ index 4ee2b26..c792131 100644
 +    partial_cycle_step_params: bool = True
 +    partial_block_schedule: str = 'grouped'
 +    layerscale_init: float = 1e-2
-
+ 
      def setup(self):
 -        self.phi = MLP((*self.hidden_dims, self.latent_dim), activate_final=False, layer_norm=self.layer_norm)
 +        backbone = self.backbone
@@ -2240,10 +2267,10 @@ index 4ee2b26..c792131 100644
 +            raise ValueError(f'Unsupported backbone: {backbone}')
 +
 +        self.phi = module_cls(**phi_kwargs)
-
+ 
      def __call__(self, observations, goals, is_phi=False, info=False):
          """Return the MRN value function.
-@@ -471,9 +1133,87 @@ class GCIQEValue(nn.Module):
+@@ -471,9 +1142,87 @@ class GCIQEValue(nn.Module):
      dim_per_component: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -2267,7 +2294,7 @@ index 4ee2b26..c792131 100644
 +    partial_cycle_step_params: bool = True
 +    partial_block_schedule: str = 'grouped'
 +    layerscale_init: float = 1e-2
-
+ 
      def setup(self):
 -        self.phi = MLP((*self.hidden_dims, self.latent_dim), activate_final=False, layer_norm=self.layer_norm)
 +        backbone = self.backbone
@@ -2330,32 +2357,5 @@ index 4ee2b26..c792131 100644
 +
 +        self.phi = module_cls(**phi_kwargs)
          self.alpha = Param()
-
+ 
      def __call__(self, observations, goals, is_phi=False, info=False):
-diff --git a/impls/utils/positional_encoding.py b/impls/utils/positional_encoding.py
-new file mode 100644
-index 0000000..5f5a5e4
---- /dev/null
-+++ b/impls/utils/positional_encoding.py
-@@ -0,0 +1,21 @@
-+import jax.numpy as jnp
-+
-+
-+def sinusoidal_step_encoding(step, max_steps, dim):
-+    """Return a sinusoidal encoding vector of shape (dim,)."""
-+    del max_steps  # Kept for API compatibility with current callers.
-+
-+    step = jnp.asarray(step, dtype=jnp.float32)
-+    half_dim = dim // 2
-+    if half_dim == 0:
-+        return jnp.zeros((dim,), dtype=jnp.float32)
-+
-+    freq = jnp.arange(half_dim, dtype=jnp.float32)
-+    scale = jnp.maximum(1, half_dim - 1)
-+    inv_freq = jnp.exp(-jnp.log(10000.0) * freq / scale)
-+    angles = step * inv_freq
-+
-+    embedding = jnp.concatenate([jnp.sin(angles), jnp.cos(angles)], axis=0)
-+    if dim % 2 == 1:
-+        embedding = jnp.pad(embedding, (0, 1))
-+    return embedding
