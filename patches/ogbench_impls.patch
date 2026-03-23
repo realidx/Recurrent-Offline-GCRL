@@ -316,6 +316,103 @@ index 53109ab..75123d7 100644
          )
      )
      return config
+diff --git a/impls/agents/hiql.py b/impls/agents/hiql.py
+index 63e5dee..7a3c8e3 100644
+--- a/impls/agents/hiql.py
++++ b/impls/agents/hiql.py
+@@ -8,7 +8,7 @@ import ml_collections
+ import optax
+ from utils.encoders import GCEncoder, encoder_modules
+ from utils.flax_utils import ModuleDict, TrainState, nonpytree_field
+-from utils.networks import MLP, GCActor, GCDiscreteActor, GCValue, Identity, LengthNormalize
++from utils.networks import MLP, GCActor, GCDiscreteActor, GCRecurrentValue, GCValue, Identity, LengthNormalize
+ 
+ 
+ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -259,18 +259,44 @@ class HIQLAgent(flax.struct.PyTreeNode):
+             high_actor_encoder_def = None
+ 
+         # Define value and actor networks.
+-        value_def = GCValue(
+-            hidden_dims=config['value_hidden_dims'],
+-            layer_norm=config['layer_norm'],
+-            ensemble=True,
+-            gc_encoder=value_encoder_def,
+-        )
+-        target_value_def = GCValue(
+-            hidden_dims=config['value_hidden_dims'],
+-            layer_norm=config['layer_norm'],
+-            ensemble=True,
+-            gc_encoder=target_value_encoder_def,
+-        )
++        value_backbone = str(config.get('value_backbone', 'mlp'))
++        if value_backbone == 'mlp':
++            value_def = GCValue(
++                hidden_dims=config['value_hidden_dims'],
++                layer_norm=config['layer_norm'],
++                ensemble=True,
++                gc_encoder=value_encoder_def,
++            )
++            target_value_def = GCValue(
++                hidden_dims=config['value_hidden_dims'],
++                layer_norm=config['layer_norm'],
++                ensemble=True,
++                gc_encoder=target_value_encoder_def,
++            )
++        elif value_backbone == 'recur_tied':
++            recur_value_kwargs = dict(
++                hidden_dims=config['value_hidden_dims'],
++                layer_norm=config['layer_norm'],
++                ensemble=True,
++                backbone_hidden_dim=None
++                if not config.get('value_backbone_hidden_dim')
++                else int(config.get('value_backbone_hidden_dim')),
++                recur_num_iters=int(config.get('value_recur_iters', 4)),
++                recur_num_dense_layers=int(config.get('value_recur_num_dense_layers', 2)),
++                recur_max_iters=int(config.get('value_recur_max_iters', 4)),
++                recur_tied_layer_norm=bool(config.get('value_recur_tied_ln', True)),
++                recur_ln_mode=str(config.get('value_recur_ln_mode', 'pre_loop')),
++                recur_use_step_info=bool(config.get('value_recur_use_step_info', False)),
++                recur_sinusoidal=bool(config.get('value_recur_sinusoidal', False)),
++                recur_use_film=bool(config.get('value_recur_use_film', True)),
++                recur_use_layerscale=bool(config.get('value_recur_use_layerscale', True)),
++                recur_shared_alpha=bool(config.get('value_recur_shared_alpha', True)),
++                layerscale_init=float(config.get('value_layerscale_init', 1e-2)),
++            )
++            value_def = GCRecurrentValue(gc_encoder=value_encoder_def, **recur_value_kwargs)
++            target_value_def = GCRecurrentValue(gc_encoder=target_value_encoder_def, **recur_value_kwargs)
++        else:
++            raise ValueError(f'Unsupported value_backbone: {value_backbone}')
+ 
+         if config['discrete']:
+             low_actor_def = GCDiscreteActor(
+@@ -325,6 +351,8 @@ def get_config():
+             batch_size=1024,  # Batch size.
+             actor_hidden_dims=(512, 512, 512),  # Actor network hidden dimensions.
+             value_hidden_dims=(512, 512, 512),  # Value network hidden dimensions.
++            value_backbone='mlp',  # 'mlp' | 'recur_tied'
++            value_backbone_hidden_dim=0,  # Optional recurrent hidden width override. 0 disables.
+             layer_norm=True,  # Whether to use layer normalization.
+             discount=0.99,  # Discount factor.
+             tau=0.005,  # Target network update rate.
+@@ -333,6 +361,17 @@ def get_config():
+             high_alpha=3.0,  # High-level AWR temperature.
+             subgoal_steps=25,  # Subgoal steps.
+             rep_dim=10,  # Goal representation dimension.
++            value_recur_iters=4,  # Tied iterations for value_backbone='recur_tied'.
++            value_recur_num_dense_layers=2,  # Dense layers inside each recurrent value update.
++            value_recur_max_iters=4,  # Max supported recurrent iterations for HIQL value.
++            value_recur_tied_ln=True,  # Tie LayerNorm across recurrent value iterations.
++            value_recur_ln_mode='pre_loop',  # 'pre_loop' | 'per_layer' recurrent value LayerNorm placement.
++            value_recur_use_step_info=False,  # Inject step information into the recurrent HIQL value.
++            value_recur_sinusoidal=False,  # Use sinusoidal step encoding for recurrent HIQL value.
++            value_recur_use_film=True,  # Use FiLM inside the recurrent HIQL value.
++            value_recur_use_layerscale=True,  # Use LayerScale in the recurrent HIQL value.
++            value_recur_shared_alpha=True,  # Share one residual scaling alpha across recurrent value iterations.
++            value_layerscale_init=1e-2,  # LayerScale init for recurrent HIQL value.
+             low_actor_rep_grad=False,  # Whether low-actor gradients flow to goal representation (use True for pixels).
+             const_std=True,  # Whether to use constant standard deviation for the actors.
+             discrete=False,  # Whether the action space is discrete.
 diff --git a/impls/agents/qrl.py b/impls/agents/qrl.py
 index 79852cb..d231c41 100644
 --- a/impls/agents/qrl.py
@@ -1497,7 +1594,7 @@ index 9c421dd..3da1eab 100644
  
      return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..af71cd7 100644
+index 4ee2b26..0f12a2b 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
 @@ -6,6 +6,8 @@ import flax.linen as nn
@@ -2010,7 +2107,70 @@ index 4ee2b26..af71cd7 100644
          self.logit_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
  
      def __call__(
-@@ -347,16 +821,129 @@ class GCBilinearValue(nn.Module):
+@@ -314,6 +788,62 @@ class GCValue(nn.Module):
+         return v
+ 
+ 
++class GCRecurrentValue(nn.Module):
++    """Goal-conditioned scalar value function with a tied recurrent backbone."""
++
++    hidden_dims: Sequence[int]
++    layer_norm: bool = True
++    ensemble: bool = True
++    gc_encoder: nn.Module = None
++    backbone_hidden_dim: Optional[int] = None
++    recur_num_iters: int = 4
++    recur_num_dense_layers: int = 2
++    recur_max_iters: int = 4
++    recur_tied_layer_norm: bool = True
++    recur_ln_mode: str = 'pre_loop'
++    recur_use_step_info: bool = False
++    recur_sinusoidal: bool = False
++    recur_use_film: bool = True
++    recur_use_layerscale: bool = True
++    recur_shared_alpha: bool = True
++    layerscale_init: float = 1e-2
++
++    def setup(self):
++        hidden_dim = int(self.backbone_hidden_dim) if self.backbone_hidden_dim is not None else int(self.hidden_dims[-1])
++        value_module = RecurTiedBackbone
++        value_kwargs = dict(
++            hidden_dim=hidden_dim,
++            out_dim=1,
++            num_iters=int(self.recur_num_iters),
++            num_dense_layers=int(self.recur_num_dense_layers),
++            max_iters=int(self.recur_max_iters),
++            layer_norm=self.layer_norm,
++            tied_layer_norm=bool(self.recur_tied_layer_norm),
++            ln_mode=str(self.recur_ln_mode),
++            use_step_info=bool(self.recur_use_step_info),
++            use_sinusoidal_step_encoding=bool(self.recur_sinusoidal),
++            use_film=bool(self.recur_use_film),
++            use_layerscale=bool(self.recur_use_layerscale),
++            shared_alpha=bool(self.recur_shared_alpha),
++            layerscale_init=self.layerscale_init,
++        )
++        if self.ensemble:
++            value_module = ensemblize(value_module, 2)
++        self.value_net = value_module(**value_kwargs)
++
++    def __call__(self, observations, goals=None, actions=None):
++        if self.gc_encoder is not None:
++            inputs = [self.gc_encoder(observations, goals)]
++        else:
++            inputs = [observations]
++            if goals is not None:
++                inputs.append(goals)
++        if actions is not None:
++            inputs.append(actions)
++        inputs = jnp.concatenate(inputs, axis=-1)
++        return self.value_net(inputs).squeeze(-1)
++
++
+ class GCDiscreteCritic(GCValue):
+     """Goal-conditioned critic for discrete actions."""
+ 
+@@ -347,16 +877,129 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
@@ -2145,7 +2305,7 @@ index 4ee2b26..af71cd7 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +951,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +1007,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -2153,7 +2313,7 @@ index 4ee2b26..af71cd7 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,8 +963,13 @@ class GCBilinearValue(nn.Module):
+@@ -375,8 +1019,13 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
@@ -2169,7 +2329,7 @@ index 4ee2b26..af71cd7 100644
  
          v = (phi * psi / jnp.sqrt(self.latent_dim)).sum(axis=-1)
  
-@@ -394,9 +987,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+@@ -394,9 +1043,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
  
      action_dim: int = None
  
@@ -2181,7 +2341,7 @@ index 4ee2b26..af71cd7 100644
  
  
  class GCMRNValue(nn.Module):
-@@ -416,9 +1009,87 @@ class GCMRNValue(nn.Module):
+@@ -416,9 +1065,87 @@ class GCMRNValue(nn.Module):
      latent_dim: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -2270,7 +2430,7 @@ index 4ee2b26..af71cd7 100644
  
      def __call__(self, observations, goals, is_phi=False, info=False):
          """Return the MRN value function.
-@@ -471,9 +1142,87 @@ class GCIQEValue(nn.Module):
+@@ -471,9 +1198,87 @@ class GCIQEValue(nn.Module):
      dim_per_component: int
      layer_norm: bool = True
      encoder: nn.Module = None
