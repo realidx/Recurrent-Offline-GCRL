@@ -9,7 +9,7 @@
 #SBATCH --error=logs/phase_4/slurm-%x-%A_%a.err
 #SBATCH --array=0-2
 
-# Generic OGBench CRL trainer (array by seed).
+# Generic OGBench GCRL trainer (array by seed).
 #
 # Examples:
 # 1) CRL-MLP baseline on humanoidmaze-large-navigate (seed 0 only):
@@ -43,12 +43,19 @@ if [[ ! -f "third_party/ogbench/impls/main.py" ]]; then
   exit 2
 fi
 
-if [[ ! -f "third_party/ogbench/impls/agents/crl.py" ]]; then
-  echo "Error: missing third_party/ogbench/impls/agents/crl.py." >&2
+IMPL_DIR="${SLURM_SUBMIT_DIR}/third_party/ogbench/impls"
+AGENT_PATH="${AGENT_PATH:-agents/crl.py}"
+if [[ ! -f "${IMPL_DIR}/${AGENT_PATH}" ]]; then
+  echo "Error: missing ${IMPL_DIR}/${AGENT_PATH}." >&2
   exit 2
 fi
 
-IMPL_DIR="${SLURM_SUBMIT_DIR}/third_party/ogbench/impls"
+AGENT_NAME="$(basename "${AGENT_PATH}" .py)"
+if [[ ! "${AGENT_NAME}" =~ ^(crl|qrl)$ ]]; then
+  echo "Error: AGENT_PATH='${AGENT_PATH}' is unsupported here. Use agents/crl.py or agents/qrl.py." >&2
+  exit 2
+fi
+
 CONDA_ENV="${CONDA_ENV:-recurrent}"
 CONDA_EXE="${CONDA_EXE:-conda}"
 WANDB_MODE="${WANDB_MODE:-online}"
@@ -74,6 +81,7 @@ SAVE_INTERVAL="${SAVE_INTERVAL:-200000}"
 DISABLE_TQDM="${DISABLE_TQDM:-1}"
 
 # Core CRL defaults.
+LR="${LR:-3e-4}"
 ALPHA="${ALPHA:-0.1}"
 DISCOUNT="${DISCOUNT:-0.99}"
 BATCH_SIZE="${BATCH_SIZE:-1024}"
@@ -95,6 +103,13 @@ ACTOR_P_RANDOMGOAL="${ACTOR_P_RANDOMGOAL:-0.0}"
 ACTOR_GEOM_SAMPLE="${ACTOR_GEOM_SAMPLE:-}"
 LR_DECAY_STEPS="${LR_DECAY_STEPS:-${TRAIN_STEPS}}"
 LR_MIN="${LR_MIN:-1e-5}"
+LAYER_NORM="${LAYER_NORM:-1}"
+LATENT_DIM="${LATENT_DIM:-512}"
+ACTOR_LOSS="${ACTOR_LOSS:-}"
+CONST_STD="${CONST_STD:-1}"
+DISCRETE="${DISCRETE:-0}"
+ENCODER="${ENCODER:-}"
+QUASIMETRIC_TYPE="${QUASIMETRIC_TYPE:-iqe}"
 
 # Critic backbone selection.
 CRITIC_BACKBONE="${CRITIC_BACKBONE:-mlp}"   # mlp | resnet | recur_tied | partial_tied
@@ -155,6 +170,7 @@ export WANDB_RUN_ID="${WANDB_RUN_ID:-ogbench_${RUN_GROUP}_${EXP_NAME}}"
 export WANDB_RESUME="${WANDB_RESUME:-allow}"
 
 AGENT_FLAGS=(
+  "--agent.lr=${LR}"
   "--agent.alpha=${ALPHA}"
   "--agent.discount=${DISCOUNT}"
   "--agent.batch_size=${BATCH_SIZE}"
@@ -163,10 +179,31 @@ AGENT_FLAGS=(
   "--agent.actor_p_randomgoal=${ACTOR_P_RANDOMGOAL}"
   "--agent.critic_backbone=${CRITIC_BACKBONE}"
   "--agent.critic_layerscale_init=${LAYERSCALE_INIT}"
-  "--agent.lr_decay_steps=${LR_DECAY_STEPS}"
-  "--agent.lr_min=${LR_MIN}"
+  "--agent.layer_norm=${LAYER_NORM}"
+  "--agent.latent_dim=${LATENT_DIM}"
+  "--agent.const_std=${CONST_STD}"
+  "--agent.discrete=${DISCRETE}"
   "--agent.actor_backbone=${ACTOR_BACKBONE}"
 )
+
+if [[ "${AGENT_NAME}" == "crl" ]]; then
+  AGENT_FLAGS+=(
+    "--agent.lr_decay_steps=${LR_DECAY_STEPS}"
+    "--agent.lr_min=${LR_MIN}"
+  )
+fi
+
+if [[ -n "${ACTOR_LOSS}" ]]; then
+  AGENT_FLAGS+=("--agent.actor_loss=${ACTOR_LOSS}")
+fi
+
+if [[ -n "${ENCODER}" ]]; then
+  AGENT_FLAGS+=("--agent.encoder=${ENCODER}")
+fi
+
+if [[ "${AGENT_NAME}" == "qrl" ]]; then
+  AGENT_FLAGS+=("--agent.quasimetric_type=${QUASIMETRIC_TYPE}")
+fi
 
 if [[ ! "${ACTOR_BACKBONE}" =~ ^(mlp|resnet|residual_dense|dense_ln)$ ]]; then
   echo "Error: ACTOR_BACKBONE='${ACTOR_BACKBONE}' is invalid. Use mlp, resnet, residual_dense, or dense_ln." >&2
@@ -397,7 +434,7 @@ cmd=(
   "--eval_on_cpu=${EVAL_ON_CPU}"
   "--save_interval=${SAVE_INTERVAL}"
   "--disable_tqdm=${DISABLE_TQDM}"
-  "--agent=agents/crl.py"
+  "--agent=${AGENT_PATH}"
   "--exp_name=${EXP_NAME}"
   "${AGENT_FLAGS[@]}"
 )
@@ -416,7 +453,7 @@ if [[ -n "${RESTORE_EPOCH}" ]]; then
   cmd+=("--restore_epoch=${RESTORE_EPOCH}")
 fi
 
-echo "GENERIC CRL: env=${ENV_NAME} seed=${SEED} backbone=${CRITIC_BACKBONE} alpha=${ALPHA} discount=${DISCOUNT} run_group=${RUN_GROUP} exp=${EXP_NAME}"
+echo "GENERIC ${AGENT_NAME^^}: env=${ENV_NAME} seed=${SEED} backbone=${CRITIC_BACKBONE} alpha=${ALPHA} discount=${DISCOUNT} run_group=${RUN_GROUP} exp=${EXP_NAME}"
 echo "${cmd[*]}"
 
 if ! command -v "${CONDA_EXE}" >/dev/null 2>&1; then
