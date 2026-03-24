@@ -58,6 +58,11 @@ ACTOR_BACKBONE_HIDDEN_DIM="${ACTOR_BACKBONE_HIDDEN_DIM:-0}"
 ACTOR_NUM_DENSE_LAYERS="${ACTOR_NUM_DENSE_LAYERS:-4}"
 ACTOR_RESIDUAL_SPAN="${ACTOR_RESIDUAL_SPAN:-4}"
 ACTOR_RESIDUAL_USE_SKIP="${ACTOR_RESIDUAL_USE_SKIP:-1}"
+LOW_ACTOR_BACKBONE="${LOW_ACTOR_BACKBONE:-}"
+LOW_ACTOR_BACKBONE_HIDDEN_DIM="${LOW_ACTOR_BACKBONE_HIDDEN_DIM:-0}"
+LOW_ACTOR_NUM_BLOCKS="${LOW_ACTOR_NUM_BLOCKS:-2}"
+LOW_ACTOR_BLOCK_NUM_LAYERS="${LOW_ACTOR_BLOCK_NUM_LAYERS:-4}"
+LOW_ACTOR_USE_INNER_LAYER_NORM="${LOW_ACTOR_USE_INNER_LAYER_NORM:-1}"
 LAYER_NORM="${LAYER_NORM:-1}"
 LOW_ALPHA="${LOW_ALPHA:-3.0}"
 HIGH_ALPHA="${HIGH_ALPHA:-3.0}"
@@ -164,6 +169,10 @@ AGENT_FLAGS=(
   "--agent.actor_p_randomgoal=${ACTOR_P_RANDOMGOAL}"
 )
 
+if [[ -n "${LOW_ACTOR_BACKBONE}" ]]; then
+  AGENT_FLAGS+=("--agent.low_actor_backbone=${LOW_ACTOR_BACKBONE}")
+fi
+
 append_hidden_dims "actor_hidden_dims" "${ACTOR_HIDDEN_DIMS}"
 append_hidden_dims "value_hidden_dims" "${VALUE_HIDDEN_DIMS}"
 
@@ -177,6 +186,14 @@ if [[ "${ACTOR_BACKBONE_HIDDEN_DIM}" != "0" ]]; then
     exit 2
   fi
   AGENT_FLAGS+=("--agent.actor_backbone_hidden_dim=${ACTOR_BACKBONE_HIDDEN_DIM}")
+fi
+
+if [[ "${LOW_ACTOR_BACKBONE_HIDDEN_DIM}" != "0" ]]; then
+  if [[ ! "${LOW_ACTOR_BACKBONE_HIDDEN_DIM}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: LOW_ACTOR_BACKBONE_HIDDEN_DIM='${LOW_ACTOR_BACKBONE_HIDDEN_DIM}' is not a positive integer." >&2
+    exit 2
+  fi
+  AGENT_FLAGS+=("--agent.low_actor_backbone_hidden_dim=${LOW_ACTOR_BACKBONE_HIDDEN_DIM}")
 fi
 
 if [[ "${VALUE_BACKBONE_HIDDEN_DIM}" != "0" ]]; then
@@ -197,8 +214,34 @@ case "${ACTOR_BACKBONE}" in
       "--agent.actor_residual_use_skip=${ACTOR_RESIDUAL_USE_SKIP}"
     )
     ;;
+  prenorm_residual)
+    ;;
   *)
-    echo "Error: ACTOR_BACKBONE='${ACTOR_BACKBONE}' is invalid. Use mlp, residual_dense, or dense_ln." >&2
+    echo "Error: ACTOR_BACKBONE='${ACTOR_BACKBONE}' is invalid. Use mlp, residual_dense, dense_ln, or prenorm_residual." >&2
+    exit 2
+    ;;
+esac
+
+LOW_ACTOR_BACKBONE_EFFECTIVE="${LOW_ACTOR_BACKBONE:-${ACTOR_BACKBONE}}"
+case "${LOW_ACTOR_BACKBONE_EFFECTIVE}" in
+  mlp)
+    ;;
+  residual_dense|dense_ln)
+    AGENT_FLAGS+=(
+      "--agent.actor_num_dense_layers=${ACTOR_NUM_DENSE_LAYERS}"
+      "--agent.actor_residual_span=${ACTOR_RESIDUAL_SPAN}"
+      "--agent.actor_residual_use_skip=${ACTOR_RESIDUAL_USE_SKIP}"
+    )
+    ;;
+  prenorm_residual)
+    AGENT_FLAGS+=(
+      "--agent.low_actor_num_blocks=${LOW_ACTOR_NUM_BLOCKS}"
+      "--agent.low_actor_block_num_layers=${LOW_ACTOR_BLOCK_NUM_LAYERS}"
+      "--agent.low_actor_use_inner_layer_norm=${LOW_ACTOR_USE_INNER_LAYER_NORM}"
+    )
+    ;;
+  *)
+    echo "Error: LOW_ACTOR_BACKBONE='${LOW_ACTOR_BACKBONE_EFFECTIVE}' is invalid. Use mlp, residual_dense, dense_ln, or prenorm_residual." >&2
     exit 2
     ;;
 esac
