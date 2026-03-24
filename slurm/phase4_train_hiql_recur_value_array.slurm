@@ -47,6 +47,8 @@ SAVE_INTERVAL="${SAVE_INTERVAL:-200000}"
 DISABLE_TQDM="${DISABLE_TQDM:-1}"
 
 LR="${LR:-3e-4}"
+LR_DECAY_STEPS="${LR_DECAY_STEPS:-0}"
+LR_MIN="${LR_MIN:-1e-5}"
 DISCOUNT="${DISCOUNT:-0.99}"
 BATCH_SIZE="${BATCH_SIZE:-1024}"
 ACTOR_HIDDEN_DIMS="${ACTOR_HIDDEN_DIMS:-512x512x512}"
@@ -141,6 +143,8 @@ append_hidden_dims() {
 
 AGENT_FLAGS=(
   "--agent.lr=${LR}"
+  "--agent.lr_decay_steps=${LR_DECAY_STEPS}"
+  "--agent.lr_min=${LR_MIN}"
   "--agent.discount=${DISCOUNT}"
   "--agent.batch_size=${BATCH_SIZE}"
   "--agent.layer_norm=${LAYER_NORM}"

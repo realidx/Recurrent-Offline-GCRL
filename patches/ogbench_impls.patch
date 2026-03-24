@@ -317,7 +317,7 @@ index 53109ab..75123d7 100644
      )
      return config
 diff --git a/impls/agents/hiql.py b/impls/agents/hiql.py
-index 63e5dee..47d598c 100644
+index 63e5dee..29ce613 100644
 --- a/impls/agents/hiql.py
 +++ b/impls/agents/hiql.py
 @@ -8,7 +8,7 @@ import ml_collections
@@ -430,7 +430,29 @@ index 63e5dee..47d598c 100644
          )
  
          network_info = dict(
-@@ -325,6 +376,16 @@ def get_config():
+@@ -306,7 +357,15 @@ class HIQLAgent(flax.struct.PyTreeNode):
+         network_args = {k: v[1] for k, v in network_info.items()}
+ 
+         network_def = ModuleDict(networks)
+-        network_tx = optax.adam(learning_rate=config['lr'])
++        if config['lr_decay_steps'] > 0:
++            lr_schedule = optax.cosine_decay_schedule(
++                init_value=config['lr'],
++                decay_steps=int(config['lr_decay_steps']),
++                alpha=config['lr_min'] / config['lr'],
++            )
++        else:
++            lr_schedule = config['lr']
++        network_tx = optax.adam(learning_rate=lr_schedule)
+         network_params = network_def.init(init_rng, **network_args)['params']
+         network = TrainState.create(network_def, network_params, tx=network_tx)
+ 
+@@ -322,9 +381,21 @@ def get_config():
+             # Agent hyperparameters.
+             agent_name='hiql',  # Agent name.
+             lr=3e-4,  # Learning rate.
++            lr_decay_steps=0,  # Cosine LR decay over this many steps (0 = constant LR).
++            lr_min=1e-5,  # Minimum LR at end of cosine decay.
              batch_size=1024,  # Batch size.
              actor_hidden_dims=(512, 512, 512),  # Actor network hidden dimensions.
              value_hidden_dims=(512, 512, 512),  # Value network hidden dimensions.
@@ -447,7 +469,7 @@ index 63e5dee..47d598c 100644
              layer_norm=True,  # Whether to use layer normalization.
              discount=0.99,  # Discount factor.
              tau=0.005,  # Target network update rate.
-@@ -333,6 +394,17 @@ def get_config():
+@@ -333,6 +404,17 @@ def get_config():
              high_alpha=3.0,  # High-level AWR temperature.
              subgoal_steps=25,  # Subgoal steps.
              rep_dim=10,  # Goal representation dimension.
