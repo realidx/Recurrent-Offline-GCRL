@@ -51,6 +51,11 @@ DISCOUNT="${DISCOUNT:-0.99}"
 BATCH_SIZE="${BATCH_SIZE:-1024}"
 ACTOR_HIDDEN_DIMS="${ACTOR_HIDDEN_DIMS:-512x512x512}"
 VALUE_HIDDEN_DIMS="${VALUE_HIDDEN_DIMS:-512x512x512}"
+ACTOR_BACKBONE="${ACTOR_BACKBONE:-mlp}"
+ACTOR_BACKBONE_HIDDEN_DIM="${ACTOR_BACKBONE_HIDDEN_DIM:-0}"
+ACTOR_NUM_DENSE_LAYERS="${ACTOR_NUM_DENSE_LAYERS:-4}"
+ACTOR_RESIDUAL_SPAN="${ACTOR_RESIDUAL_SPAN:-4}"
+ACTOR_RESIDUAL_USE_SKIP="${ACTOR_RESIDUAL_USE_SKIP:-1}"
 LAYER_NORM="${LAYER_NORM:-1}"
 LOW_ALPHA="${LOW_ALPHA:-3.0}"
 HIGH_ALPHA="${HIGH_ALPHA:-3.0}"
@@ -62,6 +67,9 @@ ENCODER="${ENCODER:-}"
 
 VALUE_BACKBONE="${VALUE_BACKBONE:-mlp}"
 VALUE_BACKBONE_HIDDEN_DIM="${VALUE_BACKBONE_HIDDEN_DIM:-0}"
+VALUE_NUM_DENSE_LAYERS="${VALUE_NUM_DENSE_LAYERS:-4}"
+VALUE_RESIDUAL_SPAN="${VALUE_RESIDUAL_SPAN:-4}"
+VALUE_RESIDUAL_USE_SKIP="${VALUE_RESIDUAL_USE_SKIP:-1}"
 VALUE_RECUR_ITERS="${VALUE_RECUR_ITERS:-4}"
 VALUE_RECUR_NUM_DENSE_LAYERS="${VALUE_RECUR_NUM_DENSE_LAYERS:-2}"
 VALUE_RECUR_MAX_ITERS="${VALUE_RECUR_MAX_ITERS:-4}"
@@ -142,6 +150,7 @@ AGENT_FLAGS=(
   "--agent.rep_dim=${REP_DIM}"
   "--agent.const_std=${CONST_STD}"
   "--agent.discrete=${DISCRETE}"
+  "--agent.actor_backbone=${ACTOR_BACKBONE}"
   "--agent.value_backbone=${VALUE_BACKBONE}"
   "--agent.value_p_curgoal=${VALUE_P_CURGOAL}"
   "--agent.value_p_trajgoal=${VALUE_P_TRAJGOAL}"
@@ -158,6 +167,14 @@ if [[ -n "${ENCODER}" ]]; then
   AGENT_FLAGS+=("--agent.encoder=${ENCODER}")
 fi
 
+if [[ "${ACTOR_BACKBONE_HIDDEN_DIM}" != "0" ]]; then
+  if [[ ! "${ACTOR_BACKBONE_HIDDEN_DIM}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: ACTOR_BACKBONE_HIDDEN_DIM='${ACTOR_BACKBONE_HIDDEN_DIM}' is not a positive integer." >&2
+    exit 2
+  fi
+  AGENT_FLAGS+=("--agent.actor_backbone_hidden_dim=${ACTOR_BACKBONE_HIDDEN_DIM}")
+fi
+
 if [[ "${VALUE_BACKBONE_HIDDEN_DIM}" != "0" ]]; then
   if [[ ! "${VALUE_BACKBONE_HIDDEN_DIM}" =~ ^[1-9][0-9]*$ ]]; then
     echo "Error: VALUE_BACKBONE_HIDDEN_DIM='${VALUE_BACKBONE_HIDDEN_DIM}' is not a positive integer." >&2
@@ -166,8 +183,31 @@ if [[ "${VALUE_BACKBONE_HIDDEN_DIM}" != "0" ]]; then
   AGENT_FLAGS+=("--agent.value_backbone_hidden_dim=${VALUE_BACKBONE_HIDDEN_DIM}")
 fi
 
+case "${ACTOR_BACKBONE}" in
+  mlp)
+    ;;
+  residual_dense|dense_ln)
+    AGENT_FLAGS+=(
+      "--agent.actor_num_dense_layers=${ACTOR_NUM_DENSE_LAYERS}"
+      "--agent.actor_residual_span=${ACTOR_RESIDUAL_SPAN}"
+      "--agent.actor_residual_use_skip=${ACTOR_RESIDUAL_USE_SKIP}"
+    )
+    ;;
+  *)
+    echo "Error: ACTOR_BACKBONE='${ACTOR_BACKBONE}' is invalid. Use mlp, residual_dense, or dense_ln." >&2
+    exit 2
+    ;;
+esac
+
 case "${VALUE_BACKBONE}" in
   mlp)
+    ;;
+  residual_dense|dense_ln)
+    AGENT_FLAGS+=(
+      "--agent.value_num_dense_layers=${VALUE_NUM_DENSE_LAYERS}"
+      "--agent.value_residual_span=${VALUE_RESIDUAL_SPAN}"
+      "--agent.value_residual_use_skip=${VALUE_RESIDUAL_USE_SKIP}"
+    )
     ;;
   recur_tied)
     AGENT_FLAGS+=(
@@ -185,7 +225,7 @@ case "${VALUE_BACKBONE}" in
     )
     ;;
   *)
-    echo "Error: VALUE_BACKBONE='${VALUE_BACKBONE}' is invalid. Use mlp or recur_tied." >&2
+    echo "Error: VALUE_BACKBONE='${VALUE_BACKBONE}' is invalid. Use mlp, residual_dense, dense_ln, or recur_tied." >&2
     exit 2
     ;;
 esac

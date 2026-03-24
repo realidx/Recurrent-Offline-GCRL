@@ -317,7 +317,7 @@ index 53109ab..75123d7 100644
      )
      return config
 diff --git a/impls/agents/hiql.py b/impls/agents/hiql.py
-index 63e5dee..7a3c8e3 100644
+index 63e5dee..47d598c 100644
 --- a/impls/agents/hiql.py
 +++ b/impls/agents/hiql.py
 @@ -8,7 +8,7 @@ import ml_collections
@@ -329,7 +329,7 @@ index 63e5dee..7a3c8e3 100644
  
  
  class HIQLAgent(flax.struct.PyTreeNode):
-@@ -259,18 +259,44 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -259,24 +259,65 @@ class HIQLAgent(flax.struct.PyTreeNode):
              high_actor_encoder_def = None
  
          # Define value and actor networks.
@@ -344,21 +344,22 @@ index 63e5dee..7a3c8e3 100644
 -            layer_norm=config['layer_norm'],
 -            ensemble=True,
 -            gc_encoder=target_value_encoder_def,
--        )
 +        value_backbone = str(config.get('value_backbone', 'mlp'))
-+        if value_backbone == 'mlp':
-+            value_def = GCValue(
++        if value_backbone in ('mlp', 'residual_dense', 'dense_ln'):
++            value_kwargs = dict(
 +                hidden_dims=config['value_hidden_dims'],
 +                layer_norm=config['layer_norm'],
 +                ensemble=True,
-+                gc_encoder=value_encoder_def,
++                backbone=value_backbone,
++                backbone_hidden_dim=None
++                if not config.get('value_backbone_hidden_dim')
++                else int(config.get('value_backbone_hidden_dim')),
++                residual_num_dense_layers=int(config.get('value_num_dense_layers', 4)),
++                residual_span=int(config.get('value_residual_span', 4)),
++                residual_use_skip=bool(config.get('value_residual_use_skip', True)),
 +            )
-+            target_value_def = GCValue(
-+                hidden_dims=config['value_hidden_dims'],
-+                layer_norm=config['layer_norm'],
-+                ensemble=True,
-+                gc_encoder=target_value_encoder_def,
-+            )
++            value_def = GCValue(gc_encoder=value_encoder_def, **value_kwargs)
++            target_value_def = GCValue(gc_encoder=target_value_encoder_def, **value_kwargs)
 +        elif value_backbone == 'recur_tied':
 +            recur_value_kwargs = dict(
 +                hidden_dims=config['value_hidden_dims'],
@@ -383,19 +384,70 @@ index 63e5dee..7a3c8e3 100644
 +            target_value_def = GCRecurrentValue(gc_encoder=target_value_encoder_def, **recur_value_kwargs)
 +        else:
 +            raise ValueError(f'Unsupported value_backbone: {value_backbone}')
++
++        actor_backbone = str(config.get('actor_backbone', 'mlp'))
++        actor_backbone_hidden_dim = (
++            None if not config.get('actor_backbone_hidden_dim') else int(config.get('actor_backbone_hidden_dim'))
+         )
++        actor_residual_num_dense_layers = int(config.get('actor_num_dense_layers', 4))
++        actor_residual_span = int(config.get('actor_residual_span', 4))
++        actor_residual_use_skip = bool(config.get('actor_residual_use_skip', True))
  
          if config['discrete']:
              low_actor_def = GCDiscreteActor(
-@@ -325,6 +351,8 @@ def get_config():
+                 hidden_dims=config['actor_hidden_dims'],
+                 action_dim=action_dim,
+                 gc_encoder=low_actor_encoder_def,
++                backbone=actor_backbone,
++                backbone_hidden_dim=actor_backbone_hidden_dim,
++                residual_num_dense_layers=actor_residual_num_dense_layers,
++                residual_span=actor_residual_span,
++                residual_use_skip=actor_residual_use_skip,
+             )
+         else:
+             low_actor_def = GCActor(
+@@ -285,6 +326,11 @@ class HIQLAgent(flax.struct.PyTreeNode):
+                 state_dependent_std=False,
+                 const_std=config['const_std'],
+                 gc_encoder=low_actor_encoder_def,
++                backbone=actor_backbone,
++                backbone_hidden_dim=actor_backbone_hidden_dim,
++                residual_num_dense_layers=actor_residual_num_dense_layers,
++                residual_span=actor_residual_span,
++                residual_use_skip=actor_residual_use_skip,
+             )
+ 
+         high_actor_def = GCActor(
+@@ -293,6 +339,11 @@ class HIQLAgent(flax.struct.PyTreeNode):
+             state_dependent_std=False,
+             const_std=config['const_std'],
+             gc_encoder=high_actor_encoder_def,
++            backbone=actor_backbone,
++            backbone_hidden_dim=actor_backbone_hidden_dim,
++            residual_num_dense_layers=actor_residual_num_dense_layers,
++            residual_span=actor_residual_span,
++            residual_use_skip=actor_residual_use_skip,
+         )
+ 
+         network_info = dict(
+@@ -325,6 +376,16 @@ def get_config():
              batch_size=1024,  # Batch size.
              actor_hidden_dims=(512, 512, 512),  # Actor network hidden dimensions.
              value_hidden_dims=(512, 512, 512),  # Value network hidden dimensions.
-+            value_backbone='mlp',  # 'mlp' | 'recur_tied'
++            actor_backbone='mlp',  # 'mlp' | 'residual_dense' | 'dense_ln'
++            actor_backbone_hidden_dim=0,  # Optional actor backbone width override. 0 disables.
++            actor_num_dense_layers=4,  # Dense layers for actor_backbone='residual_dense'/'dense_ln'.
++            actor_residual_span=4,  # Residual span for actor_backbone='residual_dense'/'dense_ln'.
++            actor_residual_use_skip=True,  # Whether actor residual branches use skip connections.
++            value_backbone='mlp',  # 'mlp' | 'residual_dense' | 'dense_ln' | 'recur_tied'
 +            value_backbone_hidden_dim=0,  # Optional recurrent hidden width override. 0 disables.
++            value_num_dense_layers=4,  # Dense layers for value_backbone='residual_dense'/'dense_ln'.
++            value_residual_span=4,  # Residual span for value_backbone='residual_dense'/'dense_ln'.
++            value_residual_use_skip=True,  # Whether value residual branches use skip connections.
              layer_norm=True,  # Whether to use layer normalization.
              discount=0.99,  # Discount factor.
              tau=0.005,  # Target network update rate.
-@@ -333,6 +361,17 @@ def get_config():
+@@ -333,6 +394,17 @@ def get_config():
              high_alpha=3.0,  # High-level AWR temperature.
              subgoal_steps=25,  # Subgoal steps.
              rep_dim=10,  # Goal representation dimension.
@@ -1599,7 +1651,7 @@ index 9c421dd..3da1eab 100644
  
      return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..0f12a2b 100644
+index 4ee2b26..7ca3770 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
 @@ -6,6 +6,8 @@ import flax.linen as nn
@@ -2112,7 +2164,53 @@ index 4ee2b26..0f12a2b 100644
          self.logit_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
  
      def __call__(
-@@ -314,6 +788,62 @@ class GCValue(nn.Module):
+@@ -282,14 +756,40 @@ class GCValue(nn.Module):
+     layer_norm: bool = True
+     ensemble: bool = True
+     gc_encoder: nn.Module = None
++    backbone: str = 'mlp'
++    backbone_hidden_dim: Optional[int] = None
++    residual_num_dense_layers: int = 4
++    residual_span: int = 4
++    residual_use_skip: bool = True
+ 
+     def setup(self):
+-        mlp_module = MLP
+-        if self.ensemble:
+-            mlp_module = ensemblize(mlp_module, 2)
+-        value_net = mlp_module((*self.hidden_dims, 1), activate_final=False, layer_norm=self.layer_norm)
++        if self.backbone == 'mlp':
++            value_module = MLP
++            value_kwargs = dict(
++                hidden_dims=(*self.hidden_dims, 1),
++                activate_final=False,
++                layer_norm=self.layer_norm,
++            )
++        elif self.backbone in ('residual_dense', 'dense_ln'):
++            hidden_dim = (
++                int(self.backbone_hidden_dim)
++                if self.backbone_hidden_dim is not None
++                else int(self.hidden_dims[-1])
++            )
++            value_module = ResidualDenseBackbone
++            value_kwargs = dict(
++                hidden_dim=hidden_dim,
++                out_dim=1,
++                num_dense_layers=int(self.residual_num_dense_layers),
++                residual_span=int(self.residual_span),
++                use_residual=bool(self.residual_use_skip and self.backbone == 'residual_dense'),
++            )
++        else:
++            raise ValueError(f'Unsupported value backbone: {self.backbone!r}')
+ 
+-        self.value_net = value_net
++        if self.ensemble:
++            value_module = ensemblize(value_module, 2)
++        self.value_net = value_module(**value_kwargs)
+ 
+     def __call__(self, observations, goals=None, actions=None):
+         """Return the value/critic function.
+@@ -314,6 +814,62 @@ class GCValue(nn.Module):
          return v
  
  
@@ -2175,7 +2273,7 @@ index 4ee2b26..0f12a2b 100644
  class GCDiscreteCritic(GCValue):
      """Goal-conditioned critic for discrete actions."""
  
-@@ -347,16 +877,129 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +903,129 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
@@ -2310,7 +2408,7 @@ index 4ee2b26..0f12a2b 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +1007,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +1033,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -2318,7 +2416,7 @@ index 4ee2b26..0f12a2b 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,8 +1019,13 @@ class GCBilinearValue(nn.Module):
+@@ -375,8 +1045,13 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
@@ -2334,7 +2432,7 @@ index 4ee2b26..0f12a2b 100644
  
          v = (phi * psi / jnp.sqrt(self.latent_dim)).sum(axis=-1)
  
-@@ -394,9 +1043,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+@@ -394,9 +1069,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
  
      action_dim: int = None
  
@@ -2346,7 +2444,7 @@ index 4ee2b26..0f12a2b 100644
  
  
  class GCMRNValue(nn.Module):
-@@ -416,9 +1065,87 @@ class GCMRNValue(nn.Module):
+@@ -416,9 +1091,87 @@ class GCMRNValue(nn.Module):
      latent_dim: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -2435,7 +2533,7 @@ index 4ee2b26..0f12a2b 100644
  
      def __call__(self, observations, goals, is_phi=False, info=False):
          """Return the MRN value function.
-@@ -471,9 +1198,87 @@ class GCIQEValue(nn.Module):
+@@ -471,9 +1224,87 @@ class GCIQEValue(nn.Module):
      dim_per_component: int
      layer_norm: bool = True
      encoder: nn.Module = None
