@@ -2778,6 +2778,44 @@ index 4ee2b26..4228766 100644
          self.alpha = Param()
  
      def __call__(self, observations, goals, is_phi=False, info=False):
+diff --git a/ogbench/locomaze/maze.py b/ogbench/locomaze/maze.py
+index 6ec8769..6443048 100644
+--- a/ogbench/locomaze/maze.py
++++ b/ogbench/locomaze/maze.py
+@@ -373,6 +373,7 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
+         def reset(self, options=None, *args, **kwargs):
+             if options is None:
+                 options = {}
++            reset_seed = kwargs.get('seed', None)
+             # Set the task goal.
+             if self._reward_task_id is not None:
+                 # Use the pre-defined task.
+@@ -408,6 +409,8 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
+             super().reset(*args, **kwargs)
+ 
+             # Do a few random steps to stabilize the environment.
++            if reset_seed is not None:
++                self.action_space.seed(int(reset_seed))
+             num_random_actions = 40 if loco_env_type == 'humanoid' else 5
+             for _ in range(num_random_actions):
+                 super().step(self.action_space.sample())
+@@ -628,6 +631,7 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
+         def reset(self, options=None, *args, **kwargs):
+             if options is None:
+                 options = {}
++            reset_seed = kwargs.get('seed', None)
+             # Set the task goal.
+             if self._reward_task_id is not None:
+                 # Use the pre-defined task.
+@@ -664,6 +668,8 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
+             super(MazeEnv, self).reset(*args, **kwargs)
+ 
+             # Do a few random steps to stabilize the environment.
++            if reset_seed is not None:
++                self.action_space.seed(int(reset_seed))
+             for _ in range(10):
+                 super(MazeEnv, self).step(self.action_space.sample())
+ 
 diff --git a/impls/utils/positional_encoding.py b/impls/utils/positional_encoding.py
 new file mode 100644
 index 0000000..5f5a5e4
