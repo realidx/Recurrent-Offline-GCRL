@@ -30,11 +30,12 @@ fi
 IMPL_DIR="${SLURM_SUBMIT_DIR}/third_party/ogbench/impls"
 CONDA_ENV="${CONDA_ENV:-recurrent}"
 CONDA_EXE="${CONDA_EXE:-conda}"
-WANDB_MODE="${WANDB_MODE:-online}"
+WANDB_MODE="${WANDB_MODE:-disabled}"
 
 ENV_NAME="${ENV_NAME:-antmaze-large-stitch-v0}"
 RUN_GROUP="${RUN_GROUP:-P4_HIQL_Eval}"
 SAVE_DIR="${SAVE_DIR:-${SLURM_SUBMIT_DIR}/exp}"
+REPORT_DIR="${REPORT_DIR:-${SLURM_SUBMIT_DIR}/eval_reports}"
 DATASET_DIR="${DATASET_DIR:-${SLURM_SUBMIT_DIR}/.ogbench_data}"
 
 SEED="${SEED:-0}"
@@ -100,7 +101,7 @@ else
   export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda}"
 fi
 
-mkdir -p "${DATASET_DIR}" logs/phase_4
+mkdir -p "${DATASET_DIR}" "${REPORT_DIR}" logs/phase_4
 export OGBENCH_DATASET_DIR="${DATASET_DIR}"
 
 cd "${IMPL_DIR}"
@@ -127,7 +128,11 @@ if ! command -v "${CONDA_EXE}" >/dev/null 2>&1; then
 fi
 
 SCORES_FILE="$(mktemp)"
-trap 'rm -f "${SCORES_FILE}"' EXIT
+RUN_ROWS_FILE="$(mktemp)"
+WORK_SAVE_DIR="$(mktemp -d)"
+trap 'rm -f "${SCORES_FILE}" "${RUN_ROWS_FILE}"; rm -rf "${WORK_SAVE_DIR}"' EXIT
+
+REPORT_PREFIX="${REPORT_DIR}/${EXP_NAME}_eval${RESTORE_EPOCH}_seed${SEED}_n${EVAL_REPEATS}"
 
 for (( rep = 1; rep <= EVAL_REPEATS; rep++ )); do
   REP_EXP_NAME="${EXP_NAME}_r$(printf %02d "${rep}")"
@@ -136,7 +141,7 @@ for (( rep = 1; rep <= EVAL_REPEATS; rep++ )); do
   CMD=(
     python main.py
     "--run_group=${RUN_GROUP}"
-    "--save_dir=${SAVE_DIR}"
+    "--save_dir=${WORK_SAVE_DIR}"
     "--seed=${REP_SEED}"
     "--env_name=${ENV_NAME}"
     "--train_steps=0"
@@ -160,22 +165,36 @@ for (( rep = 1; rep <= EVAL_REPEATS; rep++ )); do
 
   "${CONDA_EXE}" run -n "${CONDA_ENV}" env WANDB_MODE="${WANDB_MODE}" "${CMD[@]}"
 
-  EVAL_CSV="${SAVE_DIR}/OGBench/${RUN_GROUP}/${REP_EXP_NAME}/eval.csv"
+  EVAL_CSV="${WORK_SAVE_DIR}/OGBench/${RUN_GROUP}/${REP_EXP_NAME}/eval.csv"
   if [[ ! -f "${EVAL_CSV}" ]]; then
     echo "Error: missing eval.csv for repeat ${rep}: ${EVAL_CSV}" >&2
     exit 4
   fi
 
-  SCORE="$("${CONDA_EXE}" run -n "${CONDA_ENV}" python - "${EVAL_CSV}" <<'PY'
+  SCORE="$("${CONDA_EXE}" run -n "${CONDA_ENV}" python - "${EVAL_CSV}" "${RUN_ROWS_FILE}" "${rep}" <<'PY'
 import csv, sys
-path = sys.argv[1]
+path, rows_out, rep = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(path, newline='') as f:
     rows = list(csv.DictReader(f))
 if not rows:
     raise SystemExit("empty eval.csv")
-score = rows[-1].get('evaluation/overall_success')
+row = dict(rows[-1])
+row['repeat'] = rep
+score = row.get('evaluation/overall_success')
 if score is None or score == '':
     raise SystemExit("missing evaluation/overall_success")
+fieldnames = ['repeat'] + [k for k in rows[-1].keys() if k != 'repeat']
+write_header = False
+try:
+    with open(rows_out, newline='') as existing:
+        write_header = existing.read(1) == ''
+except FileNotFoundError:
+    write_header = True
+with open(rows_out, 'a', newline='') as out:
+    writer = csv.DictWriter(out, fieldnames=fieldnames)
+    if write_header:
+        writer.writeheader()
+    writer.writerow({k: row.get(k, '') for k in fieldnames})
 print(score)
 PY
 )"
@@ -184,11 +203,12 @@ PY
 done
 
 echo "Summary over ${EVAL_REPEATS} repeats:"
-"${CONDA_EXE}" run -n "${CONDA_ENV}" python - "${SCORES_FILE}" <<'PY'
+"${CONDA_EXE}" run -n "${CONDA_ENV}" python - "${SCORES_FILE}" "${RUN_ROWS_FILE}" "${REPORT_PREFIX}" <<'PY'
 import math, sys
-path = sys.argv[1]
+import csv, json
+scores_path, rows_path, report_prefix = sys.argv[1], sys.argv[2], sys.argv[3]
 scores = []
-with open(path) as f:
+with open(scores_path) as f:
     for line in f:
         line = line.strip()
         if line:
@@ -200,9 +220,55 @@ var = sum((x - mean) ** 2 for x in scores) / len(scores)
 std = math.sqrt(var)
 best = max(scores)
 best_idx = max(range(len(scores)), key=lambda i: scores[i]) + 1
+summary = {
+    'overall_success_best': best,
+    'overall_success_best_repeat': best_idx,
+    'overall_success_mean': mean,
+    'overall_success_std': std,
+    'overall_success_all': scores,
+}
+
+with open(rows_path, newline='') as f:
+    rows = list(csv.DictReader(f))
+
+metric_names = [
+    'evaluation/task1_success',
+    'evaluation/task2_success',
+    'evaluation/task3_success',
+    'evaluation/task4_success',
+    'evaluation/task5_success',
+    'evaluation/overall_success',
+    'evaluation/value_mean',
+    'evaluation/value_std',
+    'evaluation/value_abs_max',
+]
+for name in metric_names:
+    vals = []
+    for row in rows:
+        raw = row.get(name, '')
+        if raw not in ('', None):
+            vals.append(float(raw))
+    if vals:
+        m = sum(vals) / len(vals)
+        v = sum((x - m) ** 2 for x in vals) / len(vals)
+        summary[f'{name}_mean'] = m
+        summary[f'{name}_std'] = math.sqrt(v)
+        summary[f'{name}_best'] = max(vals)
+
+json_path = report_prefix + '_summary.json'
+csv_path = report_prefix + '_runs.csv'
+with open(json_path, 'w') as f:
+    json.dump(summary, f, indent=2, sort_keys=True)
+with open(csv_path, 'w', newline='') as out:
+    writer = csv.DictWriter(out, fieldnames=rows[0].keys())
+    writer.writeheader()
+    writer.writerows(rows)
+
 print(f"overall_success_best={best:.6f}")
 print(f"overall_success_best_repeat={best_idx}")
 print(f"overall_success_mean={mean:.6f}")
 print(f"overall_success_std={std:.6f}")
 print("overall_success_all=" + ",".join(f"{x:.6f}" for x in scores))
+print(f"summary_json={json_path}")
+print(f"summary_csv={csv_path}")
 PY
