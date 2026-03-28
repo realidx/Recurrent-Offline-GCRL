@@ -135,7 +135,9 @@ trap 'rm -f "${SCORES_FILE}" "${RUN_ROWS_FILE}"; rm -rf "${WORK_SAVE_DIR}"' EXIT
 REPORT_PREFIX="${REPORT_DIR}/${EXP_NAME}_eval${RESTORE_EPOCH}_seed${SEED}_n${EVAL_REPEATS}"
 
 for (( rep = 1; rep <= EVAL_REPEATS; rep++ )); do
-  REP_EXP_NAME="${EXP_NAME}_r$(printf %02d "${rep}")"
+  rm -rf "${WORK_SAVE_DIR:?}/"*
+
+  REP_EXP_NAME="${EXP_NAME}"
   REP_SEED="${SEED}"
 
   CMD=(
@@ -165,9 +167,9 @@ for (( rep = 1; rep <= EVAL_REPEATS; rep++ )); do
 
   "${CONDA_EXE}" run -n "${CONDA_ENV}" env WANDB_MODE="${WANDB_MODE}" "${CMD[@]}"
 
-  EVAL_CSV="${WORK_SAVE_DIR}/OGBench/${RUN_GROUP}/${REP_EXP_NAME}/eval.csv"
+  EVAL_CSV="$(find "${WORK_SAVE_DIR}" -type f -name eval.csv | head -n 1)"
   if [[ ! -f "${EVAL_CSV}" ]]; then
-    echo "Error: missing eval.csv for repeat ${rep}: ${EVAL_CSV}" >&2
+    echo "Error: missing eval.csv for repeat ${rep} under ${WORK_SAVE_DIR}" >&2
     exit 4
   fi
 
