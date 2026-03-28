@@ -14,7 +14,6 @@
 #SBATCH --time=4:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=24G
-#SBATCH --gpus=h100-47
 #SBATCH --output=logs/phase_4/slurm-%x-%j.out
 #SBATCH --error=logs/phase_4/slurm-%x-%j.err
 
@@ -128,11 +127,19 @@ if ! command -v "${CONDA_EXE}" >/dev/null 2>&1; then
 fi
 
 SCORES_FILE="$(mktemp)"
-RUN_ROWS_FILE="$(mktemp)"
 WORK_SAVE_DIR="$(mktemp -d)"
-trap 'rm -f "${SCORES_FILE}" "${RUN_ROWS_FILE}"; rm -rf "${WORK_SAVE_DIR}"' EXIT
+trap 'rm -f "${SCORES_FILE}"; rm -rf "${WORK_SAVE_DIR}"' EXIT
 
 REPORT_PREFIX="${REPORT_DIR}/${EXP_NAME}_eval${RESTORE_EPOCH}_seed${SEED}_n${EVAL_REPEATS}"
+SUMMARY_JSON="${REPORT_PREFIX}_summary.json"
+RUNS_CSV="${REPORT_PREFIX}_runs.csv"
+SUMMARY_TXT="${REPORT_PREFIX}_summary.txt"
+
+rm -f "${SUMMARY_JSON}" "${RUNS_CSV}" "${SUMMARY_TXT}"
+echo "report_dir=${REPORT_DIR}"
+echo "summary_json=${SUMMARY_JSON}"
+echo "summary_csv=${RUNS_CSV}"
+echo "summary_txt=${SUMMARY_TXT}"
 
 for (( rep = 1; rep <= EVAL_REPEATS; rep++ )); do
   rm -rf "${WORK_SAVE_DIR:?}/"*
@@ -173,7 +180,7 @@ for (( rep = 1; rep <= EVAL_REPEATS; rep++ )); do
     exit 4
   fi
 
-  SCORE="$("${CONDA_EXE}" run -n "${CONDA_ENV}" python - "${EVAL_CSV}" "${RUN_ROWS_FILE}" "${rep}" <<'PY'
+  SCORE="$("${CONDA_EXE}" run -n "${CONDA_ENV}" python - "${EVAL_CSV}" "${RUNS_CSV}" "${rep}" <<'PY'
 import csv, sys
 path, rows_out, rep = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(path, newline='') as f:
@@ -205,10 +212,10 @@ PY
 done
 
 echo "Summary over ${EVAL_REPEATS} repeats:"
-"${CONDA_EXE}" run -n "${CONDA_ENV}" python - "${SCORES_FILE}" "${RUN_ROWS_FILE}" "${REPORT_PREFIX}" <<'PY'
+"${CONDA_EXE}" run -n "${CONDA_ENV}" python - "${SCORES_FILE}" "${RUNS_CSV}" "${SUMMARY_JSON}" "${SUMMARY_TXT}" <<'PY'
 import math, sys
 import csv, json
-scores_path, rows_path, report_prefix = sys.argv[1], sys.argv[2], sys.argv[3]
+scores_path, rows_path, json_path, text_path = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 scores = []
 with open(scores_path) as f:
     for line in f:
@@ -257,14 +264,16 @@ for name in metric_names:
         summary[f'{name}_std'] = math.sqrt(v)
         summary[f'{name}_best'] = max(vals)
 
-json_path = report_prefix + '_summary.json'
-csv_path = report_prefix + '_runs.csv'
 with open(json_path, 'w') as f:
     json.dump(summary, f, indent=2, sort_keys=True)
-with open(csv_path, 'w', newline='') as out:
-    writer = csv.DictWriter(out, fieldnames=rows[0].keys())
-    writer.writeheader()
-    writer.writerows(rows)
+with open(text_path, 'w') as f:
+    f.write(f"overall_success_best={best:.6f}\n")
+    f.write(f"overall_success_best_repeat={best_idx}\n")
+    f.write(f"overall_success_mean={mean:.6f}\n")
+    f.write(f"overall_success_std={std:.6f}\n")
+    f.write("overall_success_all=" + ",".join(f"{x:.6f}" for x in scores) + "\n")
+    f.write(f"summary_json={json_path}\n")
+    f.write(f"summary_csv={rows_path}\n")
 
 print(f"overall_success_best={best:.6f}")
 print(f"overall_success_best_repeat={best_idx}")
@@ -272,5 +281,6 @@ print(f"overall_success_mean={mean:.6f}")
 print(f"overall_success_std={std:.6f}")
 print("overall_success_all=" + ",".join(f"{x:.6f}" for x in scores))
 print(f"summary_json={json_path}")
-print(f"summary_csv={csv_path}")
+print(f"summary_csv={rows_path}")
+print(f"summary_txt={text_path}")
 PY
