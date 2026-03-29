@@ -44,6 +44,7 @@ EVAL_EPISODES="${EVAL_EPISODES:-20}"
 VIDEO_EPISODES="${VIDEO_EPISODES:-0}"
 EVAL_ON_CPU="${EVAL_ON_CPU:-0}"
 SAVE_INTERVAL="${SAVE_INTERVAL:-200000}"
+SAVE_STEPS="${SAVE_STEPS:-}"
 DISABLE_TQDM="${DISABLE_TQDM:-1}"
 
 LR="${LR:-3e-4}"
@@ -343,6 +344,10 @@ CMD=(
 
 if [[ -n "${EVAL_TASKS}" ]]; then
   CMD+=("--eval_tasks=${EVAL_TASKS}")
+fi
+
+if [[ -n "${SAVE_STEPS}" ]]; then
+  CMD+=("--save_steps=${SAVE_STEPS}")
 fi
 
 if [[ -n "${RESTORE_PATH}" ]]; then
