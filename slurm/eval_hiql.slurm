@@ -1,19 +1,19 @@
 #!/bin/bash
 # ---------------------------------------------------------------------------
-# Phase 4 — HIQL checkpoint evaluation
+# HIQL checkpoint evaluation with repeated runs into one eval.csv.
 #
-# Restores one trained HIQL checkpoint and runs evaluation only.
+# This keeps the original "normal" OGBench save layout:
+#   SAVE_DIR/OGBench/RUN_GROUP/EXP_NAME/eval.csv
 #
-# Submit:
-#   sbatch --export=ALL,WANDB_MODE=online,\
-#RESTORE_PATH=/abs/path/to/run_dir,RESTORE_EPOCH=800000,EVAL_REPEATS=20 \
-#     slurm/eval_hiql.slurm
+# Repeated eval runs append rows into that single eval.csv, then the script
+# prints and writes a final summary.
 # ---------------------------------------------------------------------------
 #SBATCH --job-name=p4_hiql_eval
 #SBATCH --partition=gpu-long
 #SBATCH --time=4:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=24G
+#SBATCH --gpus=h100-47
 #SBATCH --output=logs/phase_4/slurm-%x-%j.out
 #SBATCH --error=logs/phase_4/slurm-%x-%j.err
 
@@ -34,7 +34,6 @@ WANDB_MODE="${WANDB_MODE:-disabled}"
 ENV_NAME="${ENV_NAME:-antmaze-large-stitch-v0}"
 RUN_GROUP="${RUN_GROUP:-P4_HIQL_Eval}"
 SAVE_DIR="${SAVE_DIR:-${SLURM_SUBMIT_DIR}/exp}"
-REPORT_DIR="${REPORT_DIR:-${SLURM_SUBMIT_DIR}/eval_reports}"
 DATASET_DIR="${DATASET_DIR:-${SLURM_SUBMIT_DIR}/.ogbench_data}"
 
 SEED="${SEED:-0}"
@@ -90,6 +89,10 @@ fi
 RESTORE_BASENAME="$(basename "${RESTORE_PATH}")"
 DEFAULT_EXP_NAME="sd$(printf %03d "${SEED}")_${RESTORE_BASENAME}_eval${RESTORE_EPOCH}"
 EXP_NAME="${EXP_NAME:-${DEFAULT_EXP_NAME}}"
+TARGET_DIR="${SAVE_DIR}/OGBench/${RUN_GROUP}/${EXP_NAME}"
+EVAL_CSV="${TARGET_DIR}/eval.csv"
+SUMMARY_JSON="${TARGET_DIR}/eval_summary.json"
+SUMMARY_TXT="${TARGET_DIR}/eval_summary.txt"
 
 export MUJOCO_GL="${MUJOCO_GL:-egl}"
 export WANDB_SILENT="${WANDB_SILENT:-true}"
@@ -100,11 +103,15 @@ else
   export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda}"
 fi
 
-mkdir -p "${DATASET_DIR}" "${REPORT_DIR}" logs/phase_4
+mkdir -p "${DATASET_DIR}" logs/phase_4
 export OGBENCH_DATASET_DIR="${DATASET_DIR}"
 
 cd "${IMPL_DIR}"
-echo "cwd=$(pwd) WANDB_MODE=${WANDB_MODE} OGBENCH_DATASET_DIR=${OGBENCH_DATASET_DIR}"
+echo "cwd=$(pwd)"
+echo "target_dir=${TARGET_DIR}"
+echo "eval_csv=${EVAL_CSV}"
+echo "summary_json=${SUMMARY_JSON}"
+echo "summary_txt=${SUMMARY_TXT}"
 
 if ! command -v "${CONDA_EXE}" >/dev/null 2>&1; then
   for conda_sh in \
@@ -126,38 +133,20 @@ if ! command -v "${CONDA_EXE}" >/dev/null 2>&1; then
   exit 3
 fi
 
-SCORES_FILE="$(mktemp)"
-WORK_SAVE_DIR="$(mktemp -d)"
-trap 'rm -f "${SCORES_FILE}"; rm -rf "${WORK_SAVE_DIR}"' EXIT
-
-REPORT_PREFIX="${REPORT_DIR}/${EXP_NAME}_eval${RESTORE_EPOCH}_seed${SEED}_n${EVAL_REPEATS}"
-SUMMARY_JSON="${REPORT_PREFIX}_summary.json"
-RUNS_CSV="${REPORT_PREFIX}_runs.csv"
-SUMMARY_TXT="${REPORT_PREFIX}_summary.txt"
-
-rm -f "${SUMMARY_JSON}" "${RUNS_CSV}" "${SUMMARY_TXT}"
-echo "report_dir=${REPORT_DIR}"
-echo "summary_json=${SUMMARY_JSON}"
-echo "summary_csv=${RUNS_CSV}"
-echo "summary_txt=${SUMMARY_TXT}"
+rm -rf "${TARGET_DIR}"
 
 for (( rep = 1; rep <= EVAL_REPEATS; rep++ )); do
-  rm -rf "${WORK_SAVE_DIR:?}/"*
-
-  REP_EXP_NAME="${EXP_NAME}"
-  REP_SEED="${SEED}"
-
   CMD=(
     python main.py
     "--run_group=${RUN_GROUP}"
-    "--save_dir=${WORK_SAVE_DIR}"
-    "--seed=${REP_SEED}"
+    "--save_dir=${SAVE_DIR}"
+    "--seed=${SEED}"
     "--env_name=${ENV_NAME}"
     "--train_steps=0"
     "--eval_only=1"
     "--restore_path=${RESTORE_PATH}"
     "--restore_epoch=${RESTORE_EPOCH}"
-    "--exp_name=${REP_EXP_NAME}"
+    "--exp_name=${EXP_NAME}"
     "--eval_episodes=${EVAL_EPISODES}"
     "--video_episodes=${VIDEO_EPISODES}"
     "--eval_on_cpu=${EVAL_ON_CPU}"
@@ -169,66 +158,40 @@ for (( rep = 1; rep <= EVAL_REPEATS; rep++ )); do
     CMD+=("--eval_tasks=${EVAL_TASKS}")
   fi
 
-  echo "repeat=${rep}/${EVAL_REPEATS} seed=${REP_SEED} exp_name=${REP_EXP_NAME}"
+  echo "repeat=${rep}/${EVAL_REPEATS} seed=${SEED} exp_name=${EXP_NAME}"
   echo "${CMD[*]}"
 
   "${CONDA_EXE}" run -n "${CONDA_ENV}" env WANDB_MODE="${WANDB_MODE}" "${CMD[@]}"
-
-  EVAL_CSV="$(find "${WORK_SAVE_DIR}" -type f -name eval.csv | head -n 1)"
-  if [[ ! -f "${EVAL_CSV}" ]]; then
-    echo "Error: missing eval.csv for repeat ${rep} under ${WORK_SAVE_DIR}" >&2
-    exit 4
-  fi
-
-  SCORE="$("${CONDA_EXE}" run -n "${CONDA_ENV}" python - "${EVAL_CSV}" "${RUNS_CSV}" "${rep}" <<'PY'
-import csv, sys
-path, rows_out, rep = sys.argv[1], sys.argv[2], sys.argv[3]
-with open(path, newline='') as f:
-    rows = list(csv.DictReader(f))
-if not rows:
-    raise SystemExit("empty eval.csv")
-row = dict(rows[-1])
-row['repeat'] = rep
-score = row.get('evaluation/overall_success')
-if score is None or score == '':
-    raise SystemExit("missing evaluation/overall_success")
-fieldnames = ['repeat'] + [k for k in rows[-1].keys() if k != 'repeat']
-write_header = False
-try:
-    with open(rows_out, newline='') as existing:
-        write_header = existing.read(1) == ''
-except FileNotFoundError:
-    write_header = True
-with open(rows_out, 'a', newline='') as out:
-    writer = csv.DictWriter(out, fieldnames=fieldnames)
-    if write_header:
-        writer.writeheader()
-    writer.writerow({k: row.get(k, '') for k in fieldnames})
-print(score)
-PY
-)"
-  echo "${SCORE}" >> "${SCORES_FILE}"
-  echo "repeat=${rep} overall_success=${SCORE}"
 done
 
+if [[ ! -f "${EVAL_CSV}" ]]; then
+  echo "Error: missing eval.csv after repeated evaluation: ${EVAL_CSV}" >&2
+  exit 4
+fi
+
 echo "Summary over ${EVAL_REPEATS} repeats:"
-"${CONDA_EXE}" run -n "${CONDA_ENV}" python - "${SCORES_FILE}" "${RUNS_CSV}" "${SUMMARY_JSON}" "${SUMMARY_TXT}" <<'PY'
-import math, sys
-import csv, json
-scores_path, rows_path, json_path, text_path = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-scores = []
-with open(scores_path) as f:
-    for line in f:
-        line = line.strip()
-        if line:
-            scores.append(float(line))
-if not scores:
-    raise SystemExit("no scores collected")
+"${CONDA_EXE}" run -n "${CONDA_ENV}" python - "${EVAL_CSV}" "${SUMMARY_JSON}" "${SUMMARY_TXT}" "${EVAL_REPEATS}" <<'PY'
+import csv
+import json
+import math
+import sys
+
+csv_path, json_path, txt_path, repeats = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+
+with open(csv_path, newline='') as f:
+    rows = list(csv.DictReader(f))
+
+if len(rows) < repeats:
+    raise SystemExit(f"expected at least {repeats} rows in eval.csv, found {len(rows)}")
+
+rows = rows[-repeats:]
+scores = [float(r['evaluation/overall_success']) for r in rows]
 mean = sum(scores) / len(scores)
 var = sum((x - mean) ** 2 for x in scores) / len(scores)
 std = math.sqrt(var)
 best = max(scores)
 best_idx = max(range(len(scores)), key=lambda i: scores[i]) + 1
+
 summary = {
     'overall_success_best': best,
     'overall_success_best_repeat': best_idx,
@@ -236,9 +199,6 @@ summary = {
     'overall_success_std': std,
     'overall_success_all': scores,
 }
-
-with open(rows_path, newline='') as f:
-    rows = list(csv.DictReader(f))
 
 metric_names = [
     'evaluation/task1_success',
@@ -266,14 +226,15 @@ for name in metric_names:
 
 with open(json_path, 'w') as f:
     json.dump(summary, f, indent=2, sort_keys=True)
-with open(text_path, 'w') as f:
+
+with open(txt_path, 'w') as f:
     f.write(f"overall_success_best={best:.6f}\n")
     f.write(f"overall_success_best_repeat={best_idx}\n")
     f.write(f"overall_success_mean={mean:.6f}\n")
     f.write(f"overall_success_std={std:.6f}\n")
     f.write("overall_success_all=" + ",".join(f"{x:.6f}" for x in scores) + "\n")
     f.write(f"summary_json={json_path}\n")
-    f.write(f"summary_csv={rows_path}\n")
+    f.write(f"eval_csv={csv_path}\n")
 
 print(f"overall_success_best={best:.6f}")
 print(f"overall_success_best_repeat={best_idx}")
@@ -281,6 +242,6 @@ print(f"overall_success_mean={mean:.6f}")
 print(f"overall_success_std={std:.6f}")
 print("overall_success_all=" + ",".join(f"{x:.6f}" for x in scores))
 print(f"summary_json={json_path}")
-print(f"summary_csv={rows_path}")
-print(f"summary_txt={text_path}")
+print(f"eval_csv={csv_path}")
+print(f"summary_txt={txt_path}")
 PY
