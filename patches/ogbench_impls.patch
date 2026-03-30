@@ -675,11 +675,12 @@ index 79852cb..d231c41 100644
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
 diff --git a/impls/main.py b/impls/main.py
-index 3660e03..363f5e7 100644
+index 3660e03..42248fc 100644
 --- a/impls/main.py
 +++ b/impls/main.py
-@@ -1,10 +1,14 @@
+@@ -1,10 +1,15 @@
 +import glob
++import re
  import json
  import os
 +import pickle
@@ -693,7 +694,7 @@ index 3660e03..363f5e7 100644
  import numpy as np
  import tqdm
  import wandb
-@@ -23,28 +27,227 @@ flags.DEFINE_string('run_group', 'Debug', 'Run group.')
+@@ -23,28 +28,230 @@ flags.DEFINE_string('run_group', 'Debug', 'Run group.')
  flags.DEFINE_integer('seed', 0, 'Random seed.')
  flags.DEFINE_string('env_name', 'antmaze-large-navigate-v0', 'Environment (dataset) name.')
  flags.DEFINE_string('save_dir', 'exp/', 'Save directory.')
@@ -710,7 +711,7 @@ index 3660e03..363f5e7 100644
 +)
  flags.DEFINE_integer('eval_interval', 100000, 'Evaluation interval.')
  flags.DEFINE_integer('save_interval', 1000000, 'Saving interval.')
-+flags.DEFINE_string('save_steps', '', 'Comma-separated explicit save steps. If set, save at these steps in addition to any save_interval behavior.')
++flags.DEFINE_string('save_steps', '', 'Explicit save steps. Accepts comma-, colon-, or whitespace-separated integers. If set, save at these steps in addition to any save_interval behavior.')
 +flags.DEFINE_bool('disable_tqdm', False, 'Disable tqdm progress bars (reduces stderr spam).')
  
  flags.DEFINE_integer('eval_tasks', None, 'Number of tasks to evaluate (None for all).')
@@ -833,9 +834,12 @@ index 3660e03..363f5e7 100644
 +    save_steps = set()
 +    if FLAGS.save_steps:
 +        try:
-+            save_steps = {int(x.strip()) for x in FLAGS.save_steps.split(',') if x.strip()}
++            tokens = [x for x in re.split(r'[\s,:;]+', FLAGS.save_steps) if x]
++            save_steps = {int(x) for x in tokens}
 +        except ValueError as e:
-+            raise ValueError(f'Invalid --save_steps={FLAGS.save_steps!r}; expected comma-separated integers.') from e
++            raise ValueError(
++                f'Invalid --save_steps={FLAGS.save_steps!r}; expected comma-, colon-, or whitespace-separated integers.'
++            ) from e
 +
 +    terminate_requested = {'flag': False, 'sig': None}
 +
@@ -922,7 +926,7 @@ index 3660e03..363f5e7 100644
      setup_wandb(project='OGBench', group=FLAGS.run_group, name=exp_name)
  
      FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, FLAGS.run_group, exp_name)
-@@ -53,9 +256,15 @@ def main(_):
+@@ -53,9 +260,15 @@ def main(_):
      with open(os.path.join(FLAGS.save_dir, 'flags.json'), 'w') as f:
          json.dump(flag_dict, f)
  
@@ -939,7 +943,7 @@ index 3660e03..363f5e7 100644
  
      dataset_class = {
          'GCDataset': GCDataset,
-@@ -66,9 +275,6 @@ def main(_):
+@@ -66,9 +279,6 @@ def main(_):
          val_dataset = dataset_class(Dataset.create(**val_dataset), config)
  
      # Initialize agent.
@@ -949,7 +953,7 @@ index 3660e03..363f5e7 100644
      example_batch = train_dataset.sample(1)
      if config['discrete']:
          # Fill with the maximum action to let the agent know the action space size.
-@@ -85,74 +291,301 @@ def main(_):
+@@ -85,74 +295,301 @@ def main(_):
      # Restore agent.
      if FLAGS.restore_path is not None:
          agent = restore_agent(agent, FLAGS.restore_path, FLAGS.restore_epoch)
@@ -2897,32 +2901,4 @@ index 6ec8769..b609aa0 100644
 +                self.action_space.seed(int(reset_seed))
              for _ in range(10):
                  super(MazeEnv, self).step(self.action_space.sample())
-
-diff --git a/impls/utils/positional_encoding.py b/impls/utils/positional_encoding.py
-new file mode 100644
-index 0000000..f686fa6
---- /dev/null
-+++ b/impls/utils/positional_encoding.py
-@@ -0,0 +1,20 @@
-+import jax.numpy as jnp
-+
-+
-+def sinusoidal_step_encoding(step, max_steps, dim):
-+    """Return a sinusoidal encoding vector of shape (dim,)."""
-+    del max_steps  # Kept for API compatibility with current callers.
-+
-+    step = jnp.asarray(step, dtype=jnp.float32)
-+    half_dim = dim // 2
-+    if half_dim == 0:
-+        return jnp.zeros((dim,), dtype=jnp.float32)
-+
-+    freq = jnp.arange(half_dim, dtype=jnp.float32)
-+    scale = jnp.maximum(1, half_dim - 1)
-+    inv_freq = jnp.exp(-jnp.log(10000.0) * freq / scale)
-+    angles = step * inv_freq
-+
-+    embedding = jnp.concatenate([jnp.sin(angles), jnp.cos(angles)], axis=0)
-+    if dim % 2 == 1:
-+        embedding = jnp.pad(embedding, (0, 1))
-+    return embedding
  
