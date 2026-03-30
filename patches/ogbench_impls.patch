@@ -2901,4 +2901,31 @@ index 6ec8769..b609aa0 100644
 +                self.action_space.seed(int(reset_seed))
              for _ in range(10):
                  super(MazeEnv, self).step(self.action_space.sample())
- 
+
+diff --git a/impls/utils/positional_encoding.py b/impls/utils/positional_encoding.py
+new file mode 100644
+index 0000000..f686fa6
+--- /dev/null
++++ b/impls/utils/positional_encoding.py
+@@ -0,0 +1,20 @@
++import jax.numpy as jnp
++
++
++def sinusoidal_step_encoding(step, max_steps, dim):
++    """Return a sinusoidal encoding vector of shape (dim,)."""
++    del max_steps  # Kept for API compatibility with current callers.
++
++    step = jnp.asarray(step, dtype=jnp.float32)
++    half_dim = dim // 2
++    if half_dim == 0:
++        return jnp.zeros((dim,), dtype=jnp.float32)
++
++    freq = jnp.arange(half_dim, dtype=jnp.float32)
++    scale = jnp.maximum(1, half_dim - 1)
++    inv_freq = jnp.exp(-jnp.log(10000.0) * freq / scale)
++    angles = step * inv_freq
++
++    embedding = jnp.concatenate([jnp.sin(angles), jnp.cos(angles)], axis=0)
++    if dim % 2 == 1:
++        embedding = jnp.pad(embedding, (0, 1))
++    return embedding
