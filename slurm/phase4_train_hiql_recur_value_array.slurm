@@ -121,7 +121,11 @@ SEED="${SEED_LIST[IDX]}"
 
 export MUJOCO_GL="${MUJOCO_GL:-egl}"
 export WANDB_SILENT="${WANDB_SILENT:-true}"
-export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda}"
+if [[ "${EVAL_ON_CPU}" == "1" ]]; then
+  export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda,cpu}"
+else
+  export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda}"
+fi
 mkdir -p "${DATASET_DIR}" logs/phase_4
 export OGBENCH_DATASET_DIR="${DATASET_DIR}"
 

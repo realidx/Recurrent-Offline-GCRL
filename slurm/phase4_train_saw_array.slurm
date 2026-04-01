@@ -122,7 +122,11 @@ SEED="${SEED_LIST[IDX]}"
 
 export MUJOCO_GL="${MUJOCO_GL:-egl}"
 export WANDB_SILENT="${WANDB_SILENT:-true}"
-export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda}"
+if [[ "${EVAL_ON_CPU}" == "1" ]]; then
+  export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda,cpu}"
+else
+  export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda}"
+fi
 mkdir -p "${DATASET_DIR}" logs/phase_4
 export OGBENCH_DATASET_DIR="${DATASET_DIR}"
 
@@ -326,6 +330,23 @@ if ! command -v "${CONDA_EXE}" >/dev/null 2>&1; then
   echo "Error: 'conda' not found in this job environment." >&2
   echo "Fix: load your anaconda/miniconda module, or pass CONDA_EXE=/full/path/to/conda via --export." >&2
   exit 3
+fi
+
+echo "SLURM_JOB_ID=${SLURM_JOB_ID:-} SLURM_JOB_NODELIST=${SLURM_JOB_NODELIST:-} HOSTNAME=$(hostname)"
+echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>} JAX_PLATFORMS=${JAX_PLATFORMS:-<unset>}"
+
+"${CONDA_EXE}" run -n "${CONDA_ENV}" python - <<'PY'
+import os
+import jax
+
+print("env CUDA_VISIBLE_DEVICES:", os.environ.get("CUDA_VISIBLE_DEVICES"))
+print("jax default backend:", jax.default_backend())
+print("jax devices:", jax.devices())
+PY
+
+if command -v nvidia-smi >/dev/null 2>&1; then
+  nvidia-smi -L || true
+  nvidia-smi || true
 fi
 
 "${CONDA_EXE}" run -n "${CONDA_ENV}" env WANDB_MODE="${WANDB_MODE}" "${CMD[@]}"
