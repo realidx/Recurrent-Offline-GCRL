@@ -1,3 +1,21 @@
+diff --git a/impls/agents/__init__.py b/impls/agents/__init__.py
+index 4596fe2..172d015 100644
+--- a/impls/agents/__init__.py
++++ b/impls/agents/__init__.py
+@@ -5,6 +5,7 @@ from agents.gcivl import GCIVLAgent
+ from agents.hiql import HIQLAgent
+ from agents.qrl import QRLAgent
+ from agents.sac import SACAgent
++from agents.saw import SAWAgent
+ 
+ agents = dict(
+     crl=CRLAgent,
+@@ -14,4 +15,5 @@ agents = dict(
+     hiql=HIQLAgent,
+     qrl=QRLAgent,
+     sac=SACAgent,
++    saw=SAWAgent,
+ )
 diff --git a/impls/agents/crl.py b/impls/agents/crl.py
 index 53109ab..75123d7 100644
 --- a/impls/agents/crl.py
@@ -674,6 +692,411 @@ index 79852cb..d231c41 100644
              # Dataset hyperparameters.
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
+diff --git a/impls/agents/saw.py b/impls/agents/saw.py
+new file mode 100644
+index 0000000..e5f4a2c
+--- /dev/null
++++ b/impls/agents/saw.py
+@@ -0,0 +1,399 @@
++import copy
++from typing import Any
++
++import flax
++import flax.linen as nn
++import jax
++import jax.numpy as jnp
++import ml_collections
++import optax
++from utils.encoders import GCEncoder, encoder_modules
++from utils.flax_utils import ModuleDict, TrainState, nonpytree_field
++from utils.networks import GCActor, GCDiscreteActor, GCValue, Identity, LengthNormalize, MLP
++
++
++class SAWAgent(flax.struct.PyTreeNode):
++    """Subgoal Advantage-Weighted (SAW) policy bootstrapping agent."""
++
++    rng: Any
++    network: Any
++    config: Any = nonpytree_field()
++
++    @staticmethod
++    def expectile_loss(adv, diff, expectile):
++        """Compute the expectile loss."""
++        weight = jnp.where(adv >= 0, expectile, (1 - expectile))
++        return weight * (diff**2)
++
++    def value_loss(self, batch, grad_params):
++        """Compute the IVL value loss."""
++        (next_v1_t, next_v2_t) = self.network.select('target_value')(batch['next_observations'], batch['value_goals'])
++        next_v_t = jnp.minimum(next_v1_t, next_v2_t)
++        q = batch['rewards'] + self.config['discount'] * batch['masks'] * next_v_t
++
++        (v1_t, v2_t) = self.network.select('target_value')(batch['observations'], batch['value_goals'])
++        v_t = (v1_t + v2_t) / 2
++        adv = q - v_t
++
++        q1 = batch['rewards'] + self.config['discount'] * batch['masks'] * next_v1_t
++        q2 = batch['rewards'] + self.config['discount'] * batch['masks'] * next_v2_t
++        (v1, v2) = self.network.select('value')(batch['observations'], batch['value_goals'], params=grad_params)
++        v = (v1 + v2) / 2
++
++        value_loss1 = self.expectile_loss(adv, q1 - v1, self.config['expectile']).mean()
++        value_loss2 = self.expectile_loss(adv, q2 - v2, self.config['expectile']).mean()
++        value_loss = value_loss1 + value_loss2
++
++        return value_loss, {
++            'value_loss': value_loss,
++            'v_mean': v.mean(),
++            'v_max': v.max(),
++            'v_min': v.min(),
++        }
++
++    def target_actor_loss(self, batch, grad_params):
++        """Compute the low-level actor loss used to bootstrap the flat policy."""
++        v1, v2 = self.network.select('value')(batch['observations'], batch['low_actor_goals'])
++        nv1, nv2 = self.network.select('value')(batch['next_observations'], batch['low_actor_goals'])
++        v = (v1 + v2) / 2
++        nv = (nv1 + nv2) / 2
++        adv = nv - v
++
++        exp_a = jnp.exp(adv * self.config['low_alpha'])
++        exp_a = jnp.minimum(exp_a, 100.0)
++
++        dist = self.network.select('low_actor')(batch['observations'], batch['low_actor_goals'], params=grad_params)
++        log_prob = dist.log_prob(batch['actions'])
++
++        actor_loss = -(exp_a * log_prob).mean()
++
++        actor_info = {
++            'actor_loss': actor_loss,
++            'adv': adv.mean(),
++            'bc_log_prob': log_prob.mean(),
++        }
++        if not self.config['discrete']:
++            actor_info.update(
++                {
++                    'mse': jnp.mean((dist.mode() - batch['actions']) ** 2),
++                    'std': jnp.mean(dist.scale_diag),
++                }
++            )
++
++        return actor_loss, actor_info
++
++    def actor_loss(self, batch, grad_params):
++        """Compute flat actor loss with respect to high-actor goals."""
++        v1, v2 = self.network.select('value')(batch['observations'], batch['high_actor_goals'])
++        nv1, nv2 = self.network.select('value')(batch['next_observations'], batch['high_actor_goals'])
++        v = (v1 + v2) / 2
++        nv = (nv1 + nv2) / 2
++        adv = nv - v
++
++        exp_a = jnp.exp(adv * self.config['awr_alpha'])
++        exp_a = jnp.minimum(exp_a, 100.0)
++
++        dist = self.network.select('actor')(batch['observations'], batch['high_actor_goals'], params=grad_params)
++        log_prob = dist.log_prob(batch['actions'])
++        awr_loss = -(exp_a * log_prob).mean()
++
++        awr_info = {
++            'awr_loss': awr_loss,
++            'adv': adv.mean(),
++            'bc_log_prob': log_prob.mean(),
++        }
++        if not self.config['discrete']:
++            awr_info.update(
++                {
++                    'mse': jnp.mean((dist.mode() - batch['actions']) ** 2),
++                    'std': jnp.mean(dist.scale_diag),
++                }
++            )
++
++        return awr_loss, awr_info
++
++    def waypoint_loss(self, batch, grad_params):
++        """Compute the waypoint bootstrapping loss."""
++        v1, v2 = self.network.select('value')(batch['observations'], batch['high_actor_goals'])
++        wv1, wv2 = self.network.select('value')(batch['high_actor_targets'], batch['high_actor_goals'])
++        v = (v1 + v2) / 2
++        wv = (wv1 + wv2) / 2
++        wadv = wv - v
++
++        exp_w = jnp.exp(wadv * self.config['kl_alpha'])
++        exp_w = jnp.minimum(exp_w, 100.0)
++
++        dist = self.network.select('actor')(batch['observations'], batch['high_actor_goals'], params=grad_params)
++        w_dist = self.network.select('low_actor')(batch['observations'], batch['high_actor_targets'])
++        if self.config['const_std']:
++            w_mode = jax.lax.stop_gradient(w_dist.mode())
++            kld = jnp.sum((dist.mode() - w_mode) ** 2, axis=-1)
++        else:
++            kld = w_dist.kl_divergence(dist)
++        waypoint_loss = (exp_w * kld).mean()
++
++        waypoint_info = {
++            'waypoint_loss': waypoint_loss,
++            'kld': kld.mean(),
++            'wadv': wadv.mean(),
++        }
++
++        return waypoint_loss, waypoint_info
++
++    def total_loss(self, batch, grad_params=None, rng=None):
++        """Compute the total loss."""
++        del rng
++        info = {}
++
++        value_loss, value_info = self.value_loss(batch, grad_params)
++        for k, v in value_info.items():
++            info[f'value/{k}'] = v
++
++        low_actor_loss, low_actor_info = self.target_actor_loss(batch, grad_params)
++        for k, v in low_actor_info.items():
++            info[f'low_actor/{k}'] = v
++
++        actor_loss, actor_info = self.actor_loss(batch, grad_params)
++        for k, v in actor_info.items():
++            info[f'actor/{k}'] = v
++
++        waypoint_loss, waypoint_info = self.waypoint_loss(batch, grad_params)
++        for k, v in waypoint_info.items():
++            info[f'waypoint/{k}'] = v
++
++        loss = value_loss + low_actor_loss + actor_loss + waypoint_loss
++        return loss, info
++
++    def target_update(self, network, module_name):
++        """Update the target network."""
++        new_target_params = jax.tree_util.tree_map(
++            lambda p, tp: p * self.config['tau'] + tp * (1 - self.config['tau']),
++            self.network.params[f'modules_{module_name}'],
++            self.network.params[f'modules_target_{module_name}'],
++        )
++        network.params[f'modules_target_{module_name}'] = new_target_params
++
++    @jax.jit
++    def update(self, batch):
++        """Update the agent and return a new agent with info."""
++        new_rng, rng = jax.random.split(self.rng)
++
++        def loss_fn(grad_params):
++            return self.total_loss(batch, grad_params, rng=rng)
++
++        new_network, info = self.network.apply_loss_fn(loss_fn=loss_fn)
++        self.target_update(new_network, 'value')
++
++        return self.replace(network=new_network, rng=new_rng), info
++
++    @jax.jit
++    def sample_actions(self, observations, goals=None, seed=None, temperature=1.0):
++        """Sample actions from the actor."""
++        dist = self.network.select('actor')(observations, goals, temperature=temperature)
++        actions = dist.sample(seed=seed)
++        if not self.config['discrete']:
++            actions = jnp.clip(actions, -1, 1)
++        return actions
++
++    @classmethod
++    def create(cls, seed, ex_observations, ex_actions, config):
++        """Create a new agent."""
++        rng = jax.random.PRNGKey(seed)
++        rng, init_rng = jax.random.split(rng, 2)
++
++        ex_goals = ex_observations
++        if config['discrete']:
++            action_dim = ex_actions.max() + 1
++        else:
++            action_dim = ex_actions.shape[-1]
++
++        if config['encoder'] is not None:
++            encoder_module = encoder_modules[config['encoder']]
++            goal_rep_seq = [encoder_module()]
++        else:
++            goal_rep_seq = []
++        goal_rep_seq.append(
++            MLP(
++                hidden_dims=(*config['value_hidden_dims'], config['rep_dim']),
++                activate_final=False,
++                layer_norm=config['layer_norm'],
++            )
++        )
++        goal_rep_seq.append(LengthNormalize())
++        goal_rep_def = nn.Sequential(goal_rep_seq)
++        actor_goal_rep_def = goal_rep_def if config['share_goal_rep'] else copy.deepcopy(goal_rep_def)
++
++        encoders = dict()
++        if config['encoder'] is not None:
++            encoder_module = encoder_modules[config['encoder']]
++            encoders['value'] = GCEncoder(state_encoder=encoder_module(), concat_encoder=goal_rep_def)
++            encoders['target_value'] = GCEncoder(state_encoder=encoder_module(), concat_encoder=goal_rep_def)
++            encoders['actor'] = GCEncoder(state_encoder=encoder_module(), concat_encoder=actor_goal_rep_def)
++            encoders['low_actor'] = GCEncoder(concat_encoder=encoder_module())
++        else:
++            encoders['value'] = GCEncoder(state_encoder=Identity(), concat_encoder=goal_rep_def)
++            encoders['target_value'] = GCEncoder(state_encoder=Identity(), concat_encoder=goal_rep_def)
++            encoders['actor'] = GCEncoder(state_encoder=Identity(), concat_encoder=actor_goal_rep_def)
++
++        value_def = GCValue(
++            hidden_dims=config['value_hidden_dims'],
++            layer_norm=config['layer_norm'],
++            ensemble=True,
++            gc_encoder=encoders.get('value'),
++        )
++        target_value_def = GCValue(
++            hidden_dims=config['value_hidden_dims'],
++            layer_norm=config['layer_norm'],
++            ensemble=True,
++            gc_encoder=encoders.get('target_value'),
++        )
++
++        actor_backbone = str(config.get('actor_backbone', 'mlp'))
++        actor_backbone_hidden_dim = (
++            None if not config.get('actor_backbone_hidden_dim') else int(config.get('actor_backbone_hidden_dim'))
++        )
++        actor_kwargs = dict(
++            hidden_dims=config['actor_hidden_dims'],
++            action_dim=action_dim,
++            gc_encoder=encoders.get('actor'),
++            layer_norm=config['layer_norm'],
++            backbone=actor_backbone,
++            backbone_hidden_dim=actor_backbone_hidden_dim,
++            resnet_num_blocks=int(config.get('actor_resnet_num_blocks', 3)),
++            residual_num_dense_layers=int(config.get('actor_num_dense_layers', 4)),
++            residual_span=int(config.get('actor_residual_span', 4)),
++            residual_use_skip=bool(config.get('actor_residual_use_skip', True)),
++            prenorm_num_blocks=int(config.get('actor_num_blocks', 2)),
++            prenorm_block_num_layers=int(config.get('actor_block_num_layers', 4)),
++            prenorm_use_inner_layer_norm=bool(config.get('actor_use_inner_layer_norm', True)),
++            prenorm_norm_mode=str(config.get('actor_prenorm_norm_mode', 'pre_block')),
++            recur_num_iters=int(config.get('actor_recur_iters', 4)),
++            recur_num_dense_layers=int(config.get('actor_recur_num_dense_layers', 2)),
++            recur_max_iters=int(config.get('actor_recur_max_iters', 16)),
++            recur_tied_layer_norm=bool(config.get('actor_recur_tied_ln', True)),
++            recur_ln_mode=str(config.get('actor_recur_ln_mode', 'per_layer')),
++            recur_use_step_info=bool(config.get('actor_recur_use_step_info', True)),
++            recur_sinusoidal=bool(config.get('actor_recur_sinusoidal', False)),
++            recur_use_film=bool(config.get('actor_recur_use_film', True)),
++            recur_use_layerscale=bool(config.get('actor_recur_use_layerscale', True)),
++            recur_shared_alpha=bool(config.get('actor_recur_shared_alpha', False)),
++            partial_num_groups=int(config.get('actor_partial_num_groups', 2)),
++            partial_iters_per_group=int(config.get('actor_partial_iters_per_group', 2)),
++            partial_per_group_film=bool(config.get('actor_partial_per_group_film', False)),
++            partial_cycle_step_params=bool(config.get('actor_partial_cycle_step_params', True)),
++            partial_block_schedule=str(config.get('actor_partial_block_schedule', 'grouped')),
++            layerscale_init=float(config.get('actor_layerscale_init', 1e-2)),
++        )
++
++        if config['discrete']:
++            actor_def = GCDiscreteActor(
++                **actor_kwargs,
++            )
++            low_actor_def = GCDiscreteActor(
++                hidden_dims=config['low_actor_hidden_dims'],
++                action_dim=action_dim,
++                gc_encoder=encoders.get('low_actor'),
++            )
++        else:
++            actor_def = GCActor(
++                state_dependent_std=False,
++                const_std=config['const_std'],
++                **actor_kwargs,
++            )
++            low_actor_def = GCActor(
++                hidden_dims=config['low_actor_hidden_dims'],
++                action_dim=action_dim,
++                state_dependent_std=False,
++                const_std=config['const_std'],
++                gc_encoder=encoders.get('low_actor'),
++            )
++
++        network_info = dict(
++            value=(value_def, (ex_observations, ex_goals)),
++            target_value=(target_value_def, (ex_observations, ex_goals)),
++            actor=(actor_def, (ex_observations, ex_goals)),
++            low_actor=(low_actor_def, (ex_observations, ex_goals)),
++            goal_rep=(goal_rep_def, jnp.concatenate([ex_observations, ex_goals], axis=-1)),
++        )
++        if not config['share_goal_rep']:
++            network_info.update(
++                actor_goal_rep_def=(actor_goal_rep_def, jnp.concatenate([ex_observations, ex_goals], axis=-1)),
++            )
++        networks = {k: v[0] for k, v in network_info.items()}
++        network_args = {k: v[1] for k, v in network_info.items()}
++
++        network_def = ModuleDict(networks)
++        network_tx = optax.adam(learning_rate=config['lr'])
++        network_params = network_def.init(init_rng, **network_args)['params']
++        network = TrainState.create(network_def, network_params, tx=network_tx)
++
++        params = network_params
++        params['modules_target_value'] = params['modules_value']
++
++        return cls(rng, network=network, config=flax.core.FrozenDict(**config))
++
++
++def get_config():
++    config = ml_collections.ConfigDict(
++        dict(
++            agent_name='saw',
++            lr=3e-4,
++            batch_size=1024,
++            low_actor_hidden_dims=(512, 512, 512),
++            actor_hidden_dims=(512, 512, 512),
++            value_hidden_dims=(512, 512, 512),
++            layer_norm=True,
++            actor_backbone='mlp',
++            actor_backbone_hidden_dim=0,
++            actor_resnet_num_blocks=3,
++            actor_num_dense_layers=4,
++            actor_residual_span=4,
++            actor_residual_use_skip=True,
++            actor_num_blocks=2,
++            actor_block_num_layers=4,
++            actor_use_inner_layer_norm=True,
++            actor_prenorm_norm_mode='pre_block',
++            actor_recur_iters=4,
++            actor_recur_num_dense_layers=2,
++            actor_recur_max_iters=16,
++            actor_recur_tied_ln=True,
++            actor_recur_ln_mode='per_layer',
++            actor_recur_use_step_info=True,
++            actor_recur_sinusoidal=False,
++            actor_recur_use_film=True,
++            actor_recur_use_layerscale=True,
++            actor_recur_shared_alpha=False,
++            actor_partial_num_groups=2,
++            actor_partial_iters_per_group=2,
++            actor_partial_per_group_film=False,
++            actor_partial_cycle_step_params=True,
++            actor_partial_block_schedule='grouped',
++            actor_layerscale_init=1e-2,
++            discount=0.99,
++            tau=0.005,
++            expectile=0.7,
++            low_alpha=3.0,
++            awr_alpha=3.0,
++            kl_alpha=3.0,
++            subgoal_steps=25,
++            const_std=True,
++            discrete=False,
++            encoder=ml_collections.config_dict.placeholder(str),
++            share_goal_rep=False,
++            rep_dim=10,
++            dataset_class='HGCDataset',
++            value_p_curgoal=0.2,
++            value_p_trajgoal=0.5,
++            value_p_randomgoal=0.3,
++            value_geom_sample=True,
++            actor_p_curgoal=0.0,
++            actor_p_trajgoal=1.0,
++            actor_p_randomgoal=0.0,
++            actor_geom_sample=False,
++            actor_geom_discount=0.99,
++            gc_negative=True,
++            p_aug=0.0,
++            frame_stack=ml_collections.config_dict.placeholder(int),
++        )
++    )
++    return config
 diff --git a/impls/main.py b/impls/main.py
 index 3660e03..42248fc 100644
 --- a/impls/main.py
@@ -1743,7 +2166,7 @@ index 9c421dd..3da1eab 100644
  
      return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..4228766 100644
+index 4ee2b26..33626b0 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
 @@ -6,6 +6,8 @@ import flax.linen as nn
@@ -2195,10 +2618,11 @@ index 4ee2b26..4228766 100644
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -164,9 +599,74 @@ class GCActor(nn.Module):
+@@ -164,9 +599,133 @@ class GCActor(nn.Module):
      const_std: bool = True
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
++    layer_norm: bool = True
 +    backbone: str = 'mlp'
 +    backbone_hidden_dim: Optional[int] = None
 +    resnet_num_blocks: int = 3
@@ -2209,6 +2633,22 @@ index 4ee2b26..4228766 100644
 +    prenorm_block_num_layers: int = 4
 +    prenorm_use_inner_layer_norm: bool = True
 +    prenorm_norm_mode: str = 'pre_block'
++    recur_num_iters: int = 4
++    recur_num_dense_layers: int = 2
++    recur_max_iters: int = 16
++    recur_tied_layer_norm: bool = True
++    recur_ln_mode: str = 'per_layer'
++    recur_use_step_info: bool = True
++    recur_sinusoidal: bool = False
++    recur_use_film: bool = True
++    recur_use_layerscale: bool = True
++    recur_shared_alpha: bool = False
++    partial_num_groups: int = 2
++    partial_iters_per_group: int = 2
++    partial_per_group_film: bool = False
++    partial_cycle_step_params: bool = True
++    partial_block_schedule: str = 'grouped'
++    layerscale_init: float = 1e-2
  
      def setup(self):
 -        self.actor_net = MLP(self.hidden_dims, activate_final=True)
@@ -2265,16 +2705,59 @@ index 4ee2b26..4228766 100644
 +                block_num_layers=int(self.prenorm_block_num_layers),
 +                use_inner_layer_norm=bool(self.prenorm_use_inner_layer_norm),
 +                norm_mode=str(self.prenorm_norm_mode),
++            )
++        elif self.backbone == 'recur_tied':
++            hidden_dim = (
++                int(self.backbone_hidden_dim)
++                if self.backbone_hidden_dim is not None
++                else int(self.hidden_dims[-1])
++            )
++            self.actor_net = RecurTiedBackbone(
++                hidden_dim=hidden_dim,
++                out_dim=hidden_dim,
++                num_iters=int(self.recur_num_iters),
++                num_dense_layers=int(self.recur_num_dense_layers),
++                max_iters=int(self.recur_max_iters),
++                layer_norm=bool(self.layer_norm),
++                tied_layer_norm=bool(self.recur_tied_layer_norm),
++                ln_mode=str(self.recur_ln_mode),
++                use_step_info=bool(self.recur_use_step_info),
++                use_sinusoidal_step_encoding=bool(self.recur_sinusoidal),
++                use_film=bool(self.recur_use_film),
++                use_layerscale=bool(self.recur_use_layerscale),
++                shared_alpha=bool(self.recur_shared_alpha),
++                layerscale_init=float(self.layerscale_init),
++            )
++        elif self.backbone == 'partial_tied':
++            hidden_dim = (
++                int(self.backbone_hidden_dim)
++                if self.backbone_hidden_dim is not None
++                else int(self.hidden_dims[-1])
++            )
++            self.actor_net = PartiallyTiedBackbone(
++                hidden_dim=hidden_dim,
++                out_dim=hidden_dim,
++                num_groups=int(self.partial_num_groups),
++                iters_per_group=int(self.partial_iters_per_group),
++                max_iters=int(self.recur_max_iters),
++                layer_norm=bool(self.layer_norm),
++                tied_layer_norm=bool(self.recur_tied_layer_norm),
++                per_group_film=bool(self.partial_per_group_film),
++                use_sinusoidal_step_encoding=bool(self.recur_sinusoidal),
++                cycle_step_params=bool(self.partial_cycle_step_params),
++                block_schedule=str(self.partial_block_schedule),
++                layerscale_init=float(self.layerscale_init),
 +            )
 +        else:
 +            raise ValueError(f'Unsupported actor backbone: {self.backbone!r}')
          self.mean_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
          if self.state_dependent_std:
              self.log_std_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
-@@ -230,9 +730,74 @@ class GCDiscreteActor(nn.Module):
+@@ -230,9 +789,133 @@ class GCDiscreteActor(nn.Module):
      action_dim: int
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
++    layer_norm: bool = True
 +    backbone: str = 'mlp'
 +    backbone_hidden_dim: Optional[int] = None
 +    resnet_num_blocks: int = 3
@@ -2285,6 +2768,22 @@ index 4ee2b26..4228766 100644
 +    prenorm_block_num_layers: int = 4
 +    prenorm_use_inner_layer_norm: bool = True
 +    prenorm_norm_mode: str = 'pre_block'
++    recur_num_iters: int = 4
++    recur_num_dense_layers: int = 2
++    recur_max_iters: int = 16
++    recur_tied_layer_norm: bool = True
++    recur_ln_mode: str = 'per_layer'
++    recur_use_step_info: bool = True
++    recur_sinusoidal: bool = False
++    recur_use_film: bool = True
++    recur_use_layerscale: bool = True
++    recur_shared_alpha: bool = False
++    partial_num_groups: int = 2
++    partial_iters_per_group: int = 2
++    partial_per_group_film: bool = False
++    partial_cycle_step_params: bool = True
++    partial_block_schedule: str = 'grouped'
++    layerscale_init: float = 1e-2
  
      def setup(self):
 -        self.actor_net = MLP(self.hidden_dims, activate_final=True)
@@ -2342,12 +2841,54 @@ index 4ee2b26..4228766 100644
 +                use_inner_layer_norm=bool(self.prenorm_use_inner_layer_norm),
 +                norm_mode=str(self.prenorm_norm_mode),
 +            )
++        elif self.backbone == 'recur_tied':
++            hidden_dim = (
++                int(self.backbone_hidden_dim)
++                if self.backbone_hidden_dim is not None
++                else int(self.hidden_dims[-1])
++            )
++            self.actor_net = RecurTiedBackbone(
++                hidden_dim=hidden_dim,
++                out_dim=hidden_dim,
++                num_iters=int(self.recur_num_iters),
++                num_dense_layers=int(self.recur_num_dense_layers),
++                max_iters=int(self.recur_max_iters),
++                layer_norm=bool(self.layer_norm),
++                tied_layer_norm=bool(self.recur_tied_layer_norm),
++                ln_mode=str(self.recur_ln_mode),
++                use_step_info=bool(self.recur_use_step_info),
++                use_sinusoidal_step_encoding=bool(self.recur_sinusoidal),
++                use_film=bool(self.recur_use_film),
++                use_layerscale=bool(self.recur_use_layerscale),
++                shared_alpha=bool(self.recur_shared_alpha),
++                layerscale_init=float(self.layerscale_init),
++            )
++        elif self.backbone == 'partial_tied':
++            hidden_dim = (
++                int(self.backbone_hidden_dim)
++                if self.backbone_hidden_dim is not None
++                else int(self.hidden_dims[-1])
++            )
++            self.actor_net = PartiallyTiedBackbone(
++                hidden_dim=hidden_dim,
++                out_dim=hidden_dim,
++                num_groups=int(self.partial_num_groups),
++                iters_per_group=int(self.partial_iters_per_group),
++                max_iters=int(self.recur_max_iters),
++                layer_norm=bool(self.layer_norm),
++                tied_layer_norm=bool(self.recur_tied_layer_norm),
++                per_group_film=bool(self.partial_per_group_film),
++                use_sinusoidal_step_encoding=bool(self.recur_sinusoidal),
++                cycle_step_params=bool(self.partial_cycle_step_params),
++                block_schedule=str(self.partial_block_schedule),
++                layerscale_init=float(self.layerscale_init),
++            )
 +        else:
 +            raise ValueError(f'Unsupported actor backbone: {self.backbone!r}')
          self.logit_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
  
      def __call__(
-@@ -282,14 +847,40 @@ class GCValue(nn.Module):
+@@ -282,14 +965,40 @@ class GCValue(nn.Module):
      layer_norm: bool = True
      ensemble: bool = True
      gc_encoder: nn.Module = None
@@ -2393,7 +2934,7 @@ index 4ee2b26..4228766 100644
  
      def __call__(self, observations, goals=None, actions=None):
          """Return the value/critic function.
-@@ -314,6 +905,62 @@ class GCValue(nn.Module):
+@@ -314,6 +1023,62 @@ class GCValue(nn.Module):
          return v
  
  
@@ -2456,7 +2997,7 @@ index 4ee2b26..4228766 100644
  class GCDiscreteCritic(GCValue):
      """Goal-conditioned critic for discrete actions."""
  
-@@ -347,16 +994,129 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +1112,129 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
@@ -2591,7 +3132,7 @@ index 4ee2b26..4228766 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +1124,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +1242,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -2599,7 +3140,7 @@ index 4ee2b26..4228766 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,8 +1136,13 @@ class GCBilinearValue(nn.Module):
+@@ -375,8 +1254,13 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
@@ -2615,7 +3156,7 @@ index 4ee2b26..4228766 100644
  
          v = (phi * psi / jnp.sqrt(self.latent_dim)).sum(axis=-1)
  
-@@ -394,9 +1160,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+@@ -394,9 +1278,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
  
      action_dim: int = None
  
@@ -2627,7 +3168,7 @@ index 4ee2b26..4228766 100644
  
  
  class GCMRNValue(nn.Module):
-@@ -416,9 +1182,87 @@ class GCMRNValue(nn.Module):
+@@ -416,9 +1300,87 @@ class GCMRNValue(nn.Module):
      latent_dim: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -2716,7 +3257,7 @@ index 4ee2b26..4228766 100644
  
      def __call__(self, observations, goals, is_phi=False, info=False):
          """Return the MRN value function.
-@@ -471,9 +1315,87 @@ class GCIQEValue(nn.Module):
+@@ -471,9 +1433,87 @@ class GCIQEValue(nn.Module):
      dim_per_component: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -2901,31 +3442,4 @@ index 6ec8769..b609aa0 100644
 +                self.action_space.seed(int(reset_seed))
              for _ in range(10):
                  super(MazeEnv, self).step(self.action_space.sample())
-
-diff --git a/impls/utils/positional_encoding.py b/impls/utils/positional_encoding.py
-new file mode 100644
-index 0000000..f686fa6
---- /dev/null
-+++ b/impls/utils/positional_encoding.py
-@@ -0,0 +1,20 @@
-+import jax.numpy as jnp
-+
-+
-+def sinusoidal_step_encoding(step, max_steps, dim):
-+    """Return a sinusoidal encoding vector of shape (dim,)."""
-+    del max_steps  # Kept for API compatibility with current callers.
-+
-+    step = jnp.asarray(step, dtype=jnp.float32)
-+    half_dim = dim // 2
-+    if half_dim == 0:
-+        return jnp.zeros((dim,), dtype=jnp.float32)
-+
-+    freq = jnp.arange(half_dim, dtype=jnp.float32)
-+    scale = jnp.maximum(1, half_dim - 1)
-+    inv_freq = jnp.exp(-jnp.log(10000.0) * freq / scale)
-+    angles = step * inv_freq
-+
-+    embedding = jnp.concatenate([jnp.sin(angles), jnp.cos(angles)], axis=0)
-+    if dim % 2 == 1:
-+        embedding = jnp.pad(embedding, (0, 1))
-+    return embedding
+ 

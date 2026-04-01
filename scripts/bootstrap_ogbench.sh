@@ -61,6 +61,12 @@ if [[ ! -f "${OGBENCH_DIR}/impls/agents/crl.py" ]]; then
   echo "Error: expected ${OGBENCH_DIR}/impls/agents/crl.py after bootstrap." >&2
   exit 4
 fi
+if [[ ! -f "${OGBENCH_DIR}/impls/agents/saw.py" ]]; then
+  echo "Error: expected ${OGBENCH_DIR}/impls/agents/saw.py after bootstrap." >&2
+  echo "Fix: make sure patches/ogbench_impls.patch is up to date, then re-run:" >&2
+  echo "  ./scripts/bootstrap_ogbench.sh CLEAN=1" >&2
+  exit 4
+fi
 
 if ! grep -q "critic_backbone" "${OGBENCH_DIR}/impls/agents/crl.py"; then
   echo "Error: bootstrap finished, but Phase 1 patch markers are missing (critic_backbone not found)." >&2
