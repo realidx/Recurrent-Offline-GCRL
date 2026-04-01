@@ -97,6 +97,31 @@ ACTOR_PARTIAL_PER_GROUP_FILM="${ACTOR_PARTIAL_PER_GROUP_FILM:-0}"
 ACTOR_PARTIAL_CYCLE_STEP_PARAMS="${ACTOR_PARTIAL_CYCLE_STEP_PARAMS:-1}"
 ACTOR_PARTIAL_BLOCK_SCHEDULE="${ACTOR_PARTIAL_BLOCK_SCHEDULE:-grouped}"
 ACTOR_LAYERSCALE_INIT="${ACTOR_LAYERSCALE_INIT:-1e-2}"
+LOW_ACTOR_BACKBONE="${LOW_ACTOR_BACKBONE:-mlp}"
+LOW_ACTOR_BACKBONE_HIDDEN_DIM="${LOW_ACTOR_BACKBONE_HIDDEN_DIM:-0}"
+LOW_ACTOR_RESNET_NUM_BLOCKS="${LOW_ACTOR_RESNET_NUM_BLOCKS:-3}"
+LOW_ACTOR_NUM_DENSE_LAYERS="${LOW_ACTOR_NUM_DENSE_LAYERS:-4}"
+LOW_ACTOR_RESIDUAL_SPAN="${LOW_ACTOR_RESIDUAL_SPAN:-4}"
+LOW_ACTOR_RESIDUAL_USE_SKIP="${LOW_ACTOR_RESIDUAL_USE_SKIP:-1}"
+LOW_ACTOR_NUM_BLOCKS="${LOW_ACTOR_NUM_BLOCKS:-2}"
+LOW_ACTOR_BLOCK_NUM_LAYERS="${LOW_ACTOR_BLOCK_NUM_LAYERS:-4}"
+LOW_ACTOR_USE_INNER_LAYER_NORM="${LOW_ACTOR_USE_INNER_LAYER_NORM:-1}"
+LOW_ACTOR_PRENORM_NORM_MODE="${LOW_ACTOR_PRENORM_NORM_MODE:-pre_block}"
+LOW_ACTOR_RECUR_ITERS="${LOW_ACTOR_RECUR_ITERS:-4}"
+LOW_ACTOR_RECUR_NUM_DENSE_LAYERS="${LOW_ACTOR_RECUR_NUM_DENSE_LAYERS:-2}"
+LOW_ACTOR_RECUR_MAX_ITERS="${LOW_ACTOR_RECUR_MAX_ITERS:-16}"
+LOW_ACTOR_RECUR_LN_MODE="${LOW_ACTOR_RECUR_LN_MODE:-per_layer}"
+LOW_ACTOR_RECUR_USE_STEP_INFO="${LOW_ACTOR_RECUR_USE_STEP_INFO:-1}"
+LOW_ACTOR_RECUR_SINUSOIDAL="${LOW_ACTOR_RECUR_SINUSOIDAL:-0}"
+LOW_ACTOR_RECUR_USE_FILM="${LOW_ACTOR_RECUR_USE_FILM:-1}"
+LOW_ACTOR_RECUR_USE_LAYERSCALE="${LOW_ACTOR_RECUR_USE_LAYERSCALE:-1}"
+LOW_ACTOR_RECUR_SHARED_ALPHA="${LOW_ACTOR_RECUR_SHARED_ALPHA:-0}"
+LOW_ACTOR_PARTIAL_NUM_GROUPS="${LOW_ACTOR_PARTIAL_NUM_GROUPS:-2}"
+LOW_ACTOR_PARTIAL_ITERS_PER_GROUP="${LOW_ACTOR_PARTIAL_ITERS_PER_GROUP:-2}"
+LOW_ACTOR_PARTIAL_PER_GROUP_FILM="${LOW_ACTOR_PARTIAL_PER_GROUP_FILM:-0}"
+LOW_ACTOR_PARTIAL_CYCLE_STEP_PARAMS="${LOW_ACTOR_PARTIAL_CYCLE_STEP_PARAMS:-1}"
+LOW_ACTOR_PARTIAL_BLOCK_SCHEDULE="${LOW_ACTOR_PARTIAL_BLOCK_SCHEDULE:-grouped}"
+LOW_ACTOR_LAYERSCALE_INIT="${LOW_ACTOR_LAYERSCALE_INIT:-1e-2}"
 
 VALUE_P_CURGOAL="${VALUE_P_CURGOAL:-0.2}"
 VALUE_P_TRAJGOAL="${VALUE_P_TRAJGOAL:-0.5}"
@@ -194,6 +219,7 @@ AGENT_FLAGS=(
   "--agent.actor_p_trajgoal=${ACTOR_P_TRAJGOAL}"
   "--agent.actor_p_randomgoal=${ACTOR_P_RANDOMGOAL}"
   "--agent.actor_backbone=${ACTOR_BACKBONE}"
+  "--agent.low_actor_backbone=${LOW_ACTOR_BACKBONE}"
 )
 
 append_hidden_dims "actor_hidden_dims" "${ACTOR_HIDDEN_DIMS}"
@@ -210,6 +236,14 @@ if [[ "${ACTOR_BACKBONE_HIDDEN_DIM}" != "0" ]]; then
     exit 2
   fi
   AGENT_FLAGS+=("--agent.actor_backbone_hidden_dim=${ACTOR_BACKBONE_HIDDEN_DIM}")
+fi
+
+if [[ "${LOW_ACTOR_BACKBONE_HIDDEN_DIM}" != "0" ]]; then
+  if [[ ! "${LOW_ACTOR_BACKBONE_HIDDEN_DIM}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: LOW_ACTOR_BACKBONE_HIDDEN_DIM='${LOW_ACTOR_BACKBONE_HIDDEN_DIM}' is not a positive integer." >&2
+    exit 2
+  fi
+  AGENT_FLAGS+=("--agent.low_actor_backbone_hidden_dim=${LOW_ACTOR_BACKBONE_HIDDEN_DIM}")
 fi
 
 case "${ACTOR_BACKBONE}" in
@@ -261,6 +295,59 @@ case "${ACTOR_BACKBONE}" in
     ;;
   *)
     echo "Error: ACTOR_BACKBONE='${ACTOR_BACKBONE}' is invalid. Use mlp, resnet, residual_dense, dense_ln, prenorm_residual, recur_tied, or partial_tied." >&2
+    exit 2
+    ;;
+esac
+
+case "${LOW_ACTOR_BACKBONE}" in
+  mlp)
+    ;;
+  resnet)
+    AGENT_FLAGS+=("--agent.low_actor_resnet_num_blocks=${LOW_ACTOR_RESNET_NUM_BLOCKS}")
+    ;;
+  residual_dense|dense_ln)
+    AGENT_FLAGS+=(
+      "--agent.low_actor_num_dense_layers=${LOW_ACTOR_NUM_DENSE_LAYERS}"
+      "--agent.low_actor_residual_span=${LOW_ACTOR_RESIDUAL_SPAN}"
+      "--agent.low_actor_residual_use_skip=${LOW_ACTOR_RESIDUAL_USE_SKIP}"
+    )
+    ;;
+  prenorm_residual)
+    AGENT_FLAGS+=(
+      "--agent.low_actor_num_blocks=${LOW_ACTOR_NUM_BLOCKS}"
+      "--agent.low_actor_block_num_layers=${LOW_ACTOR_BLOCK_NUM_LAYERS}"
+      "--agent.low_actor_use_inner_layer_norm=${LOW_ACTOR_USE_INNER_LAYER_NORM}"
+      "--agent.low_actor_prenorm_norm_mode=${LOW_ACTOR_PRENORM_NORM_MODE}"
+    )
+    ;;
+  recur_tied)
+    AGENT_FLAGS+=(
+      "--agent.low_actor_recur_iters=${LOW_ACTOR_RECUR_ITERS}"
+      "--agent.low_actor_recur_num_dense_layers=${LOW_ACTOR_RECUR_NUM_DENSE_LAYERS}"
+      "--agent.low_actor_recur_max_iters=${LOW_ACTOR_RECUR_MAX_ITERS}"
+      "--agent.low_actor_recur_ln_mode=${LOW_ACTOR_RECUR_LN_MODE}"
+      "--agent.low_actor_recur_use_step_info=${LOW_ACTOR_RECUR_USE_STEP_INFO}"
+      "--agent.low_actor_recur_sinusoidal=${LOW_ACTOR_RECUR_SINUSOIDAL}"
+      "--agent.low_actor_recur_use_film=${LOW_ACTOR_RECUR_USE_FILM}"
+      "--agent.low_actor_recur_use_layerscale=${LOW_ACTOR_RECUR_USE_LAYERSCALE}"
+      "--agent.low_actor_recur_shared_alpha=${LOW_ACTOR_RECUR_SHARED_ALPHA}"
+      "--agent.low_actor_layerscale_init=${LOW_ACTOR_LAYERSCALE_INIT}"
+    )
+    ;;
+  partial_tied)
+    AGENT_FLAGS+=(
+      "--agent.low_actor_recur_max_iters=${LOW_ACTOR_RECUR_MAX_ITERS}"
+      "--agent.low_actor_recur_sinusoidal=${LOW_ACTOR_RECUR_SINUSOIDAL}"
+      "--agent.low_actor_partial_num_groups=${LOW_ACTOR_PARTIAL_NUM_GROUPS}"
+      "--agent.low_actor_partial_iters_per_group=${LOW_ACTOR_PARTIAL_ITERS_PER_GROUP}"
+      "--agent.low_actor_partial_per_group_film=${LOW_ACTOR_PARTIAL_PER_GROUP_FILM}"
+      "--agent.low_actor_partial_cycle_step_params=${LOW_ACTOR_PARTIAL_CYCLE_STEP_PARAMS}"
+      "--agent.low_actor_partial_block_schedule=${LOW_ACTOR_PARTIAL_BLOCK_SCHEDULE}"
+      "--agent.low_actor_layerscale_init=${LOW_ACTOR_LAYERSCALE_INIT}"
+    )
+    ;;
+  *)
+    echo "Error: LOW_ACTOR_BACKBONE='${LOW_ACTOR_BACKBONE}' is invalid. Use mlp, resnet, residual_dense, dense_ln, prenorm_residual, recur_tied, or partial_tied." >&2
     exit 2
     ;;
 esac
