@@ -3491,7 +3491,7 @@ index 0000000..5f5a5e4
 +        embedding = jnp.pad(embedding, (0, 1))
 +    return embedding
 diff --git a/ogbench/locomaze/maze.py b/ogbench/locomaze/maze.py
-index 6ec8769..b609aa0 100644
+index 6ec8769..ddd6ab6 100644
 --- a/ogbench/locomaze/maze.py
 +++ b/ogbench/locomaze/maze.py
 @@ -217,6 +217,20 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
@@ -3515,15 +3515,20 @@ index 6ec8769..b609aa0 100644
          def update_tree(self, tree):
              """Update the XML tree to include the maze."""
              worldbody = tree.find('.//worldbody')
-@@ -373,6 +387,7 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
+@@ -373,6 +387,12 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
          def reset(self, options=None, *args, **kwargs):
              if options is None:
                  options = {}
 +            reset_seed = kwargs.get('seed', None)
++            post_seed_kwargs = dict(kwargs)
++            post_seed_kwargs.pop('seed', None)
++            if reset_seed is not None:
++                # Seed the env RNG before sampling task ids / reset noise below.
++                super().reset(*args, **kwargs)
              # Set the task goal.
              if self._reward_task_id is not None:
                  # Use the pre-defined task.
-@@ -390,7 +405,7 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
+@@ -390,7 +410,7 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
                  self.cur_task_info = options['task_info']
              else:
                  # Randomly sample a task.
@@ -3532,8 +3537,12 @@ index 6ec8769..b609aa0 100644
                  self.cur_task_info = self.task_infos[self.cur_task_id - 1]
  
              # Whether to provide a rendering of the goal.
-@@ -408,6 +423,8 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
-             super().reset(*args, **kwargs)
+@@ -405,9 +425,11 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
+                 goal_xy = self.add_noise(goal_xy)
+ 
+             # First, force set the position to the goal position to obtain the goal observation.
+-            super().reset(*args, **kwargs)
++            super().reset(*args, **post_seed_kwargs)
  
              # Do a few random steps to stabilize the environment.
 +            if reset_seed is not None:
@@ -3541,7 +3550,16 @@ index 6ec8769..b609aa0 100644
              num_random_actions = 40 if loco_env_type == 'humanoid' else 5
              for _ in range(num_random_actions):
                  super().step(self.action_space.sample())
-@@ -445,7 +462,7 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
+@@ -420,7 +442,7 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
+                 goal_rendered = self.render()
+ 
+             # Now, do the actual reset.
+-            ob, info = super().reset(*args, **kwargs)
++            ob, info = super().reset(*args, **post_seed_kwargs)
+             self.set_goal(goal_xy=goal_xy)
+             self.set_xy(init_xy)
+             ob = self.get_ob()
+@@ -445,7 +467,7 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
                      if np.linalg.norm(self.get_xy() - np.array([x, y])) <= self._teleport_info['teleport_radius'] * 1.5:
                          # Teleport the agent to a random outbound teleport.
                          teleport_out_xy = self._teleport_info['teleport_out_xys'][
@@ -3550,7 +3568,7 @@ index 6ec8769..b609aa0 100644
                          ]
                          self.set_xy(np.array(teleport_out_xy))
                          break
-@@ -562,8 +579,8 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
+@@ -562,8 +584,8 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
              return x, y
  
          def add_noise(self, xy):
@@ -3561,15 +3579,20 @@ index 6ec8769..b609aa0 100644
              return xy[0] + random_x, xy[1] + random_y
  
      class BallEnv(MazeEnv):
-@@ -628,6 +645,7 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
+@@ -628,6 +650,12 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
          def reset(self, options=None, *args, **kwargs):
              if options is None:
                  options = {}
 +            reset_seed = kwargs.get('seed', None)
++            post_seed_kwargs = dict(kwargs)
++            post_seed_kwargs.pop('seed', None)
++            if reset_seed is not None:
++                # Seed the env RNG before sampling task ids / reset noise below.
++                super(MazeEnv, self).reset(*args, **kwargs)
              # Set the task goal.
              if self._reward_task_id is not None:
                  # Use the pre-defined task.
-@@ -645,7 +663,7 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
+@@ -645,7 +673,7 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
                  self.cur_task_info = options['task_info']
              else:
                  # Randomly sample a task.
@@ -3578,8 +3601,12 @@ index 6ec8769..b609aa0 100644
                  self.cur_task_info = self.task_infos[self.cur_task_id - 1]
  
              # Whether to provide a rendering of the goal.
-@@ -664,6 +682,8 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
-             super(MazeEnv, self).reset(*args, **kwargs)
+@@ -661,9 +689,11 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
+                 goal_xy = self.add_noise(goal_xy)
+ 
+             # First, force set the position to the goal position to obtain the goal observation.
+-            super(MazeEnv, self).reset(*args, **kwargs)
++            super(MazeEnv, self).reset(*args, **post_seed_kwargs)
  
              # Do a few random steps to stabilize the environment.
 +            if reset_seed is not None:
@@ -3587,3 +3614,12 @@ index 6ec8769..b609aa0 100644
              for _ in range(10):
                  super(MazeEnv, self).step(self.action_space.sample())
  
+@@ -675,7 +705,7 @@ def make_maze_env(loco_env_type, maze_env_type, *args, **kwargs):
+                 goal_rendered = self.render()
+ 
+             # Now, do the actual reset.
+-            ob, info = super(MazeEnv, self).reset(*args, **kwargs)
++            ob, info = super(MazeEnv, self).reset(*args, **post_seed_kwargs)
+             self.set_goal(goal_xy=goal_xy)
+             self.set_agent_ball_xy(agent_init_xy, ball_init_xy)
+             ob = self.get_ob()
