@@ -1883,7 +1883,7 @@ index 6b17e11..863dd39 100644
  
      return env, train_dataset, val_dataset
 diff --git a/impls/utils/evaluation.py b/impls/utils/evaluation.py
-index a3a9944..3b19158 100644
+index a3a9944..d842c41 100644
 --- a/impls/utils/evaluation.py
 +++ b/impls/utils/evaluation.py
 @@ -2,6 +2,7 @@ from collections import defaultdict
@@ -1905,7 +1905,7 @@ index a3a9944..3b19158 100644
  ):
      """Evaluate the agent in the environment.
  
-@@ -61,28 +66,210 @@ def evaluate(
+@@ -61,28 +66,213 @@ def evaluate(
      Returns:
          A tuple containing the statistics, trajectories, and rendered videos.
      """
@@ -2068,16 +2068,19 @@ index a3a9944..3b19158 100644
 +            grad_eps=float(grad_eps),
 +        )
 +
++    @jax.jit
++    def _jit_actor_mode(observation, goal):
++        dist = agent.network.select('actor')(observation, goal, temperature=0.0)
++        action = dist.mode()
++        if not config.get('discrete'):
++            action = jnp.clip(action, -1, 1)
++        return action
++
 +    def _eval_action(observation, goal):
-+        # For evaluation, temperature=0 should mean greedy action selection. Using the
-+        # actor mode removes policy-side stochasticity and makes repeated evals easier
-+        # to interpret when the environment supports deterministic resets.
++        # For evaluation, temperature=0 should mean greedy action selection. Keep the
++        # deterministic path jitted so evaluation speed stays comparable to sample_actions.
 +        if has_actor and eval_temperature == 0:
-+            dist = agent.network.select('actor')(observation, goal, temperature=eval_temperature)
-+            action = dist.mode()
-+            if not config.get('discrete'):
-+                action = jnp.clip(action, -1, 1)
-+            return np.array(action)
++            return np.array(_jit_actor_mode(observation, goal))
 +        return np.array(actor_fn(observations=observation, goals=goal, temperature=eval_temperature))
 +
      renders = []
@@ -2122,7 +2125,7 @@ index a3a9944..3b19158 100644
  
              next_observation, reward, terminated, truncated, info = env.step(action)
              done = terminated or truncated
-@@ -106,6 +293,22 @@ def evaluate(
+@@ -106,6 +296,22 @@ def evaluate(
              add_to(traj, transition)
              observation = next_observation
          if i < num_eval_episodes:
