@@ -2298,7 +2298,7 @@ index 9c421dd..3da1eab 100644
  
      return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..33626b0 100644
+index 4ee2b26..5d36577 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
 @@ -6,6 +6,8 @@ import flax.linen as nn
@@ -2310,7 +2310,7 @@ index 4ee2b26..33626b0 100644
  
  def default_init(scale=1.0):
      """Default kernel initializer."""
-@@ -60,6 +62,439 @@ class MLP(nn.Module):
+@@ -60,6 +62,447 @@ class MLP(nn.Module):
          return x
  
  
@@ -2485,8 +2485,10 @@ index 4ee2b26..33626b0 100644
 +        num_dense_layers = int(self.num_dense_layers)
 +        if num_dense_layers <= 0:
 +            raise ValueError(f'num_dense_layers must be positive. Got {num_dense_layers}.')
-+        if self.ln_mode not in ('pre_loop', 'per_layer'):
-+            raise ValueError(f"Unsupported ln_mode={self.ln_mode!r}. Use 'pre_loop' or 'per_layer'.")
++        if self.ln_mode not in ('pre_loop', 'per_layer', 'per_layer_final'):
++            raise ValueError(
++                f"Unsupported ln_mode={self.ln_mode!r}. Use 'pre_loop', 'per_layer', or 'per_layer_final'."
++            )
 +
 +        # `max_iters` is only a hard limit when the backbone materializes per-iteration
 +        # parameters. Fully shared configs can safely extrapolate to larger `num_iters`.
@@ -2536,9 +2538,10 @@ index 4ee2b26..33626b0 100644
 +                else:
 +                    untied_loop_norms = [nn.LayerNorm(name=f'LayerNorm_{k}') for k in range(int(self.max_iters))]
 +            else:
++                num_layer_norms = num_dense_layers if self.ln_mode == 'per_layer_final' else num_dense_layers - 1
 +                if self.tied_layer_norm:
 +                    tied_layer_norms = []
-+                    for layer_index in range(num_dense_layers - 1):
++                    for layer_index in range(num_layer_norms):
 +                        ln_name = 'ln' if layer_index == 0 else f'ln_{layer_index + 1}'
 +                        tied_layer_norms.append(nn.LayerNorm(name=ln_name))
 +                else:
@@ -2547,7 +2550,7 @@ index 4ee2b26..33626b0 100644
 +                        untied_hidden_layer_norms.append(
 +                            [
 +                                nn.LayerNorm(name=f'LayerNorm_{k}_{layer_index}')
-+                                for layer_index in range(num_dense_layers - 1)
++                                for layer_index in range(num_layer_norms)
 +                            ]
 +                        )
 +
@@ -2583,12 +2586,17 @@ index 4ee2b26..33626b0 100644
 +
 +            for layer_index, layer in enumerate(tied_layers):
 +                u = layer(u)
++                apply_layer_norm = (
++                    self.layer_norm
++                    and self.ln_mode in ('per_layer', 'per_layer_final')
++                    and (layer_index < len(tied_layers) - 1 or self.ln_mode == 'per_layer_final')
++                )
++                if apply_layer_norm:
++                    if tied_layer_norms is not None:
++                        u = tied_layer_norms[layer_index](u)
++                    elif untied_hidden_layer_norms is not None:
++                        u = untied_hidden_layer_norms[k][layer_index](u)
 +                if layer_index < len(tied_layers) - 1:
-+                    if self.layer_norm and self.ln_mode == 'per_layer':
-+                        if tied_layer_norms is not None:
-+                            u = tied_layer_norms[layer_index](u)
-+                        elif untied_hidden_layer_norms is not None:
-+                            u = untied_hidden_layer_norms[k][layer_index](u)
 +                    u = nn.silu(u)
 +
 +            if self.use_layerscale:
@@ -2750,7 +2758,7 @@ index 4ee2b26..33626b0 100644
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -164,9 +599,133 @@ class GCActor(nn.Module):
+@@ -164,9 +607,133 @@ class GCActor(nn.Module):
      const_std: bool = True
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -2885,7 +2893,7 @@ index 4ee2b26..33626b0 100644
          self.mean_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
          if self.state_dependent_std:
              self.log_std_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
-@@ -230,9 +789,133 @@ class GCDiscreteActor(nn.Module):
+@@ -230,9 +797,133 @@ class GCDiscreteActor(nn.Module):
      action_dim: int
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -3020,7 +3028,7 @@ index 4ee2b26..33626b0 100644
          self.logit_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
  
      def __call__(
-@@ -282,14 +965,40 @@ class GCValue(nn.Module):
+@@ -282,14 +973,40 @@ class GCValue(nn.Module):
      layer_norm: bool = True
      ensemble: bool = True
      gc_encoder: nn.Module = None
@@ -3066,7 +3074,7 @@ index 4ee2b26..33626b0 100644
  
      def __call__(self, observations, goals=None, actions=None):
          """Return the value/critic function.
-@@ -314,6 +1023,62 @@ class GCValue(nn.Module):
+@@ -314,6 +1031,62 @@ class GCValue(nn.Module):
          return v
  
  
@@ -3129,7 +3137,7 @@ index 4ee2b26..33626b0 100644
  class GCDiscreteCritic(GCValue):
      """Goal-conditioned critic for discrete actions."""
  
-@@ -347,16 +1112,129 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +1120,129 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
@@ -3264,7 +3272,7 @@ index 4ee2b26..33626b0 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +1242,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +1250,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -3272,7 +3280,7 @@ index 4ee2b26..33626b0 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,8 +1254,13 @@ class GCBilinearValue(nn.Module):
+@@ -375,8 +1262,13 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
@@ -3288,7 +3296,7 @@ index 4ee2b26..33626b0 100644
  
          v = (phi * psi / jnp.sqrt(self.latent_dim)).sum(axis=-1)
  
-@@ -394,9 +1278,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+@@ -394,9 +1286,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
  
      action_dim: int = None
  
@@ -3300,7 +3308,7 @@ index 4ee2b26..33626b0 100644
  
  
  class GCMRNValue(nn.Module):
-@@ -416,9 +1300,87 @@ class GCMRNValue(nn.Module):
+@@ -416,9 +1308,87 @@ class GCMRNValue(nn.Module):
      latent_dim: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -3389,7 +3397,7 @@ index 4ee2b26..33626b0 100644
  
      def __call__(self, observations, goals, is_phi=False, info=False):
          """Return the MRN value function.
-@@ -471,9 +1433,87 @@ class GCIQEValue(nn.Module):
+@@ -471,9 +1441,87 @@ class GCIQEValue(nn.Module):
      dim_per_component: int
      layer_norm: bool = True
      encoder: nn.Module = None
