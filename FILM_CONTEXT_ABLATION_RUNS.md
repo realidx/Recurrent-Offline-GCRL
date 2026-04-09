@@ -1,0 +1,95 @@
+# FiLM-Context Ablation Runs
+
+This file collects runnable `sbatch` commands for the current FiLM-context ablation.
+
+Launcher sources:
+
+- [slurm/train_crl_generic_array.slurm](/Users/bruce/Recurrent-Offline-RL/slurm/train_crl_generic_array.slurm)
+- [slurm/train_hiql_recur_value_array.slurm](/Users/bruce/Recurrent-Offline-RL/slurm/train_hiql_recur_value_array.slurm)
+- [slurm/train_saw_array.slurm](/Users/bruce/Recurrent-Offline-RL/slurm/train_saw_array.slurm)
+
+The new launcher env vars exposed for this ablation are:
+
+- `RECUR_USE_FILM_CONTEXT`, `RECUR_USE_STEP_INFO` for `CRL` / `QRL`
+- `VALUE_RECUR_USE_FILM_CONTEXT`, `VALUE_RECUR_USE_STEP_INFO` for `HIQL`
+- `VALUE_RECUR_USE_FILM_CONTEXT`, `VALUE_RECUR_USE_STEP_INFO`, `ACTOR_RECUR_USE_FILM_CONTEXT`, `ACTOR_RECUR_USE_STEP_INFO`, `LOW_ACTOR_RECUR_USE_FILM_CONTEXT`, `LOW_ACTOR_RECUR_USE_STEP_INFO` for `SAW`
+
+## CRL on `antmaze-giant-navigate-v0`
+
+These `CRL` commands are aligned to the OGBench third-party benchmark entry in [third_party/ogbench/impls/hyperparameters.sh](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/hyperparameters.sh#L140), which for `antmaze-giant-navigate-v0` specifies `--agent.alpha=0.1 --agent.discount=0.995` and does not override actor goal-mix defaults.
+
+Baseline recurrent critic, hidden-only FiLM:
+
+```bash
+sbatch --array=0-2 --export="ALL,SEEDS=0 1 2,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=CRL_AntGiantNavigate_Recur_Baseline,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,RECUR_MAX_ITERS=24,RECUR_USE_STEP_INFO=0,RECUR_USE_FILM_CONTEXT=0,ALPHA=0.1,DISCOUNT=0.995,EVAL_ON_CPU=1,WANDB_MODE=online" slurm/train_crl_generic_array.slurm
+```
+
+Hybrid hidden + context FiLM critic:
+
+```bash
+sbatch --array=0-2 --export="ALL,SEEDS=0 1 2,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=P4_CRL_AntGiantNavigate_Recur_FiLMCtx,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,RECUR_MAX_ITERS=24,RECUR_USE_STEP_INFO=0,RECUR_USE_FILM_CONTEXT=1,ALPHA=0.1,DISCOUNT=0.995,EVAL_ON_CPU=1,WANDB_MODE=online" slurm/train_crl_generic_array.slurm
+```
+
+Hybrid hidden + context + step FiLM critic:
+
+```bash
+sbatch --array=0-2 --export="ALL,SEEDS=0 1 2,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=P4_CRL_AntGiantNavigate_Recur_FiLMCtxStep,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,RECUR_MAX_ITERS=24,RECUR_USE_STEP_INFO=1,RECUR_USE_FILM_CONTEXT=1,ALPHA=0.1,DISCOUNT=0.995,EVAL_ON_CPU=1,WANDB_MODE=online" slurm/train_crl_generic_array.slurm
+```
+
+## HIQL on `antmaze-giant-navigate-v0`
+
+These `HIQL` commands are aligned to the OGBench third-party benchmark entry in [third_party/ogbench/impls/hyperparameters.sh](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/hyperparameters.sh#L142), which for `antmaze-giant-navigate-v0` specifies `--agent.discount=0.995 --agent.high_alpha=3.0 --agent.low_alpha=3.0`. The local launcher defaults differ for actor goal-mix, so those are overridden here to match OGBench agent defaults `actor_p_trajgoal=1.0` and `actor_p_randomgoal=0.0`.
+
+Baseline recurrent value:
+
+```bash
+sbatch --array=0-2 --export="ALL,SEEDS=0 1 2,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=P4_HIQL_AntGiantNavigate_Recur_Baseline,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=6,VALUE_RECUR_NUM_DENSE_LAYERS=4,VALUE_RECUR_MAX_ITERS=6,VALUE_RECUR_USE_STEP_INFO=0,VALUE_RECUR_USE_FILM_CONTEXT=0,DISCOUNT=0.995,LOW_ALPHA=3.0,HIGH_ALPHA=3.0,ACTOR_P_TRAJGOAL=1.0,ACTOR_P_RANDOMGOAL=0.0,EVAL_ON_CPU=1,WANDB_MODE=online" slurm/train_hiql_recur_value_array.slurm
+```
+
+Hybrid hidden + context FiLM value:
+
+```bash
+sbatch --array=0-2 --export="ALL,SEEDS=0 1 2,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=P4_HIQL_AntGiantNavigate_Recur_FiLMCtx,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=6,VALUE_RECUR_NUM_DENSE_LAYERS=4,VALUE_RECUR_MAX_ITERS=6,VALUE_RECUR_USE_STEP_INFO=0,VALUE_RECUR_USE_FILM_CONTEXT=1,DISCOUNT=0.995,LOW_ALPHA=3.0,HIGH_ALPHA=3.0,ACTOR_P_TRAJGOAL=1.0,ACTOR_P_RANDOMGOAL=0.0,EVAL_ON_CPU=1,WANDB_MODE=online" slurm/train_hiql_recur_value_array.slurm
+```
+
+Hybrid hidden + context + step FiLM value:
+
+```bash
+sbatch --array=0-2 --export="ALL,SEEDS=0 1 2,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=P4_HIQL_AntGiantNavigate_Recur_FiLMCtxStep,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=6,VALUE_RECUR_NUM_DENSE_LAYERS=4,VALUE_RECUR_MAX_ITERS=6,VALUE_RECUR_USE_STEP_INFO=1,VALUE_RECUR_USE_FILM_CONTEXT=1,DISCOUNT=0.995,LOW_ALPHA=3.0,HIGH_ALPHA=3.0,ACTOR_P_TRAJGOAL=1.0,ACTOR_P_RANDOMGOAL=0.0,EVAL_ON_CPU=1,WANDB_MODE=online" slurm/train_hiql_recur_value_array.slurm
+```
+
+## SAW on `antmaze-giant-navigate-v0`
+
+`SAW` is not part of the OGBench third-party benchmark table, so these are local ablation commands rather than benchmark-matching references.
+
+Value-only baseline:
+
+```bash
+sbatch --array=0-2 --export="ALL,SEEDS=0 1 2,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=P4_SAW_AntGiantNavigate_ValueRecur_Baseline,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=4,VALUE_RECUR_NUM_DENSE_LAYERS=2,VALUE_RECUR_MAX_ITERS=16,VALUE_RECUR_USE_STEP_INFO=0,VALUE_RECUR_USE_FILM_CONTEXT=0,EVAL_ON_CPU=1,WANDB_MODE=online" slurm/train_saw_array.slurm
+```
+
+Value-only hidden + context FiLM:
+
+```bash
+sbatch --array=0-2 --export="ALL,SEEDS=0 1 2,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=P4_SAW_AntGiantNavigate_ValueRecur_FiLMCtx,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=4,VALUE_RECUR_NUM_DENSE_LAYERS=2,VALUE_RECUR_MAX_ITERS=16,VALUE_RECUR_USE_STEP_INFO=0,VALUE_RECUR_USE_FILM_CONTEXT=1,EVAL_ON_CPU=1,WANDB_MODE=online" slurm/train_saw_array.slurm
+```
+
+Optional all-recurrent SAW ablation:
+
+```bash
+sbatch --array=0-2 --export="ALL,SEEDS=0 1 2,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=P4_SAW_AntGiantNavigate_AllRecur_FiLMCtx,VALUE_BACKBONE=recur_tied,VALUE_RECUR_USE_STEP_INFO=0,VALUE_RECUR_USE_FILM_CONTEXT=1,ACTOR_BACKBONE=recur_tied,ACTOR_RECUR_USE_STEP_INFO=0,ACTOR_RECUR_USE_FILM_CONTEXT=1,LOW_ACTOR_BACKBONE=recur_tied,LOW_ACTOR_RECUR_USE_STEP_INFO=0,LOW_ACTOR_RECUR_USE_FILM_CONTEXT=1,EVAL_ON_CPU=1,WANDB_MODE=online" slurm/train_saw_array.slurm
+```
+
+## Single-seed Smoke Test
+
+Before launching 3 seeds, use a one-seed smoke test:
+
+```bash
+sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=Smoke_CRL_FiLMCtx,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,RECUR_MAX_ITERS=24,RECUR_USE_STEP_INFO=0,RECUR_USE_FILM_CONTEXT=1,ALPHA=0.1,DISCOUNT=0.995,EVAL_ON_CPU=1,WANDB_MODE=online" slurm/train_crl_generic_array.slurm
+```
+
+## Suggested Comparison Order
+
+1. `CRL`: baseline vs `RECUR_USE_FILM_CONTEXT=1`
+2. `CRL`: `RECUR_USE_FILM_CONTEXT=1` vs `RECUR_USE_FILM_CONTEXT=1, RECUR_USE_STEP_INFO=1`
+3. `HIQL`: baseline vs `VALUE_RECUR_USE_FILM_CONTEXT=1`
