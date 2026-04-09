@@ -1,5 +1,0 @@
-# NVIDIA/CUDA server runs.
--r requirements-base.txt
-
-# Matches OGBench's optional extra; requires a CUDA-capable Linux environment.
-jax[cuda12] >= 0.4.26

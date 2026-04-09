@@ -1,5 +1,17 @@
-# Local CPU dev / sanity checks.
--r requirements-base.txt
+ogbench == 1.2.1
 
-# CPU JAX (use `requirements-cuda12.txt` on an NVIDIA/CUDA server).
+# Training deps for OGBench reference implementations.
+flax >= 0.8.4
+distrax >= 0.1.5
+ml_collections
+absl-py
+tqdm
+wandb
+matplotlib
+moviepy
+
+# Default JAX for local CPU dev / sanity checks.
 jax >= 0.4.26
+
+# On an NVIDIA/CUDA 12 Linux server, replace the line above with:
+# jax[cuda12] >= 0.4.26

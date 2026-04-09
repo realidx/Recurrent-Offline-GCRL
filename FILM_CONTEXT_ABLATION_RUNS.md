@@ -4,7 +4,7 @@ This file collects runnable `sbatch` commands for the current FiLM-context ablat
 
 Launcher sources:
 
-- [slurm/train_crl_generic_array.slurm](/Users/bruce/Recurrent-Offline-RL/slurm/train_crl_generic_array.slurm)
+- [slurm/train_crl.slurm](/Users/bruce/Recurrent-Offline-RL/slurm/train_crl.slurm)
 - [slurm/train_hiql_recur_value_array.slurm](/Users/bruce/Recurrent-Offline-RL/slurm/train_hiql_recur_value_array.slurm)
 - [slurm/train_saw_array.slurm](/Users/bruce/Recurrent-Offline-RL/slurm/train_saw_array.slurm)
 
@@ -21,19 +21,19 @@ These `CRL` commands are aligned to the OGBench third-party benchmark entry in [
 Baseline recurrent critic, hidden-only FiLM:
 
 ```bash
-sbatch --array=0-2 --export="ALL,SEEDS=0 1 2,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=CRL_AntGiantNavigate_Recur_Baseline,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,RECUR_MAX_ITERS=24,RECUR_USE_STEP_INFO=0,RECUR_USE_FILM_CONTEXT=0,ALPHA=0.1,DISCOUNT=0.995,EVAL_ON_CPU=1,WANDB_MODE=online" slurm/train_crl_generic_array.slurm
+sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=CRL_AntGiantNavigate_FiLM_Ablation,EXP_NAME=Baseline,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,RECUR_MAX_ITERS=8,RECUR_USE_STEP_INFO=0,RECUR_USE_FILM_CONTEXT=0,ALPHA=0.1,DISCOUNT=0.995,ACTOR_P_TRAJGOAL=1.0,ACTOR_P_RANDOMGOAL=0.0,EVAL_ON_CPU=1,WANDB_MODE=online" slurm/train_crl.slurm
 ```
 
 Hybrid hidden + context FiLM critic:
 
 ```bash
-sbatch --array=0-2 --export="ALL,SEEDS=0 1 2,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=P4_CRL_AntGiantNavigate_Recur_FiLMCtx,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,RECUR_MAX_ITERS=24,RECUR_USE_STEP_INFO=0,RECUR_USE_FILM_CONTEXT=1,ALPHA=0.1,DISCOUNT=0.995,EVAL_ON_CPU=1,WANDB_MODE=online" slurm/train_crl_generic_array.slurm
+sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=CRL_AntGiantNavigate_FiLM_Ablation,EXP_NAME=FiLMCtx,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,RECUR_MAX_ITERS=8,RECUR_USE_STEP_INFO=0,RECUR_USE_FILM_CONTEXT=1,ALPHA=0.1,DISCOUNT=0.995,ACTOR_P_TRAJGOAL=1.0,ACTOR_P_RANDOMGOAL=0.0,EVAL_ON_CPU=1,WANDB_MODE=online" slurm/train_crl.slurm
 ```
 
 Hybrid hidden + context + step FiLM critic:
 
 ```bash
-sbatch --array=0-2 --export="ALL,SEEDS=0 1 2,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=P4_CRL_AntGiantNavigate_Recur_FiLMCtxStep,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,RECUR_MAX_ITERS=24,RECUR_USE_STEP_INFO=1,RECUR_USE_FILM_CONTEXT=1,ALPHA=0.1,DISCOUNT=0.995,EVAL_ON_CPU=1,WANDB_MODE=online" slurm/train_crl_generic_array.slurm
+sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=CRL_AntGiantNavigate_FiLM_Ablation,EXP_NAME=FiLMCtxStep,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,RECUR_MAX_ITERS=8,RECUR_USE_STEP_INFO=1,RECUR_USE_FILM_CONTEXT=1,ALPHA=0.1,DISCOUNT=0.995,ACTOR_P_TRAJGOAL=1.0,ACTOR_P_RANDOMGOAL=0.0,EVAL_ON_CPU=1,WANDB_MODE=online" slurm/train_crl.slurm
 ```
 
 ## HIQL on `antmaze-giant-navigate-v0`
