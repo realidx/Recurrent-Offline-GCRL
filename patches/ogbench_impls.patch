@@ -2448,7 +2448,7 @@ index 9c421dd..3da1eab 100644
  
      return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..8f6ddcc 100644
+index 4ee2b26..928edce 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
 @@ -6,6 +6,8 @@ import flax.linen as nn
@@ -3103,7 +3103,7 @@ index 4ee2b26..8f6ddcc 100644
              inputs = jnp.concatenate(inputs, axis=-1)
 -        outputs = self.actor_net(inputs)
 +        if self.backbone == 'recur_tied':
-+            outputs = self.actor_net(inputs, context=inputs)
++            outputs = self.actor_net(inputs, None, False, inputs)
 +        else:
 +            outputs = self.actor_net(inputs)
  
@@ -3252,7 +3252,7 @@ index 4ee2b26..8f6ddcc 100644
              inputs = jnp.concatenate(inputs, axis=-1)
 -        outputs = self.actor_net(inputs)
 +        if self.backbone == 'recur_tied':
-+            outputs = self.actor_net(inputs, context=inputs)
++            outputs = self.actor_net(inputs, None, False, inputs)
 +        else:
 +            outputs = self.actor_net(inputs)
  
@@ -3370,9 +3370,9 @@ index 4ee2b26..8f6ddcc 100644
 +            inputs.append(actions)
 +        inputs = jnp.concatenate(inputs, axis=-1)
 +        if return_aux:
-+            values, aux = self.value_net(inputs, None, True, context=inputs)
++            values, aux = self.value_net(inputs, None, True, inputs)
 +            return values.squeeze(-1), aux
-+        return self.value_net(inputs, context=inputs).squeeze(-1)
++        return self.value_net(inputs, None, False, inputs).squeeze(-1)
 +
 +
  class GCDiscreteCritic(GCValue):
@@ -3542,8 +3542,8 @@ index 4ee2b26..8f6ddcc 100644
 +        aux = {}
 +        if self.backbone == 'recur_tied' and return_aux:
 +            # IMPORTANT: nn.vmap does not support kwargs; pass iterative args positionally.
-+            phi, phi_aux = self.phi(phi_inputs, num_iters, True, context=phi_inputs)
-+            psi, psi_aux = self.psi(goals, num_iters, True, context=goals)
++            phi, phi_aux = self.phi(phi_inputs, num_iters, True, phi_inputs)
++            psi, psi_aux = self.psi(goals, num_iters, True, goals)
 +            phi_steps = phi_aux.get('act_expected_steps')
 +            psi_steps = psi_aux.get('act_expected_steps')
 +            if phi_steps is not None and psi_steps is not None:
@@ -3553,10 +3553,10 @@ index 4ee2b26..8f6ddcc 100644
 +                    'act_expected_steps_total': phi_steps + psi_steps,
 +                }
 +        elif self.backbone in ('recur_tied', 'partial_tied'):
-+            # IMPORTANT: nn.vmap does not support kwargs; pass num_iters positionally.
++            # IMPORTANT: nn.vmap does not support kwargs; pass iterative args positionally.
 +            if self.backbone == 'recur_tied':
-+                phi = self.phi(phi_inputs, num_iters, context=phi_inputs)
-+                psi = self.psi(goals, num_iters, context=goals)
++                phi = self.phi(phi_inputs, num_iters, False, phi_inputs)
++                psi = self.psi(goals, num_iters, False, goals)
 +            else:
 +                phi = self.phi(phi_inputs, num_iters)
 +                psi = self.psi(goals, num_iters)
@@ -3688,8 +3688,8 @@ index 4ee2b26..8f6ddcc 100644
 -            phi_s = self.phi(observations)
 -            phi_g = self.phi(goals)
 +            if self.backbone == 'recur_tied':
-+                phi_s = self.phi(observations, context=observations)
-+                phi_g = self.phi(goals, context=goals)
++                phi_s = self.phi(observations, None, False, observations)
++                phi_g = self.phi(goals, None, False, goals)
 +            else:
 +                phi_s = self.phi(observations)
 +                phi_g = self.phi(goals)
@@ -3794,8 +3794,8 @@ index 4ee2b26..8f6ddcc 100644
 -            phi_s = self.phi(observations)
 -            phi_g = self.phi(goals)
 +            if self.backbone == 'recur_tied':
-+                phi_s = self.phi(observations, context=observations)
-+                phi_g = self.phi(goals, context=goals)
++                phi_s = self.phi(observations, None, False, observations)
++                phi_g = self.phi(goals, None, False, goals)
 +            else:
 +                phi_s = self.phi(observations)
 +                phi_g = self.phi(goals)
