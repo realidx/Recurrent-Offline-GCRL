@@ -126,8 +126,10 @@ KTRAIN="${KTRAIN:-4}"
 RECUR_NUM_DENSE_LAYERS="${RECUR_NUM_DENSE_LAYERS:-}" # User-facing N in NxK: dense layers inside each tied recurrent residual update.
 RECUR_NUM_BLOCKS="${RECUR_NUM_BLOCKS:-1}"   # Deprecated fallback: number of 2-layer pairs inside each tied recurrent residual update.
 RECUR_MAX_ITERS="${RECUR_MAX_ITERS:-8}"
+CRITIC_RECUR_LN_MODE="${CRITIC_RECUR_LN_MODE:-per_layer_final}"
 RECUR_USE_STEP_INFO="${RECUR_USE_STEP_INFO:-0}"
 RECUR_USE_FILM_CONTEXT="${RECUR_USE_FILM_CONTEXT:-0}"
+CRITIC_RECUR_FILM_MODE="${CRITIC_RECUR_FILM_MODE:-}"
 RECUR_USE_ACT="${RECUR_USE_ACT:-0}"
 RECUR_ACT_EPSILON="${RECUR_ACT_EPSILON:-0.01}"
 RECUR_ACT_MIN_ITERS="${RECUR_ACT_MIN_ITERS:-1}"
@@ -362,10 +364,19 @@ case "${CRITIC_BACKBONE}" in
     )
     ;;
   recur_tied)
+    if [[ ! "${CRITIC_RECUR_LN_MODE}" =~ ^(pre_loop|per_layer|per_layer_final)$ ]]; then
+      echo "Error: CRITIC_RECUR_LN_MODE='${CRITIC_RECUR_LN_MODE}' is invalid. Use pre_loop, per_layer, or per_layer_final." >&2
+      exit 2
+    fi
+    if [[ -n "${CRITIC_RECUR_FILM_MODE}" && ! "${CRITIC_RECUR_FILM_MODE}" =~ ^(hidden|context|hidden_context)$ ]]; then
+      echo "Error: CRITIC_RECUR_FILM_MODE='${CRITIC_RECUR_FILM_MODE}' is invalid. Use hidden, context, or hidden_context." >&2
+      exit 2
+    fi
     AGENT_FLAGS+=(
       "--agent.critic_recur_iters=${KTRAIN}"
       "--agent.critic_recur_num_dense_layers=${RECUR_NUM_DENSE_LAYERS}"
       "--agent.critic_recur_max_iters=${RECUR_MAX_ITERS}"
+      "--agent.critic_recur_ln_mode=${CRITIC_RECUR_LN_MODE}"
       "--agent.critic_recur_use_step_info=${RECUR_USE_STEP_INFO}"
       "--agent.critic_recur_use_film_context=${RECUR_USE_FILM_CONTEXT}"
       "--agent.critic_recur_use_act=${RECUR_USE_ACT}"
@@ -373,6 +384,9 @@ case "${CRITIC_BACKBONE}" in
       "--agent.critic_recur_act_min_iters=${RECUR_ACT_MIN_ITERS}"
       "--agent.critic_recur_act_ponder_weight=${RECUR_ACT_PONDER_WEIGHT}"
     )
+    if [[ -n "${CRITIC_RECUR_FILM_MODE}" ]]; then
+      AGENT_FLAGS+=("--agent.critic_recur_film_mode=${CRITIC_RECUR_FILM_MODE}")
+    fi
     ;;
   partial_tied)
     AGENT_FLAGS+=(

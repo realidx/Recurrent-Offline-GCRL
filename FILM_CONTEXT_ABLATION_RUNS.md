@@ -36,9 +36,41 @@ Hybrid hidden + context + step FiLM critic:
 sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=CRL_AntGiantNavigate_FiLM_Ablation,EXP_NAME=FiLMCtxStep,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,RECUR_MAX_ITERS=8,RECUR_USE_STEP_INFO=1,RECUR_USE_FILM_CONTEXT=1,ALPHA=0.1,DISCOUNT=0.995,ACTOR_P_TRAJGOAL=1.0,ACTOR_P_RANDOMGOAL=0.0,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_crl.slurm
 ```
 
-## HIQL on `antmaze-giant-navigate-v0`
+## HIQL on `antmaze-large-stitch-v0`
 
-These `HIQL` commands are aligned to the OGBench third-party benchmark entry in [third_party/ogbench/impls/hyperparameters.sh](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/hyperparameters.sh#L142), which for `antmaze-giant-navigate-v0` specifies `--agent.discount=0.995 --agent.high_alpha=3.0 --agent.low_alpha=3.0`. The local launcher defaults differ for actor goal-mix, so those are overridden here to match OGBench agent defaults `actor_p_trajgoal=1.0` and `actor_p_randomgoal=0.0`.
+These `HIQL` commands are aligned to the OGBench third-party benchmark entry in [third_party/ogbench/impls/hyperparameters.sh](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/hyperparameters.sh#L181), which for `antmaze-large-stitch-v0` uses `--agent.high_alpha=3.0 --agent.low_alpha=3.0 --agent.actor_p_trajgoal=0.5 --agent.actor_p_randomgoal=0.5`. The launcher now also exposes `VALUE_RECUR_LN_MODE`, so you can test `pre_loop` directly.
+
+Five-way single-seed FiLM mode ladder for the recurrent value:
+
+`hidden`, no step:
+
+```bash
+sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=HIQL_AntLargeStitch_FiLM_Ablation,EXP_NAME=Hidden_NoStep,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=6,VALUE_RECUR_NUM_DENSE_LAYERS=4,VALUE_RECUR_MAX_ITERS=6,VALUE_RECUR_LN_MODE=pre_loop,VALUE_RECUR_USE_STEP_INFO=0,VALUE_RECUR_USE_FILM_CONTEXT=0,VALUE_RECUR_FILM_MODE=hidden,DISCOUNT=0.99,LOW_ALPHA=3.0,HIGH_ALPHA=3.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,EVAL_ON_CPU=1,WANDB_MODE=online" slurm/train_hiql.slurm
+```
+
+`context`, no step:
+
+```bash
+sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=HIQL_AntLargeStitch_FiLM_Ablation,EXP_NAME=Context_NoStep,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=6,VALUE_RECUR_NUM_DENSE_LAYERS=4,VALUE_RECUR_MAX_ITERS=6,VALUE_RECUR_LN_MODE=pre_loop,VALUE_RECUR_USE_STEP_INFO=0,VALUE_RECUR_USE_FILM_CONTEXT=1,VALUE_RECUR_FILM_MODE=context,DISCOUNT=0.99,LOW_ALPHA=3.0,HIGH_ALPHA=3.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,EVAL_ON_CPU=1,WANDB_MODE=online" slurm/train_hiql.slurm
+```
+
+`hidden_context`, no step:
+
+```bash
+sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=HIQL_AntLargeStitch_FiLM_Ablation,EXP_NAME=HiddenContext_NoStep,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=6,VALUE_RECUR_NUM_DENSE_LAYERS=4,VALUE_RECUR_MAX_ITERS=6,VALUE_RECUR_LN_MODE=pre_loop,VALUE_RECUR_USE_STEP_INFO=0,VALUE_RECUR_USE_FILM_CONTEXT=1,VALUE_RECUR_FILM_MODE=hidden_context,DISCOUNT=0.99,LOW_ALPHA=3.0,HIGH_ALPHA=3.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,EVAL_ON_CPU=1,WANDB_MODE=online" slurm/train_hiql.slurm
+```
+
+`context`, with step:
+
+```bash
+sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=HIQL_AntLargeStitch_FiLM_Ablation,EXP_NAME=Context_WithStep,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=6,VALUE_RECUR_NUM_DENSE_LAYERS=4,VALUE_RECUR_MAX_ITERS=6,VALUE_RECUR_LN_MODE=pre_loop,VALUE_RECUR_USE_STEP_INFO=1,VALUE_RECUR_USE_FILM_CONTEXT=1,VALUE_RECUR_FILM_MODE=context,DISCOUNT=0.99,LOW_ALPHA=3.0,HIGH_ALPHA=3.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,EVAL_ON_CPU=1,WANDB_MODE=online" slurm/train_hiql.slurm
+```
+
+`hidden_context`, with step:
+
+```bash
+sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=HIQL_AntLargeStitch_FiLM_Ablation,EXP_NAME=HiddenContext_WithStep,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=6,VALUE_RECUR_NUM_DENSE_LAYERS=4,VALUE_RECUR_MAX_ITERS=6,VALUE_RECUR_LN_MODE=pre_loop,VALUE_RECUR_USE_STEP_INFO=1,VALUE_RECUR_USE_FILM_CONTEXT=1,VALUE_RECUR_FILM_MODE=hidden_context,DISCOUNT=0.99,LOW_ALPHA=3.0,HIGH_ALPHA=3.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,EVAL_ON_CPU=1,WANDB_MODE=online" slurm/train_hiql.slurm
+```
 
 Baseline recurrent value:
 
@@ -93,3 +125,10 @@ sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-giant-navigate-v0,RUN_GR
 1. `CRL`: baseline vs `RECUR_USE_FILM_CONTEXT=1`
 2. `CRL`: `RECUR_USE_FILM_CONTEXT=1` vs `RECUR_USE_FILM_CONTEXT=1, RECUR_USE_STEP_INFO=1`
 3. `HIQL`: baseline vs `VALUE_RECUR_USE_FILM_CONTEXT=1`
+
+
+sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_AntMazeLargeStitch_FiLM_Ablation,EXP_NAME=Baseline_preNorm,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,RECUR_MAX_ITERS=8,CRITIC_RECUR_LN_MODE=pre_loop,RECUR_USE_STEP_INFO=0,RECUR_USE_FILM_CONTEXT=0,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_crl.slurm
+
+sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_AntMazeLargeStitch_FiLM_Ablation,EXP_NAME=FiLMCtx,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,RECUR_MAX_ITERS=8,RECUR_USE_STEP_INFO=0,RECUR_USE_FILM_CONTEXT=1,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_crl.slurm
+
+sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_AntMazeLargeStitch_FiLM_Ablation,EXP_NAME=FiLMCtxStep,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,RECUR_MAX_ITERS=8,RECUR_USE_STEP_INFO=1,RECUR_USE_FILM_CONTEXT=1,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_crl.slurm
