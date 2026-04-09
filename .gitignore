@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.md
 # Do not ignore all markdown files. Add local-only docs explicitly if needed.
 
 .DS_Store
@@ -11,6 +12,7 @@ exp/
 logs/
 .ogbench_data/
 references/
+paper/
 
 # LaTeX build artifacts
 *.aux
