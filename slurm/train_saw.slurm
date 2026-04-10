@@ -80,8 +80,10 @@ VALUE_RESIDUAL_USE_SKIP="${VALUE_RESIDUAL_USE_SKIP:-1}"
 VALUE_RECUR_ITERS="${VALUE_RECUR_ITERS:-4}"
 VALUE_RECUR_NUM_DENSE_LAYERS="${VALUE_RECUR_NUM_DENSE_LAYERS:-2}"
 VALUE_RECUR_MAX_ITERS="${VALUE_RECUR_MAX_ITERS:-16}"
+VALUE_RECUR_LN_MODE="${VALUE_RECUR_LN_MODE:-per_layer_final}"
 VALUE_RECUR_USE_STEP_INFO="${VALUE_RECUR_USE_STEP_INFO:-0}"
 VALUE_RECUR_USE_FILM_CONTEXT="${VALUE_RECUR_USE_FILM_CONTEXT:-0}"
+VALUE_RECUR_FILM_MODE="${VALUE_RECUR_FILM_MODE:-}"
 VALUE_RECUR_USE_ACT="${VALUE_RECUR_USE_ACT:-0}"
 VALUE_RECUR_ACT_EPSILON="${VALUE_RECUR_ACT_EPSILON:-0.01}"
 VALUE_RECUR_ACT_MIN_ITERS="${VALUE_RECUR_ACT_MIN_ITERS:-1}"
@@ -273,10 +275,19 @@ case "${VALUE_BACKBONE}" in
     )
     ;;
   recur_tied)
+    if [[ ! "${VALUE_RECUR_LN_MODE}" =~ ^(pre_loop|per_layer|per_layer_final|pre_loop_per_layer)$ ]]; then
+      echo "Error: VALUE_RECUR_LN_MODE='${VALUE_RECUR_LN_MODE}' is invalid. Use pre_loop, per_layer, per_layer_final, or pre_loop_per_layer." >&2
+      exit 2
+    fi
+    if [[ -n "${VALUE_RECUR_FILM_MODE}" && ! "${VALUE_RECUR_FILM_MODE}" =~ ^(hidden|context|hidden_context)$ ]]; then
+      echo "Error: VALUE_RECUR_FILM_MODE='${VALUE_RECUR_FILM_MODE}' is invalid. Use hidden, context, or hidden_context." >&2
+      exit 2
+    fi
     AGENT_FLAGS+=(
       "--agent.value_recur_iters=${VALUE_RECUR_ITERS}"
       "--agent.value_recur_num_dense_layers=${VALUE_RECUR_NUM_DENSE_LAYERS}"
       "--agent.value_recur_max_iters=${VALUE_RECUR_MAX_ITERS}"
+      "--agent.value_recur_ln_mode=${VALUE_RECUR_LN_MODE}"
       "--agent.value_recur_use_step_info=${VALUE_RECUR_USE_STEP_INFO}"
       "--agent.value_recur_use_film_context=${VALUE_RECUR_USE_FILM_CONTEXT}"
       "--agent.value_recur_use_act=${VALUE_RECUR_USE_ACT}"
@@ -285,6 +296,9 @@ case "${VALUE_BACKBONE}" in
       "--agent.value_recur_act_ponder_weight=${VALUE_RECUR_ACT_PONDER_WEIGHT}"
       "--agent.value_layerscale_init=${VALUE_LAYERSCALE_INIT}"
     )
+    if [[ -n "${VALUE_RECUR_FILM_MODE}" ]]; then
+      AGENT_FLAGS+=("--agent.value_recur_film_mode=${VALUE_RECUR_FILM_MODE}")
+    fi
     ;;
   *)
     echo "Error: VALUE_BACKBONE='${VALUE_BACKBONE}' is invalid. Use mlp, residual_dense, dense_ln, or recur_tied." >&2

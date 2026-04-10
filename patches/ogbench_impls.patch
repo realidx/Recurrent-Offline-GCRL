@@ -3553,7 +3553,7 @@ index 9c421dd..3da1eab 100644
  
      return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..be9a4e8 100644
+index 4ee2b26..088ea84 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
 @@ -6,6 +6,8 @@ import flax.linen as nn
@@ -3565,7 +3565,7 @@ index 4ee2b26..be9a4e8 100644
  
  def default_init(scale=1.0):
      """Default kernel initializer."""
-@@ -60,6 +62,537 @@ class MLP(nn.Module):
+@@ -60,6 +62,542 @@ class MLP(nn.Module):
          return x
  
  
@@ -3574,6 +3574,7 @@ index 4ee2b26..be9a4e8 100644
 +    layer_norm: bool = True
 +    layerscale_init: float = 1e-2
 +    use_film: bool = False
++    activations: Any = nn.silu
 +
 +    @nn.compact
 +    def __call__(self, h, step_embed=None):
@@ -3585,7 +3586,7 @@ index 4ee2b26..be9a4e8 100644
 +            h_proj = nn.Dense(self.hidden_dim, name='film_fc1_h')
 +            film_fc2 = nn.Dense(2 * self.hidden_dim, name='film_fc2')
 +            fc1_out = step_proj(step_embed) + h_proj(h1)
-+            film = film_fc2(nn.silu(fc1_out))
++            film = film_fc2(self.activations(fc1_out))
 +            gamma, beta = jnp.split(film, 2, axis=-1)
 +            h1 = (1.0 + gamma) * h1 + beta
 +        u = h1
@@ -3593,7 +3594,7 @@ index 4ee2b26..be9a4e8 100644
 +            u = nn.Dense(self.hidden_dim, name=f'fc_{layer_idx + 1}')(u)
 +            if self.layer_norm:
 +                u = nn.LayerNorm(name=f'ln_{layer_idx + 1}')(u)
-+            u = nn.silu(u)
++            u = self.activations(u)
 +        return h + u
 +
 +
@@ -3604,6 +3605,7 @@ index 4ee2b26..be9a4e8 100644
 +    layer_norm: bool = True
 +    layerscale_init: float = 1e-2
 +    use_film: bool = False
++    activations: Any = nn.silu
 +
 +    @nn.compact
 +    def __call__(self, x):
@@ -3622,6 +3624,7 @@ index 4ee2b26..be9a4e8 100644
 +                layer_norm=self.layer_norm,
 +                layerscale_init=self.layerscale_init,
 +                use_film=self.use_film,
++                activations=self.activations,
 +                name=f'resblock_{block_idx + 1}',
 +            )(h, step_embed)
 +        return nn.Dense(self.out_dim)(h)
@@ -3740,6 +3743,7 @@ index 4ee2b26..be9a4e8 100644
 +    use_act: bool = False
 +    act_epsilon: float = 0.01
 +    act_min_iters: int = 1
++    activations: Any = nn.silu
 +
 +    @nn.compact
 +    def __call__(self, x, num_iters=None, return_aux=False, context=None):
@@ -3893,7 +3897,7 @@ index 4ee2b26..be9a4e8 100644
 +                    fc1_out = step_contrib_k if fc1_out is None else fc1_out + step_contrib_k
 +                if fc1_out is None:
 +                    fc1_out = jnp.zeros_like(h1)
-+                film = film_fc2(nn.silu(fc1_out))
++                film = film_fc2(self.activations(fc1_out))
 +                gamma, beta = jnp.split(film, 2, axis=-1)
 +                u = (1.0 + gamma) * h1 + beta
 +            else:
@@ -3915,7 +3919,7 @@ index 4ee2b26..be9a4e8 100644
 +                    elif untied_hidden_layer_norms is not None:
 +                        u = untied_hidden_layer_norms[k][layer_index](u)
 +                if layer_index < len(tied_layers) - 1:
-+                    u = nn.silu(u)
++                    u = self.activations(u)
 +
 +            if self.use_layerscale:
 +                alpha_k = alpha[0] if self.shared_alpha else alpha[k]
@@ -3974,6 +3978,7 @@ index 4ee2b26..be9a4e8 100644
 +    cycle_step_params: bool = True
 +    block_schedule: str = 'grouped'  # 'grouped' (default) | 'stack'
 +    layerscale_init: float = 1e-2
++    activations: Any = nn.silu
 +
 +    @nn.compact
 +    def __call__(self, x, num_iters=None):
@@ -4087,14 +4092,14 @@ index 4ee2b26..be9a4e8 100644
 +
 +            if self.per_group_film:
 +                fc1_out = step_contrib + film_fc1_h[g](h1)
-+                film = film_fc2[g](nn.silu(fc1_out))
++                film = film_fc2[g](self.activations(fc1_out))
 +            else:
 +                fc1_out = step_contrib + film_fc1_h(h1)
-+                film = film_fc2(nn.silu(fc1_out))
++                film = film_fc2(self.activations(fc1_out))
 +            gamma, beta = jnp.split(film, 2, axis=-1)
 +            h_film = (1.0 + gamma) * h1 + beta
 +
-+            u = group_fc2[g](nn.silu(group_fc1[g](h_film)))
++            u = group_fc2[g](self.activations(group_fc1[g](h_film)))
 +            h = h + alpha[k_param] * u
 +
 +        return nn.Dense(self.out_dim)(h)
@@ -4103,7 +4108,7 @@ index 4ee2b26..be9a4e8 100644
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -164,9 +697,137 @@ class GCActor(nn.Module):
+@@ -164,9 +702,137 @@ class GCActor(nn.Module):
      const_std: bool = True
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -4242,7 +4247,7 @@ index 4ee2b26..be9a4e8 100644
          self.mean_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
          if self.state_dependent_std:
              self.log_std_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
-@@ -196,7 +857,10 @@ class GCActor(nn.Module):
+@@ -196,7 +862,10 @@ class GCActor(nn.Module):
              if goals is not None:
                  inputs.append(goals)
              inputs = jnp.concatenate(inputs, axis=-1)
@@ -4254,7 +4259,7 @@ index 4ee2b26..be9a4e8 100644
  
          means = self.mean_net(outputs)
          if self.state_dependent_std:
-@@ -230,9 +894,137 @@ class GCDiscreteActor(nn.Module):
+@@ -230,9 +899,137 @@ class GCDiscreteActor(nn.Module):
      action_dim: int
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -4393,7 +4398,7 @@ index 4ee2b26..be9a4e8 100644
          self.logit_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
  
      def __call__(
-@@ -257,7 +1049,10 @@ class GCDiscreteActor(nn.Module):
+@@ -257,7 +1054,10 @@ class GCDiscreteActor(nn.Module):
              if goals is not None:
                  inputs.append(goals)
              inputs = jnp.concatenate(inputs, axis=-1)
@@ -4405,7 +4410,7 @@ index 4ee2b26..be9a4e8 100644
  
          logits = self.logit_net(outputs)
  
-@@ -282,14 +1077,40 @@ class GCValue(nn.Module):
+@@ -282,14 +1082,41 @@ class GCValue(nn.Module):
      layer_norm: bool = True
      ensemble: bool = True
      gc_encoder: nn.Module = None
@@ -4440,6 +4445,7 @@ index 4ee2b26..be9a4e8 100644
 +                num_dense_layers=int(self.residual_num_dense_layers),
 +                residual_span=int(self.residual_span),
 +                use_residual=bool(self.residual_use_skip and self.backbone == 'residual_dense'),
++                activations=nn.gelu,
 +            )
 +        else:
 +            raise ValueError(f'Unsupported value backbone: {self.backbone!r}')
@@ -4451,7 +4457,7 @@ index 4ee2b26..be9a4e8 100644
  
      def __call__(self, observations, goals=None, actions=None):
          """Return the value/critic function.
-@@ -314,6 +1135,75 @@ class GCValue(nn.Module):
+@@ -314,6 +1141,76 @@ class GCValue(nn.Module):
          return v
  
  
@@ -4503,6 +4509,7 @@ index 4ee2b26..be9a4e8 100644
 +            act_epsilon=float(self.recur_act_epsilon),
 +            act_min_iters=int(self.recur_act_min_iters),
 +            layerscale_init=self.layerscale_init,
++            activations=nn.gelu,
 +        )
 +        if self.ensemble:
 +            value_module = ensemblize(value_module, 2)
@@ -4527,7 +4534,7 @@ index 4ee2b26..be9a4e8 100644
  class GCDiscreteCritic(GCValue):
      """Goal-conditioned critic for discrete actions."""
  
-@@ -347,16 +1237,144 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +1244,150 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
@@ -4575,6 +4582,7 @@ index 4ee2b26..be9a4e8 100644
 +                layer_norm=self.layer_norm,
 +                layerscale_init=self.layerscale_init,
 +                use_film=bool(self.resnet_use_film),
++                activations=nn.gelu,
 +            )
 +            psi_kwargs = dict(
 +                hidden_dim=hidden_dim,
@@ -4583,6 +4591,7 @@ index 4ee2b26..be9a4e8 100644
 +                layer_norm=self.layer_norm,
 +                layerscale_init=self.layerscale_init,
 +                use_film=bool(self.resnet_use_film),
++                activations=nn.gelu,
 +            )
 +        elif backbone == 'recur_tied':
 +            hidden_dim = int(self.backbone_hidden_dim) if self.backbone_hidden_dim is not None else int(self.hidden_dims[-1])
@@ -4607,6 +4616,7 @@ index 4ee2b26..be9a4e8 100644
 +                act_epsilon=float(self.recur_act_epsilon),
 +                act_min_iters=int(self.recur_act_min_iters),
 +                layerscale_init=self.layerscale_init,
++                activations=nn.gelu,
 +            )
 +            psi_kwargs = dict(
 +                hidden_dim=hidden_dim,
@@ -4628,6 +4638,7 @@ index 4ee2b26..be9a4e8 100644
 +                act_epsilon=float(self.recur_act_epsilon),
 +                act_min_iters=int(self.recur_act_min_iters),
 +                layerscale_init=self.layerscale_init,
++                activations=nn.gelu,
 +            )
 +        elif backbone == 'partial_tied':
 +            hidden_dim = int(self.backbone_hidden_dim) if self.backbone_hidden_dim is not None else int(self.hidden_dims[-1])
@@ -4645,6 +4656,7 @@ index 4ee2b26..be9a4e8 100644
 +                cycle_step_params=bool(self.partial_cycle_step_params),
 +                block_schedule=str(self.partial_block_schedule),
 +                layerscale_init=self.layerscale_init,
++                activations=nn.gelu,
 +            )
 +            psi_kwargs = dict(
 +                hidden_dim=hidden_dim,
@@ -4659,6 +4671,7 @@ index 4ee2b26..be9a4e8 100644
 +                cycle_step_params=bool(self.partial_cycle_step_params),
 +                block_schedule=str(self.partial_block_schedule),
 +                layerscale_init=self.layerscale_init,
++                activations=nn.gelu,
 +            )
 +        else:
 +            raise ValueError(f'Unsupported backbone: {backbone}')
@@ -4677,7 +4690,7 @@ index 4ee2b26..be9a4e8 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +1382,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +1395,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -4685,7 +4698,7 @@ index 4ee2b26..be9a4e8 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,16 +1394,42 @@ class GCBilinearValue(nn.Module):
+@@ -375,16 +1407,42 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
@@ -4730,7 +4743,7 @@ index 4ee2b26..be9a4e8 100644
          else:
              return v
  
-@@ -394,9 +1439,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+@@ -394,9 +1452,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
  
      action_dim: int = None
  
@@ -4742,7 +4755,7 @@ index 4ee2b26..be9a4e8 100644
  
  
  class GCMRNValue(nn.Module):
-@@ -416,9 +1461,91 @@ class GCMRNValue(nn.Module):
+@@ -416,9 +1474,94 @@ class GCMRNValue(nn.Module):
      latent_dim: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -4789,6 +4802,7 @@ index 4ee2b26..be9a4e8 100644
 +                layer_norm=self.layer_norm,
 +                layerscale_init=self.layerscale_init,
 +                use_film=bool(self.resnet_use_film),
++                activations=nn.gelu,
 +            )
 +        elif backbone == 'recur_tied':
 +            hidden_dim = int(self.backbone_hidden_dim) if self.backbone_hidden_dim is not None else int(self.hidden_dims[-1])
@@ -4810,6 +4824,7 @@ index 4ee2b26..be9a4e8 100644
 +                use_layerscale=bool(self.recur_use_layerscale),
 +                shared_alpha=bool(self.recur_shared_alpha),
 +                layerscale_init=self.layerscale_init,
++                activations=nn.gelu,
 +            )
 +        elif backbone == 'partial_tied':
 +            hidden_dim = int(self.backbone_hidden_dim) if self.backbone_hidden_dim is not None else int(self.hidden_dims[-1])
@@ -4827,6 +4842,7 @@ index 4ee2b26..be9a4e8 100644
 +                cycle_step_params=bool(self.partial_cycle_step_params),
 +                block_schedule=str(self.partial_block_schedule),
 +                layerscale_init=self.layerscale_init,
++                activations=nn.gelu,
 +            )
 +        else:
 +            raise ValueError(f'Unsupported backbone: {backbone}')
@@ -4835,7 +4851,7 @@ index 4ee2b26..be9a4e8 100644
  
      def __call__(self, observations, goals, is_phi=False, info=False):
          """Return the MRN value function.
-@@ -436,8 +1563,12 @@ class GCMRNValue(nn.Module):
+@@ -436,8 +1579,12 @@ class GCMRNValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)
@@ -4850,7 +4866,7 @@ index 4ee2b26..be9a4e8 100644
  
          sym_s = phi_s[..., : self.latent_dim // 2]
          sym_g = phi_g[..., : self.latent_dim // 2]
-@@ -471,9 +1602,91 @@ class GCIQEValue(nn.Module):
+@@ -471,9 +1618,94 @@ class GCIQEValue(nn.Module):
      dim_per_component: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -4897,6 +4913,7 @@ index 4ee2b26..be9a4e8 100644
 +                layer_norm=self.layer_norm,
 +                layerscale_init=self.layerscale_init,
 +                use_film=bool(self.resnet_use_film),
++                activations=nn.gelu,
 +            )
 +        elif backbone == 'recur_tied':
 +            hidden_dim = int(self.backbone_hidden_dim) if self.backbone_hidden_dim is not None else int(self.hidden_dims[-1])
@@ -4918,6 +4935,7 @@ index 4ee2b26..be9a4e8 100644
 +                use_layerscale=bool(self.recur_use_layerscale),
 +                shared_alpha=bool(self.recur_shared_alpha),
 +                layerscale_init=self.layerscale_init,
++                activations=nn.gelu,
 +            )
 +        elif backbone == 'partial_tied':
 +            hidden_dim = int(self.backbone_hidden_dim) if self.backbone_hidden_dim is not None else int(self.hidden_dims[-1])
@@ -4935,6 +4953,7 @@ index 4ee2b26..be9a4e8 100644
 +                cycle_step_params=bool(self.partial_cycle_step_params),
 +                block_schedule=str(self.partial_block_schedule),
 +                layerscale_init=self.layerscale_init,
++                activations=nn.gelu,
 +            )
 +        else:
 +            raise ValueError(f'Unsupported backbone: {backbone}')
@@ -4943,7 +4962,7 @@ index 4ee2b26..be9a4e8 100644
          self.alpha = Param()
  
      def __call__(self, observations, goals, is_phi=False, info=False):
-@@ -493,8 +1706,12 @@ class GCIQEValue(nn.Module):
+@@ -493,8 +1725,12 @@ class GCIQEValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)
