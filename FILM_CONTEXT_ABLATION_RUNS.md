@@ -72,24 +72,6 @@ sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROU
 sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=HIQL_AntLargeStitch_FiLM_Ablation,EXP_NAME=HiddenContext_WithStep,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=6,VALUE_RECUR_NUM_DENSE_LAYERS=4,VALUE_RECUR_MAX_ITERS=6,VALUE_RECUR_LN_MODE=pre_loop,VALUE_RECUR_USE_STEP_INFO=1,VALUE_RECUR_USE_FILM_CONTEXT=1,VALUE_RECUR_FILM_MODE=hidden_context,DISCOUNT=0.99,LOW_ALPHA=3.0,HIGH_ALPHA=3.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,EVAL_ON_CPU=1,WANDB_MODE=online" slurm/train_hiql.slurm
 ```
 
-Baseline recurrent value:
-
-```bash
-sbatch --array=0-2 --export="ALL,SEEDS=0 1 2,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=P4_HIQL_AntGiantNavigate_Recur_Baseline,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=6,VALUE_RECUR_NUM_DENSE_LAYERS=4,VALUE_RECUR_MAX_ITERS=6,VALUE_RECUR_USE_STEP_INFO=0,VALUE_RECUR_USE_FILM_CONTEXT=0,DISCOUNT=0.995,LOW_ALPHA=3.0,HIGH_ALPHA=3.0,ACTOR_P_TRAJGOAL=1.0,ACTOR_P_RANDOMGOAL=0.0,EVAL_ON_CPU=1,WANDB_MODE=online" slurm/train_hiql_recur_value_array.slurm
-```
-
-Hybrid hidden + context FiLM value:
-
-```bash
-sbatch --array=0-2 --export="ALL,SEEDS=0 1 2,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=P4_HIQL_AntGiantNavigate_Recur_FiLMCtx,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=6,VALUE_RECUR_NUM_DENSE_LAYERS=4,VALUE_RECUR_MAX_ITERS=6,VALUE_RECUR_USE_STEP_INFO=0,VALUE_RECUR_USE_FILM_CONTEXT=1,DISCOUNT=0.995,LOW_ALPHA=3.0,HIGH_ALPHA=3.0,ACTOR_P_TRAJGOAL=1.0,ACTOR_P_RANDOMGOAL=0.0,EVAL_ON_CPU=1,WANDB_MODE=online" slurm/train_hiql_recur_value_array.slurm
-```
-
-Hybrid hidden + context + step FiLM value:
-
-```bash
-sbatch --array=0-2 --export="ALL,SEEDS=0 1 2,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=P4_HIQL_AntGiantNavigate_Recur_FiLMCtxStep,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=6,VALUE_RECUR_NUM_DENSE_LAYERS=4,VALUE_RECUR_MAX_ITERS=6,VALUE_RECUR_USE_STEP_INFO=1,VALUE_RECUR_USE_FILM_CONTEXT=1,DISCOUNT=0.995,LOW_ALPHA=3.0,HIGH_ALPHA=3.0,ACTOR_P_TRAJGOAL=1.0,ACTOR_P_RANDOMGOAL=0.0,EVAL_ON_CPU=1,WANDB_MODE=online" slurm/train_hiql_recur_value_array.slurm
-```
-
 ## SAW on `antmaze-giant-navigate-v0`
 
 `SAW` is not part of the OGBench third-party benchmark table, so these are local ablation commands rather than benchmark-matching references.
@@ -127,8 +109,6 @@ sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-giant-navigate-v0,RUN_GR
 3. `HIQL`: baseline vs `VALUE_RECUR_USE_FILM_CONTEXT=1`
 
 
-sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_AntMazeLargeStitch_FiLM_Ablation,EXP_NAME=Baseline_preNorm,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,RECUR_MAX_ITERS=8,CRITIC_RECUR_LN_MODE=pre_loop,RECUR_USE_STEP_INFO=0,RECUR_USE_FILM_CONTEXT=0,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_crl.slurm
+sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=HIQL_AntLargeStitch_FiLM_Ablation,EXP_NAME=sd000_antmaze_large_stitch_hiql_recur4x6_mlpactor,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=6,VALUE_RECUR_NUM_DENSE_LAYERS=4,VALUE_RECUR_MAX_ITERS=6,VALUE_RECUR_LN_MODE=per_layer,VALUE_RECUR_USE_STEP_INFO=0,VALUE_RECUR_USE_FILM_CONTEXT=0,DISCOUNT=0.99,LOW_ALPHA=3.0,HIGH_ALPHA=3.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_hiql.slurm
 
-sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_AntMazeLargeStitch_FiLM_Ablation,EXP_NAME=FiLMCtx,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,RECUR_MAX_ITERS=8,RECUR_USE_STEP_INFO=0,RECUR_USE_FILM_CONTEXT=1,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_crl.slurm
-
-sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_AntMazeLargeStitch_FiLM_Ablation,EXP_NAME=FiLMCtxStep,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,RECUR_MAX_ITERS=8,RECUR_USE_STEP_INFO=1,RECUR_USE_FILM_CONTEXT=1,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_crl.slurm
+sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_AntLargeStitch_Repro,EXP_NAME=sd000_antmaze_large_stitch_crl_recur2x4_preloop_sinusoidal,ALPHA=0.1,DISCOUNT=0.99,BATCH_SIZE=1024,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,CRITIC_BACKBONE=recur_tied,LAYERSCALE_INIT=1e-2,LR_DECAY_STEPS=1000000,LR_MIN=1e-5,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,RECUR_MAX_ITERS=24,RECUR_SINUSOIDAL=1,CRITIC_RECUR_LN_MODE=pre_loop,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_crl.slurm

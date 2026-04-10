@@ -16,7 +16,7 @@
 \usepackage{microtype}
 \usepackage{xcolor}
 
-\title{Working Title}
+\title{Iterative Refinement for Goal-Conditioned Value Estimation in Offline RL}
 
 \author{%
   Anonymous Authors \\
@@ -30,23 +30,61 @@
 \maketitle
 
 \begin{abstract}
-Briefly summarize the problem, method, main results, and key takeaways.
+This paper studies iterative refinement as an architectural prior for goal-conditioned value estimation in offline goal-conditioned reinforcement learning. The central claim is that iterative value inference is especially useful when the value function must solve hard compositional reasoning problems, such as stitching, long-horizon credit assignment, and off-support generalization. Our experimental plan is designed to test five questions: whether value networks are a bottleneck, whether iterative refinement improves value quality, whether the gains persist after controlling for parameter count and compute, whether the effect generalizes across several offline goal-conditioned RL algorithms, and whether the benefit is specific to value estimation rather than a universal improvement for every network in the pipeline. The benchmark therefore emphasizes value-side replacement, mechanism analysis, efficiency controls, and explicit failure modes.
 \end{abstract}
 
 \section{Introduction}
-State the problem, motivation, and main contributions.
+Offline goal-conditioned RL depends heavily on the quality of the learned value function. When value inference is easy, standard feedforward architectures can be sufficient. However, stitching tasks, long-horizon composition, and off-support evaluation expose a more demanding regime in which the value network must progressively organize sparse, ambiguous, or weakly supported evidence. This motivates an architectural question: should value estimation be treated as a one-shot feedforward prediction problem, or as an iterative inference problem?
+
+The paper is organized around the hypothesis that iterative refinement is a better architectural choice for goal-conditioned value estimation in precisely these hard regimes. The contribution is not only to report downstream performance gains, but to isolate why they occur and when they do not. The experiments are therefore built to support four kinds of evidence: strong main-task performance, direct evidence that refinement improves the value estimate itself, fairness controls against parameter and compute confounds, and selectivity analyses showing that the effect is stronger for value networks than for actors.
+
+This framing implies a deliberate benchmark design. Rather than maximizing the number of tasks or algorithms, we use a compact but diverse suite chosen to stress value inference difficulty. The resulting paper should make a scientific claim about architecture, not merely report a broader benchmark sweep.
 
 \section{Related Work}
-Place the paper in context and explain what is most relevant to compare against.
+The paper sits at the intersection of offline goal-conditioned RL, architectural design for value functions, and iterative inference. Prior offline goal-conditioned methods mainly differ in objectives, value parameterizations, and actor training strategies, while most architecture choices remain conventional feedforward backbones. Our emphasis is instead on whether iterative computation should be allocated to the value function itself. This also connects to a broader line of work on recurrent refinement, test-time iterative computation, and structured prediction, but here the central object of study is the goal-conditioned value estimate rather than a generic sequence model or planner.
+
+The most relevant comparisons are therefore not only between algorithms, but also between architectural placements of refinement. In particular, the paper will compare value-only replacement, actor-only replacement, and replacing both, in order to determine whether the benefit is selective to value estimation.
 
 \section{Method}
-Describe the setup, assumptions, algorithm, and theoretical or design choices.
+The method section will present iterative refinement as a drop-in replacement for the value network in offline goal-conditioned RL. The intended emphasis is architectural rather than algorithm-specific: the same refinement module should be inserted into several algorithms while keeping the surrounding training objective as unchanged as possible. This makes the paper a study of whether iterative inference improves value estimation across algorithm classes rather than a proposal tied to a single loss.
+
+At a high level, the refinement module starts from an initial hidden representation and repeatedly updates it through tied recurrent computation before producing the final value prediction. The design space to be evaluated includes the number of dense layers per refinement update, the number of refinement steps, whether parameters are tied or untied, the conditioning design used for FiLM, the placement of normalization, and the choice of LayerScale. These choices are important because they determine whether the gains come from iterative correction itself or from incidental increases in capacity.
+
+The paper will therefore position the architecture as a value-side inductive bias: extra computation is allocated to repeated refinement of a single estimate, rather than to a deeper one-shot feedforward stack. This distinction drives the controls in the experimental section.
 
 \section{Experiments}
-Report datasets, baselines, metrics, implementation details, and quantitative results.
+The experiment suite is designed to answer five reviewer-facing questions. First, does iterative refinement improve downstream performance? Second, does it improve the value estimate rather than merely the final policy score? Third, are the gains still present after controlling for parameter count and compute? Fourth, does the effect generalize across algorithm classes and task families? Fifth, is the benefit selective to value estimation rather than universal across all model components?
+
+\subsection{Benchmark Scope}
+The main benchmark will use a small but representative subset of OGBench. The target is three tasks at minimum and four tasks if compute allows, with coverage including one stitching-heavy task, one locomotion task, one manipulation task, and optionally one additional hard task. The selection principle is diversity of value inference difficulty rather than benchmark size.
+
+On the algorithm side, the core matrix will use three offline goal-conditioned RL algorithms, with an optional fourth algorithm included specifically as a weak-gain or failure-mode case. All main comparisons should use three seeds. The resulting main matrix is therefore a reviewer-safe benchmark that is broad enough to support a general architectural claim without becoming computationally diffuse.
+
+\subsection{Main Results}
+The first experiment block studies plug-and-play value replacement. The goal is to show that replacing the value network with iterative refinement improves final performance and learning dynamics across multiple algorithms and task families. The main presentation should include final normalized score or return, learning curves, and mean plus standard deviation over seeds.
+
+\subsection{Value-Versus-Actor Selectivity}
+The second block isolates where the architectural benefit comes from. For one or two algorithms on two tasks, the paper will compare a baseline model, value-only replacement, actor-only replacement, and replacing both. This section is central to the scientific contribution because it distinguishes a value-specific advantage from a generic “more expressive network helps” story.
+
+\subsection{Architecture Ablations}
+The third block studies which parts of the architecture matter. These ablations will be run on the strongest algorithm and on two tasks, ideally one hard stitching task and one non-stitching task. The ablation axes include the number of dense layers per loop, the number of refinement steps, tied versus untied designs, FiLM design, normalization placement, LayerScale design, a parameter-matched feedforward baseline, and a compute-matched feedforward baseline.
+
+\subsection{Mechanism Analysis}
+The fourth block asks whether iterative refinement performs meaningful correction over steps. This section will analyze per-step value trajectories, step-to-step update magnitudes, improvement over refinement depth, hard-versus-easy example behavior, and saturation. The key point is to show that later refinement steps do useful inferential work instead of merely adding depth.
+
+\subsection{Better Value Analysis}
+The fifth block defines what it means for the value function to be better. Candidate analyses include correlation with realized return or success, separation between reachable and unreachable goals, calibration, Bellman residual behavior, reduction of pathological variance or overly extreme predictions, and smoother structure over nearby state-goal pairs. These analyses support the claim that the architecture improves value quality itself, not just end-task reward.
+
+\subsection{Efficiency and Fairness Controls}
+The sixth block addresses the main confounds directly. Every main comparison should report parameter count, value-network parameter count, wall-clock training time, update throughput, and a clear notion of refinement-depth compute multiplier. Where possible, the paper should also include performance versus training steps and performance versus wall-clock time. This section is necessary to rule out the interpretation that iterative refinement wins only because it uses more parameters, more compute, or longer training.
+
+\subsection{Failure Modes and Limitations}
+The final block will identify where refinement is weak, unnecessary, or inconsistent. Likely cases include actor-only replacement, simpler tasks, shorter-horizon settings, and algorithms whose value formulation may already reduce the need for iterative correction. This section is important because selective success makes the paper more credible than a uniformly positive story.
 
 \section{Discussion}
-Summarize limitations, implications, and the main conclusions.
+The paper should ultimately argue for a specific architectural conclusion: iterative computation is most valuable when applied to hard value inference problems, and especially when placed on the value side of offline goal-conditioned RL. If the experiments confirm this pattern, the broader implication is that architectural improvements in offline RL should be targeted according to which component is the real inference bottleneck, rather than distributed uniformly across actor and critic.
+
+At the same time, the paper is intentionally not framed as a claim of universal superiority. The experiment design explicitly anticipates weak-gain and failure-mode settings. That selectivity is a feature of the contribution, because it helps characterize when iterative refinement is worth its added complexity and when simpler feedforward designs remain sufficient.
 
 \begin{ack}
 Add acknowledgments and funding disclosures here for the final version only.
@@ -59,8 +97,21 @@ Add references here, or replace this block with your BibTeX workflow.
 
 \appendix
 
-\section{Appendix}
-Place extra experimental details, proofs, and supplemental material here.
+\section{Concrete Experiment Matrix}
+The planned experimental budget is:
+\begin{itemize}
+\item Main matrix: three algorithms, four tasks if possible, and three seeds.
+\item Value-versus-actor study: one to two algorithms, two tasks, and three seeds.
+\item Architecture ablations: one algorithm, two tasks, and three seeds when budget allows.
+\item Mechanism and value analyses: primarily post hoc analyses built from saved logs and fixed prediction dumps rather than a large additional training budget.
+\end{itemize}
+
+\section{Logging Requirements}
+The logging plan is designed so that the same training runs can later support the main results, mechanism analysis, efficiency section, and limitations discussion. Every run should record metadata including algorithm, task, seed, full config, code version, and dataset version. At each evaluation checkpoint the run should log performance metrics such as normalized score, success rate when available, best-so-far score, and final score.
+
+Training logs should include value or critic loss, actor loss, target loss or Bellman residual when available, entropy or temperature terms, wall-clock time, step time, total update count, samples seen, evaluation count, hardware information, and model size including total parameters and value-network parameters. In addition, value statistics should be recorded, including predicted value mean, standard deviation, minimum, maximum, target statistics when available, and Bellman residual statistics.
+
+The most important paper-specific logs are per-step refinement diagnostics on a fixed held-out subset. These should include value predictions at each refinement step, the final value, the target value, the change between successive steps, and optionally hidden-state norms. Dumps should be saved at early, middle, and late training so that the paper can analyze how iterative correction evolves during learning without requiring retraining.
 
 \newpage
 \input{main_checklist.tex}
