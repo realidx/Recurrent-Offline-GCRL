@@ -1,23 +1,31 @@
 diff --git a/impls/agents/__init__.py b/impls/agents/__init__.py
-index 4596fe2..172d015 100644
+index 4596fe2..bab8556 100644
 --- a/impls/agents/__init__.py
 +++ b/impls/agents/__init__.py
-@@ -5,6 +5,7 @@ from agents.gcivl import GCIVLAgent
+@@ -1,12 +1,15 @@
+ from agents.crl import CRLAgent
++from agents.cgivl import CGIVLAgent
+ from agents.gcbc import GCBCAgent
+ from agents.gciql import GCIQLAgent
+ from agents.gcivl import GCIVLAgent
  from agents.hiql import HIQLAgent
  from agents.qrl import QRLAgent
  from agents.sac import SACAgent
 +from agents.saw import SAWAgent
  
  agents = dict(
++    cgivl=CGIVLAgent,
      crl=CRLAgent,
-@@ -14,4 +15,5 @@ agents = dict(
+     gcbc=GCBCAgent,
+     gciql=GCIQLAgent,
+@@ -14,4 +17,5 @@ agents = dict(
      hiql=HIQLAgent,
      qrl=QRLAgent,
      sac=SACAgent,
 +    saw=SAWAgent,
  )
 diff --git a/impls/agents/crl.py b/impls/agents/crl.py
-index 53109ab..021db09 100644
+index 53109ab..88bdd6e 100644
 --- a/impls/agents/crl.py
 +++ b/impls/agents/crl.py
 @@ -22,51 +22,110 @@ class CRLAgent(flax.struct.PyTreeNode):
@@ -369,7 +377,7 @@ index 53109ab..021db09 100644
 +            critic_layerscale_init=1e-2,  # LayerScale init for resnet/recur.
 +            critic_backbone_hidden_dim=0,  # Optional override (e.g., param-match resnet vs recur). 0 disables.
 +            critic_recur_tied_ln=True,  # Tie LayerNorm modules across iterations for recur_tied.
-+            critic_recur_ln_mode='per_layer_final',  # 'pre_loop' | 'per_layer' | 'per_layer_final' for recur_tied LayerNorm placement.
++            critic_recur_ln_mode='per_layer_final',  # 'pre_loop' | 'per_layer' | 'per_layer_final' | 'pre_loop_per_layer' for recur_tied LayerNorm placement.
 +            critic_recur_use_step_info=False,  # Inject loop-step information into recur_tied.
 +            critic_recur_sinusoidal=False,  # Use sinusoidal positional encoding (extrapolatable) instead of discrete step_embed.
 +            critic_recur_use_film=True,  # Use FiLM modulation inside recur_tied; when step info is disabled this becomes hidden-only FiLM.
@@ -400,7 +408,7 @@ index 53109ab..021db09 100644
      )
      return config
 diff --git a/impls/agents/hiql.py b/impls/agents/hiql.py
-index 63e5dee..2525410 100644
+index 63e5dee..2fe3a59 100644
 --- a/impls/agents/hiql.py
 +++ b/impls/agents/hiql.py
 @@ -8,7 +8,7 @@ import ml_collections
@@ -628,13 +636,13 @@ index 63e5dee..2525410 100644
 +            low_actor_num_blocks=2,  # Residual block count for low_actor_backbone='prenorm_residual'.
 +            low_actor_block_num_layers=4,  # Dense layers per residual block for low_actor_backbone='prenorm_residual'.
 +            low_actor_use_inner_layer_norm=True,  # Whether prenorm residual low actor normalizes inner hidden layers.
-+            low_actor_prenorm_norm_mode='pre_block',  # 'pre_block' | 'per_layer' for low_actor_backbone='prenorm_residual'.
++            low_actor_prenorm_norm_mode='pre_block',  # 'pre_block' | 'per_layer' | 'pre_block_per_layer' for low_actor_backbone='prenorm_residual'.
 +            high_actor_backbone='',  # Optional high-actor-specific backbone override. Empty string uses actor_backbone.
 +            high_actor_backbone_hidden_dim=0,  # Optional high-actor backbone width override. 0 uses actor setting.
 +            high_actor_num_blocks=2,  # Residual block count for high_actor_backbone='prenorm_residual'.
 +            high_actor_block_num_layers=4,  # Dense layers per residual block for high_actor_backbone='prenorm_residual'.
 +            high_actor_use_inner_layer_norm=True,  # Whether prenorm residual high actor normalizes inner hidden layers.
-+            high_actor_prenorm_norm_mode='pre_block',  # 'pre_block' | 'per_layer' for high_actor_backbone='prenorm_residual'.
++            high_actor_prenorm_norm_mode='pre_block',  # 'pre_block' | 'per_layer' | 'pre_block_per_layer' for high_actor_backbone='prenorm_residual'.
 +            value_backbone='mlp',  # 'mlp' | 'residual_dense' | 'dense_ln' | 'recur_tied'
 +            value_backbone_hidden_dim=0,  # Optional recurrent hidden width override. 0 disables.
 +            value_num_dense_layers=4,  # Dense layers for value_backbone='residual_dense'/'dense_ln'.
@@ -651,7 +659,7 @@ index 63e5dee..2525410 100644
 +            value_recur_num_dense_layers=2,  # Dense layers inside each recurrent value update.
 +            value_recur_max_iters=4,  # Max supported recurrent iterations for HIQL value.
 +            value_recur_tied_ln=True,  # Tie LayerNorm across recurrent value iterations.
-+            value_recur_ln_mode='per_layer_final',  # 'pre_loop' | 'per_layer' | 'per_layer_final' recurrent value LayerNorm placement.
++            value_recur_ln_mode='per_layer_final',  # 'pre_loop' | 'per_layer' | 'per_layer_final' | 'pre_loop_per_layer' recurrent value LayerNorm placement.
 +            value_recur_use_step_info=False,  # Inject step information into the recurrent HIQL value.
 +            value_recur_sinusoidal=False,  # Use sinusoidal step encoding for recurrent HIQL value.
 +            value_recur_use_film=True,  # Use FiLM inside the recurrent HIQL value.
@@ -668,7 +676,7 @@ index 63e5dee..2525410 100644
              const_std=True,  # Whether to use constant standard deviation for the actors.
              discrete=False,  # Whether the action space is discrete.
 diff --git a/impls/agents/qrl.py b/impls/agents/qrl.py
-index 79852cb..686d987 100644
+index 79852cb..1bc8741 100644
 --- a/impls/agents/qrl.py
 +++ b/impls/agents/qrl.py
 @@ -234,6 +234,35 @@ class QRLAgent(flax.struct.PyTreeNode):
@@ -801,7 +809,7 @@ index 79852cb..686d987 100644
 +            critic_layerscale_init=1e-2,  # LayerScale init for resnet/recur.
 +            critic_backbone_hidden_dim=0,  # Optional override (e.g., param-match resnet vs recur). 0 disables.
 +            critic_recur_tied_ln=True,  # Tie LayerNorm modules across iterations for recur_tied.
-+            critic_recur_ln_mode='per_layer_final',  # 'pre_loop' | 'per_layer' | 'per_layer_final' for recur_tied LayerNorm placement.
++            critic_recur_ln_mode='per_layer_final',  # 'pre_loop' | 'per_layer' | 'per_layer_final' | 'pre_loop_per_layer' for recur_tied LayerNorm placement.
 +            critic_recur_use_step_info=False,  # Inject loop-step information into recur_tied.
 +            critic_recur_sinusoidal=False,  # Use sinusoidal positional encoding instead of discrete step_embed.
 +            critic_recur_use_film=True,  # Use FiLM modulation inside recur_tied.
@@ -819,7 +827,7 @@ index 79852cb..686d987 100644
              value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
 diff --git a/impls/agents/saw.py b/impls/agents/saw.py
 new file mode 100644
-index 0000000..b95dc2f
+index 0000000..461c04b
 --- /dev/null
 +++ b/impls/agents/saw.py
 @@ -0,0 +1,542 @@
@@ -1271,7 +1279,7 @@ index 0000000..b95dc2f
 +            value_recur_num_dense_layers=2,
 +            value_recur_max_iters=16,
 +            value_recur_tied_ln=True,
-+            value_recur_ln_mode='per_layer_final',
++            value_recur_ln_mode='per_layer_final',  # 'pre_loop' | 'per_layer' | 'per_layer_final' | 'pre_loop_per_layer'
 +            value_recur_use_step_info=False,
 +            value_recur_sinusoidal=False,
 +            value_recur_use_film=True,
@@ -1292,12 +1300,12 @@ index 0000000..b95dc2f
 +            actor_num_blocks=2,
 +            actor_block_num_layers=4,
 +            actor_use_inner_layer_norm=True,
-+            actor_prenorm_norm_mode='pre_block',
++            actor_prenorm_norm_mode='pre_block',  # 'pre_block' | 'per_layer' | 'pre_block_per_layer'
 +            actor_recur_iters=4,
 +            actor_recur_num_dense_layers=2,
 +            actor_recur_max_iters=16,
 +            actor_recur_tied_ln=True,
-+            actor_recur_ln_mode='per_layer_final',
++            actor_recur_ln_mode='per_layer_final',  # 'pre_loop' | 'per_layer' | 'per_layer_final' | 'pre_loop_per_layer'
 +            actor_recur_use_step_info=False,
 +            actor_recur_sinusoidal=False,
 +            actor_recur_use_film=True,
@@ -1319,12 +1327,12 @@ index 0000000..b95dc2f
 +            low_actor_num_blocks=2,
 +            low_actor_block_num_layers=4,
 +            low_actor_use_inner_layer_norm=True,
-+            low_actor_prenorm_norm_mode='pre_block',
++            low_actor_prenorm_norm_mode='pre_block',  # 'pre_block' | 'per_layer' | 'pre_block_per_layer'
 +            low_actor_recur_iters=4,
 +            low_actor_recur_num_dense_layers=2,
 +            low_actor_recur_max_iters=16,
 +            low_actor_recur_tied_ln=True,
-+            low_actor_recur_ln_mode='per_layer_final',
++            low_actor_recur_ln_mode='per_layer_final',  # 'pre_loop' | 'per_layer' | 'per_layer_final' | 'pre_loop_per_layer'
 +            low_actor_recur_use_step_info=False,
 +            low_actor_recur_sinusoidal=False,
 +            low_actor_recur_use_film=True,
@@ -1366,10 +1374,10 @@ index 0000000..b95dc2f
 +    )
 +    return config
 diff --git a/impls/main.py b/impls/main.py
-index 3660e03..8563047 100644
+index 3660e03..d657990 100644
 --- a/impls/main.py
 +++ b/impls/main.py
-@@ -1,10 +1,15 @@
+@@ -1,17 +1,22 @@
 +import glob
 +import re
  import json
@@ -1385,7 +1393,15 @@ index 3660e03..8563047 100644
  import numpy as np
  import tqdm
  import wandb
-@@ -23,28 +28,230 @@ flags.DEFINE_string('run_group', 'Debug', 'Run group.')
+ from absl import app, flags
+ from agents import agents
+ from ml_collections import config_flags
+-from utils.datasets import Dataset, GCDataset, HGCDataset
++from utils.datasets import Dataset, GCDataset, HGCDataset, SHGCDataset
+ from utils.env_utils import make_env_and_datasets
+ from utils.evaluation import evaluate
+ from utils.flax_utils import restore_agent, save_agent
+@@ -23,28 +28,232 @@ flags.DEFINE_string('run_group', 'Debug', 'Run group.')
  flags.DEFINE_integer('seed', 0, 'Random seed.')
  flags.DEFINE_string('env_name', 'antmaze-large-navigate-v0', 'Environment (dataset) name.')
  flags.DEFINE_string('save_dir', 'exp/', 'Save directory.')
@@ -1412,6 +1428,8 @@ index 3660e03..8563047 100644
 +flags.DEFINE_integer('eval_refine_steps', 0, 'Action refinement steps during evaluation (0 disables).')
 +flags.DEFINE_float('eval_refine_lr', 0.05, 'Action refinement step size.')
 +flags.DEFINE_float('eval_refine_l2', 0.0, 'Action refinement L2 penalty coefficient to keep actions near actor output.')
++flags.DEFINE_integer('value_warmup_steps', 0, 'For CGIVL, steps before enabling goal-distance/high-level updates.')
++flags.DEFINE_integer('eval_warmup_steps', 0, 'Suppress evaluation until this many steps for CGIVL-style warmup.')
  flags.DEFINE_integer('video_episodes', 1, 'Number of video episodes for each task.')
  flags.DEFINE_integer('video_frame_skip', 3, 'Frame skip for videos.')
  flags.DEFINE_integer('eval_on_cpu', 1, 'Whether to evaluate on CPU.')
@@ -1617,7 +1635,7 @@ index 3660e03..8563047 100644
      setup_wandb(project='OGBench', group=FLAGS.run_group, name=exp_name)
  
      FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, FLAGS.run_group, exp_name)
-@@ -53,9 +260,15 @@ def main(_):
+@@ -53,106 +262,402 @@ def main(_):
      with open(os.path.join(FLAGS.save_dir, 'flags.json'), 'w') as f:
          json.dump(flag_dict, f)
  
@@ -1634,17 +1652,53 @@ index 3660e03..8563047 100644
  
      dataset_class = {
          'GCDataset': GCDataset,
-@@ -66,9 +279,6 @@ def main(_):
+         'HGCDataset': HGCDataset,
++        'SHGCDataset': SHGCDataset,
+     }[config['dataset_class']]
+     train_dataset = dataset_class(Dataset.create(**train_dataset), config)
+     if val_dataset is not None:
          val_dataset = dataset_class(Dataset.create(**val_dataset), config)
  
      # Initialize agent.
 -    random.seed(FLAGS.seed)
 -    np.random.seed(FLAGS.seed)
 -
-     example_batch = train_dataset.sample(1)
+-    example_batch = train_dataset.sample(1)
++    example_sample_kwargs = {}
++    if config['agent_name'] == 'cgivl':
++        example_sample_kwargs = dict(
++            init_goal_rep=config.get('init_goal_rep', False),
++            use_subgoals=config.get('use_subgoals', True),
++            min_d=config.get('min_d', 0),
++        )
++    example_batch = train_dataset.sample(1, **example_sample_kwargs)
      if config['discrete']:
          # Fill with the maximum action to let the agent know the action space size.
-@@ -85,74 +295,309 @@ def main(_):
+         example_batch['actions'] = np.full_like(example_batch['actions'], env.action_space.n - 1)
+ 
+     agent_class = agents[config['agent_name']]
+-    agent = agent_class.create(
+-        FLAGS.seed,
+-        example_batch['observations'],
+-        example_batch['actions'],
+-        config,
+-    )
++    if config['agent_name'] == 'cgivl':
++        agent = agent_class.create(
++            FLAGS.seed,
++            example_batch['observations'],
++            example_batch['goals'],
++            example_batch['actions'],
++            config,
++        )
++    else:
++        agent = agent_class.create(
++            FLAGS.seed,
++            example_batch['observations'],
++            example_batch['actions'],
++            config,
++        )
+ 
      # Restore agent.
      if FLAGS.restore_path is not None:
          agent = restore_agent(agent, FLAGS.restore_path, FLAGS.restore_epoch)
@@ -1864,9 +1918,35 @@ index 3660e03..8563047 100644
 +        disable=FLAGS.disable_tqdm,
 +    ):
          # Update agent.
-         batch = train_dataset.sample(config['batch_size'])
-         agent, update_info = agent.update(batch)
- 
+-        batch = train_dataset.sample(config['batch_size'])
+-        agent, update_info = agent.update(batch)
++        if config['agent_name'] == 'cgivl':
++            batch = train_dataset.sample(
++                config['batch_size'],
++                init_goal_rep=config.get('init_goal_rep', False),
++                use_subgoals=config.get('use_subgoals', True),
++                min_d=config.get('min_d', 0),
++            )
++            if i < FLAGS.value_warmup_steps:
++                agent, update_info = agent.update(
++                    batch,
++                    value_update=True,
++                    low_actor_update=True,
++                    init_goal_rep=config.get('init_goal_rep', False),
++                )
++            else:
++                agent, update_info = agent.update(
++                    batch,
++                    value_update=True,
++                    low_actor_update=True,
++                    high_actor_update=True,
++                    goaldistance_update=True,
++                    init_goal_rep=config.get('init_goal_rep', False),
++                )
++        else:
++            batch = train_dataset.sample(config['batch_size'])
++            agent, update_info = agent.update(batch)
++
 +        # One-time debug: dump param/grad key structure so we can fix per-module grad norms.
 +        if i == start_i:
 +            def _key_structure(tree, prefix=''):
@@ -1875,16 +1955,35 @@ index 3660e03..8563047 100644
 +                return 'leaf'
 +            print('DEBUG param keys:', _key_structure(agent.network.params), flush=True)
 +            print('DEBUG update_info keys:', sorted(update_info.keys()), flush=True)
-+
+ 
          # Log metrics.
          if i % FLAGS.log_interval == 0:
              train_metrics = {f'training/{k}': v for k, v in update_info.items()}
 -            if val_dataset is not None:
-+            if val_dataset is not None and i % validation_log_interval == 0:
-                 val_batch = val_dataset.sample(config['batch_size'])
-                 _, val_info = agent.total_loss(val_batch, grad_params=None)
+-                val_batch = val_dataset.sample(config['batch_size'])
+-                _, val_info = agent.total_loss(val_batch, grad_params=None)
 -                train_metrics.update({f'validation/{k}': v for k, v in val_info.items()})
 -            train_metrics['time/epoch_time'] = (time.time() - last_time) / FLAGS.log_interval
++            if val_dataset is not None and i % validation_log_interval == 0:
++                if config['agent_name'] == 'cgivl':
++                    val_batch = val_dataset.sample(
++                        config['batch_size'],
++                        init_goal_rep=config.get('init_goal_rep', False),
++                        use_subgoals=config.get('use_subgoals', True),
++                        min_d=config.get('min_d', 0),
++                    )
++                    _, val_info = agent.total_loss(
++                        val_batch,
++                        grad_params=None,
++                        value_update=True,
++                        low_actor_update=True,
++                        high_actor_update=i >= FLAGS.value_warmup_steps,
++                        goaldistance_update=i >= FLAGS.value_warmup_steps,
++                        init_goal_rep=config.get('init_goal_rep', False),
++                    )
++                else:
++                    val_batch = val_dataset.sample(config['batch_size'])
++                    _, val_info = agent.total_loss(val_batch, grad_params=None)
 +                # Validation metrics are agent-specific (e.g. HIQL uses value/low_actor/high_actor keys),
 +                # so log every scalar-like entry instead of a CRL-specific allowlist.
 +                validation_metrics = {}
@@ -1936,7 +2035,7 @@ index 3660e03..8563047 100644
 +
          # Evaluate agent.
 -        if i == 1 or i % FLAGS.eval_interval == 0:
-+        if FLAGS.eval_interval and (i == 1 or i % FLAGS.eval_interval == 0):
++        if FLAGS.eval_interval and (i == 1 or i % FLAGS.eval_interval == 0) and i > FLAGS.eval_warmup_steps:
 +            eval_agent = agent
              if FLAGS.eval_on_cpu:
 -                eval_agent = jax.device_put(agent, device=jax.devices('cpu')[0])
@@ -1998,6 +2097,136 @@ index 3660e03..8563047 100644
              save_agent(agent, FLAGS.save_dir, i)
  
      train_logger.close()
+diff --git a/impls/utils/datasets.py b/impls/utils/datasets.py
+index 59b32a6..4e8543b 100644
+--- a/impls/utils/datasets.py
++++ b/impls/utils/datasets.py
+@@ -249,7 +249,7 @@ class GCDataset:
+ 
+         return batch
+ 
+-    def sample_goals(self, idxs, p_curgoal, p_trajgoal, p_randomgoal, geom_sample):
++    def sample_goals(self, idxs, p_curgoal, p_trajgoal, p_randomgoal, geom_sample, min_d=0):
+         """Sample goals for the given indices."""
+         batch_size = len(idxs)
+ 
+@@ -398,3 +398,116 @@ class HGCDataset(GCDataset):
+                 )
+ 
+         return batch
++
++
++@dataclasses.dataclass
++class SHGCDataset(GCDataset):
++    """Structured hierarchical goal-conditioned dataset for CGIVL."""
++
++    def sample(self, batch_size: int, idxs=None, evaluation=False, init_goal_rep=False, use_subgoals=True, min_d=0):
++        """Sample a batch of transitions with CGIVL-specific supervision."""
++        if idxs is None:
++            idxs = self.dataset.get_random_idxs(batch_size)
++
++        batch = self.dataset.sample(batch_size, idxs)
++        if self.config['frame_stack'] is not None:
++            batch['observations'] = self.get_observations(idxs)
++            batch['next_observations'] = self.get_observations(idxs + 1)
++
++        value_goal_idxs = self.sample_goals(
++            idxs,
++            self.config['value_p_curgoal'],
++            self.config['value_p_trajgoal'],
++            self.config['value_p_randomgoal'],
++            self.config['value_geom_sample'],
++            min_d=min_d,
++        )
++        value_gd_idxs = self.sample_goals(
++            idxs,
++            self.config['gd_p_curgoal'],
++            self.config['gd_p_trajgoal'],
++            self.config['gd_p_randomgoal'],
++            self.config['gd_geom_sample'],
++            min_d=min_d,
++        )
++
++        value_random_idxs = self.dataset.get_random_idxs(batch_size)
++        gd_random_idx = self.dataset.get_random_idxs(batch_size)
++
++        gd_successes = (idxs == value_gd_idxs).astype(float)
++        batch['value_gd_masks'] = 1.0 - gd_successes
++        batch['value_gd_rewards'] = gd_successes - (1.0 if self.config['gc_negative'] else 0.0)
++        batch['value_random_observations'] = self.get_observations(value_random_idxs)
++
++        successes = (idxs == value_goal_idxs).astype(float)
++        batch['masks'] = 1.0 - successes
++        batch['rewards'] = successes - (1.0 if self.config['gc_negative'] else 0.0)
++
++        final_state_idxs = self.terminal_locs[np.searchsorted(self.terminal_locs, idxs)]
++        if use_subgoals:
++            if init_goal_rep:
++                gap_idx = np.random.randint(1, 1 + self.config['subgoal_steps'], size=batch_size)
++                low_goal_idxs = np.minimum(idxs + gap_idx, final_state_idxs)
++            else:
++                low_goal_idxs = np.minimum(idxs + self.config['subgoal_steps'], final_state_idxs)
++        else:
++            low_goal_idxs = self.sample_goals(
++                idxs,
++                self.config['actor_p_curgoal'],
++                self.config['actor_p_trajgoal'],
++                self.config['actor_p_randomgoal'],
++                self.config['actor_geom_sample'],
++            )
++
++        batch['gd_random_observations'] = self.get_observations(gd_random_idx)
++        batch['value_goals'] = self.get_observations(value_goal_idxs)
++        batch['value_random_goals'] = self.get_observations(value_random_idxs)
++        batch['low_actor_goals'] = self.get_observations(low_goal_idxs)
++        batch['goals'] = self.get_observations(idxs)
++        batch['next_goals'] = self.get_observations(idxs + 1)
++        batch['value_gd_goals'] = self.get_observations(value_gd_idxs)
++
++        if self.config['actor_geom_sample']:
++            offsets = np.random.geometric(p=1 - self.config['discount'], size=batch_size)
++            high_traj_goal_idxs = np.minimum(idxs + offsets, final_state_idxs)
++        else:
++            distances = np.random.rand(batch_size)
++            high_traj_goal_idxs = np.round(
++                (np.minimum(idxs + 1, final_state_idxs) * distances + final_state_idxs * (1 - distances))
++            ).astype(int)
++        high_traj_target_idxs = np.minimum(idxs + self.config['subgoal_steps'], high_traj_goal_idxs)
++
++        high_random_goal_idxs = self.dataset.get_random_idxs(batch_size)
++        high_random_target_idxs = np.minimum(idxs + self.config['subgoal_steps'], final_state_idxs)
++
++        pick_random = np.random.rand(batch_size) < self.config['actor_p_randomgoal']
++        high_goal_idxs = np.where(pick_random, high_random_goal_idxs, high_traj_goal_idxs)
++        high_target_idxs = np.where(pick_random, high_random_target_idxs, high_traj_target_idxs)
++        batch['high_actor_goals'] = self.get_observations(high_goal_idxs)
++        batch['high_actor_targets'] = self.get_observations(high_target_idxs)
++        batch['value_targets'] = self.get_observations(high_traj_target_idxs)
++        batch['high_actor_targets_observations'] = self.get_observations(high_target_idxs)
++
++        if self.config['p_aug'] is not None and not evaluation:
++            if np.random.rand() < self.config['p_aug']:
++                self.augment(
++                    batch,
++                    [
++                        'observations',
++                        'next_observations',
++                        'value_goals',
++                        'low_actor_goals',
++                        'high_actor_goals',
++                        'high_actor_targets',
++                        'high_actor_targets_observations',
++                        'goals',
++                        'value_random_goals',
++                        'value_random_observations',
++                        'next_goals',
++                        'value_targets',
++                        'value_gd_goals',
++                        'gd_random_observations',
++                    ],
++                )
++
++        return batch
 diff --git a/impls/utils/env_utils.py b/impls/utils/env_utils.py
 index 6b17e11..863dd39 100644
 --- a/impls/utils/env_utils.py
@@ -2042,7 +2271,7 @@ index 6b17e11..863dd39 100644
  
      return env, train_dataset, val_dataset
 diff --git a/impls/utils/evaluation.py b/impls/utils/evaluation.py
-index a3a9944..d842c41 100644
+index a3a9944..5031106 100644
 --- a/impls/utils/evaluation.py
 +++ b/impls/utils/evaluation.py
 @@ -2,6 +2,7 @@ from collections import defaultdict
@@ -2064,7 +2293,7 @@ index a3a9944..d842c41 100644
  ):
      """Evaluate the agent in the environment.
  
-@@ -61,28 +66,213 @@ def evaluate(
+@@ -61,28 +66,220 @@ def evaluate(
      Returns:
          A tuple containing the statistics, trajectories, and rendered videos.
      """
@@ -2236,11 +2465,18 @@ index a3a9944..d842c41 100644
 +        return action
 +
 +    def _eval_action(observation, goal):
++        sample_kwargs = {}
++        if _cfg_get('agent_name') == 'cgivl':
++            sample_kwargs['init_goal_rep'] = _cfg_get('init_goal_rep', False)
++            sample_kwargs['use_subgoals'] = _cfg_get('use_subgoals', True)
 +        # For evaluation, temperature=0 should mean greedy action selection. Keep the
 +        # deterministic path jitted so evaluation speed stays comparable to sample_actions.
 +        if has_actor and eval_temperature == 0:
 +            return np.array(_jit_actor_mode(observation, goal))
-+        return np.array(actor_fn(observations=observation, goals=goal, temperature=eval_temperature))
++        action = actor_fn(observations=observation, goals=goal, temperature=eval_temperature, **sample_kwargs)
++        if isinstance(action, tuple):
++            action = action[0]
++        return np.array(action)
 +
      renders = []
      for i in trange(num_eval_episodes + num_video_episodes):
@@ -2284,7 +2520,7 @@ index a3a9944..d842c41 100644
  
              next_observation, reward, terminated, truncated, info = env.step(action)
              done = terminated or truncated
-@@ -106,6 +296,22 @@ def evaluate(
+@@ -106,6 +303,22 @@ def evaluate(
              add_to(traj, transition)
              observation = next_observation
          if i < num_eval_episodes:
@@ -2457,7 +2693,7 @@ index 9c421dd..3da1eab 100644
  
      return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..d336954 100644
+index 4ee2b26..e57d523 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
 @@ -6,6 +6,8 @@ import flax.linen as nn
@@ -2469,7 +2705,7 @@ index 4ee2b26..d336954 100644
  
  def default_init(scale=1.0):
      """Default kernel initializer."""
-@@ -60,6 +62,515 @@ class MLP(nn.Module):
+@@ -60,6 +62,536 @@ class MLP(nn.Module):
          return x
  
  
@@ -2579,16 +2815,18 @@ index 4ee2b26..d336954 100644
 +        num_layers = int(self.num_layers)
 +        if num_layers < 2:
 +            raise ValueError(f'num_layers must be at least 2. Got {num_layers}.')
-+        if self.norm_mode not in ('pre_block', 'per_layer'):
-+            raise ValueError(f"Unsupported norm_mode={self.norm_mode!r}. Use 'pre_block' or 'per_layer'.")
++        if self.norm_mode not in ('pre_block', 'per_layer', 'pre_block_per_layer'):
++            raise ValueError(
++                f"Unsupported norm_mode={self.norm_mode!r}. Use 'pre_block', 'per_layer', or 'pre_block_per_layer'."
++            )
 +
-+        u = nn.LayerNorm(name='pre_ln')(h) if self.norm_mode == 'pre_block' else h
++        u = nn.LayerNorm(name='pre_ln')(h) if self.norm_mode in ('pre_block', 'pre_block_per_layer') else h
 +        for layer_index in range(num_layers):
 +            u = nn.Dense(self.hidden_dim, name=f'fc_{layer_index + 1}')(u)
 +            is_last_layer = layer_index + 1 == num_layers
 +            if not is_last_layer:
 +                if self.use_inner_layer_norm:
-+                    if self.norm_mode == 'per_layer' or layer_index > 0:
++                    if self.norm_mode in ('per_layer', 'pre_block_per_layer') or layer_index > 0:
 +                        u = nn.LayerNorm(name=f'ln_{layer_index + 1}')(u)
 +                u = self.activations(u)
 +        return h + u
@@ -2649,9 +2887,9 @@ index 4ee2b26..d336954 100644
 +        num_dense_layers = int(self.num_dense_layers)
 +        if num_dense_layers <= 0:
 +            raise ValueError(f'num_dense_layers must be positive. Got {num_dense_layers}.')
-+        if self.ln_mode not in ('pre_loop', 'per_layer', 'per_layer_final'):
++        if self.ln_mode not in ('pre_loop', 'per_layer', 'per_layer_final', 'pre_loop_per_layer'):
 +            raise ValueError(
-+                f"Unsupported ln_mode={self.ln_mode!r}. Use 'pre_loop', 'per_layer', or 'per_layer_final'."
++                f"Unsupported ln_mode={self.ln_mode!r}. Use 'pre_loop', 'per_layer', 'per_layer_final', or 'pre_loop_per_layer'."
 +            )
 +        act_min_iters = int(self.act_min_iters)
 +        if self.use_act and (act_min_iters <= 0 or act_min_iters > iters):
@@ -2724,6 +2962,22 @@ index 4ee2b26..d336954 100644
 +                    tied_layer_norms = [nn.LayerNorm(name='ln')]
 +                else:
 +                    untied_loop_norms = [nn.LayerNorm(name=f'LayerNorm_{k}') for k in range(int(self.max_iters))]
++            elif self.ln_mode == 'pre_loop_per_layer':
++                num_layer_norms = num_dense_layers - 1
++                if self.tied_layer_norm:
++                    tied_layer_norms = [nn.LayerNorm(name='ln')]
++                    for layer_index in range(num_layer_norms):
++                        tied_layer_norms.append(nn.LayerNorm(name=f'ln_{layer_index + 1}'))
++                else:
++                    untied_loop_norms = [nn.LayerNorm(name=f'LayerNorm_{k}') for k in range(int(self.max_iters))]
++                    untied_hidden_layer_norms = []
++                    for k in range(int(self.max_iters)):
++                        untied_hidden_layer_norms.append(
++                            [
++                                nn.LayerNorm(name=f'LayerNorm_{k}_{layer_index}')
++                                for layer_index in range(num_layer_norms)
++                            ]
++                        )
 +            else:
 +                num_layer_norms = num_dense_layers if self.ln_mode == 'per_layer_final' else num_dense_layers - 1
 +                if self.tied_layer_norm:
@@ -2756,7 +3010,7 @@ index 4ee2b26..d336954 100644
 +
 +        for k in range(iters):
 +            h1 = h
-+            if self.layer_norm and self.ln_mode == 'pre_loop':
++            if self.layer_norm and self.ln_mode in ('pre_loop', 'pre_loop_per_layer'):
 +                if tied_layer_norms is not None:
 +                    h1 = tied_layer_norms[0](h1)
 +                elif untied_loop_norms is not None:
@@ -2789,12 +3043,15 @@ index 4ee2b26..d336954 100644
 +                u = layer(u)
 +                apply_layer_norm = (
 +                    self.layer_norm
-+                    and self.ln_mode in ('per_layer', 'per_layer_final')
++                    and self.ln_mode in ('per_layer', 'per_layer_final', 'pre_loop_per_layer')
 +                    and (layer_index < len(tied_layers) - 1 or self.ln_mode == 'per_layer_final')
 +                )
 +                if apply_layer_norm:
 +                    if tied_layer_norms is not None:
-+                        u = tied_layer_norms[layer_index](u)
++                        if self.ln_mode == 'pre_loop_per_layer':
++                            u = tied_layer_norms[layer_index + 1](u)
++                        else:
++                            u = tied_layer_norms[layer_index](u)
 +                    elif untied_hidden_layer_norms is not None:
 +                        u = untied_hidden_layer_norms[k][layer_index](u)
 +                if layer_index < len(tied_layers) - 1:
@@ -2985,7 +3242,7 @@ index 4ee2b26..d336954 100644
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -164,9 +675,137 @@ class GCActor(nn.Module):
+@@ -164,9 +696,137 @@ class GCActor(nn.Module):
      const_std: bool = True
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -3124,7 +3381,7 @@ index 4ee2b26..d336954 100644
          self.mean_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
          if self.state_dependent_std:
              self.log_std_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
-@@ -196,7 +835,10 @@ class GCActor(nn.Module):
+@@ -196,7 +856,10 @@ class GCActor(nn.Module):
              if goals is not None:
                  inputs.append(goals)
              inputs = jnp.concatenate(inputs, axis=-1)
@@ -3136,7 +3393,7 @@ index 4ee2b26..d336954 100644
  
          means = self.mean_net(outputs)
          if self.state_dependent_std:
-@@ -230,9 +872,137 @@ class GCDiscreteActor(nn.Module):
+@@ -230,9 +893,137 @@ class GCDiscreteActor(nn.Module):
      action_dim: int
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -3275,7 +3532,7 @@ index 4ee2b26..d336954 100644
          self.logit_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
  
      def __call__(
-@@ -257,7 +1027,10 @@ class GCDiscreteActor(nn.Module):
+@@ -257,7 +1048,10 @@ class GCDiscreteActor(nn.Module):
              if goals is not None:
                  inputs.append(goals)
              inputs = jnp.concatenate(inputs, axis=-1)
@@ -3287,7 +3544,7 @@ index 4ee2b26..d336954 100644
  
          logits = self.logit_net(outputs)
  
-@@ -282,14 +1055,40 @@ class GCValue(nn.Module):
+@@ -282,14 +1076,40 @@ class GCValue(nn.Module):
      layer_norm: bool = True
      ensemble: bool = True
      gc_encoder: nn.Module = None
@@ -3333,7 +3590,7 @@ index 4ee2b26..d336954 100644
  
      def __call__(self, observations, goals=None, actions=None):
          """Return the value/critic function.
-@@ -314,6 +1113,75 @@ class GCValue(nn.Module):
+@@ -314,6 +1134,75 @@ class GCValue(nn.Module):
          return v
  
  
@@ -3409,7 +3666,7 @@ index 4ee2b26..d336954 100644
  class GCDiscreteCritic(GCValue):
      """Goal-conditioned critic for discrete actions."""
  
-@@ -347,16 +1215,144 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +1236,144 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
@@ -3559,7 +3816,7 @@ index 4ee2b26..d336954 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +1360,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +1381,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -3567,7 +3824,7 @@ index 4ee2b26..d336954 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,16 +1372,42 @@ class GCBilinearValue(nn.Module):
+@@ -375,16 +1393,42 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
@@ -3612,7 +3869,7 @@ index 4ee2b26..d336954 100644
          else:
              return v
  
-@@ -394,9 +1417,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+@@ -394,9 +1438,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
  
      action_dim: int = None
  
@@ -3624,7 +3881,7 @@ index 4ee2b26..d336954 100644
  
  
  class GCMRNValue(nn.Module):
-@@ -416,9 +1439,91 @@ class GCMRNValue(nn.Module):
+@@ -416,9 +1460,91 @@ class GCMRNValue(nn.Module):
      latent_dim: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -3717,7 +3974,7 @@ index 4ee2b26..d336954 100644
  
      def __call__(self, observations, goals, is_phi=False, info=False):
          """Return the MRN value function.
-@@ -436,8 +1541,12 @@ class GCMRNValue(nn.Module):
+@@ -436,8 +1562,12 @@ class GCMRNValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)
@@ -3732,7 +3989,7 @@ index 4ee2b26..d336954 100644
  
          sym_s = phi_s[..., : self.latent_dim // 2]
          sym_g = phi_g[..., : self.latent_dim // 2]
-@@ -471,9 +1580,91 @@ class GCIQEValue(nn.Module):
+@@ -471,9 +1601,91 @@ class GCIQEValue(nn.Module):
      dim_per_component: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -3825,7 +4082,7 @@ index 4ee2b26..d336954 100644
          self.alpha = Param()
  
      def __call__(self, observations, goals, is_phi=False, info=False):
-@@ -493,8 +1684,12 @@ class GCIQEValue(nn.Module):
+@@ -493,8 +1705,12 @@ class GCIQEValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)
