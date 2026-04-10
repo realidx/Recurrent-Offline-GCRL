@@ -1378,10 +1378,10 @@ index 79852cb..1bc8741 100644
              value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
 diff --git a/impls/agents/saw.py b/impls/agents/saw.py
 new file mode 100644
-index 0000000..461c04b
+index 0000000..7fb5cca
 --- /dev/null
 +++ b/impls/agents/saw.py
-@@ -0,0 +1,542 @@
+@@ -0,0 +1,544 @@
 +import copy
 +from typing import Any
 +
@@ -1678,6 +1678,7 @@ index 0000000..461c04b
 +                recur_sinusoidal=bool(config.get('value_recur_sinusoidal', False)),
 +                recur_use_film=bool(config.get('value_recur_use_film', True)),
 +                recur_use_film_context=bool(config.get('value_recur_use_film_context', False)),
++                recur_film_mode=str(config.get('value_recur_film_mode', '')),
 +                recur_use_layerscale=bool(config.get('value_recur_use_layerscale', True)),
 +                recur_shared_alpha=bool(config.get('value_recur_shared_alpha', False)),
 +                recur_use_act=bool(config.get('value_recur_use_act', False)),
@@ -1835,6 +1836,7 @@ index 0000000..461c04b
 +            value_recur_sinusoidal=False,
 +            value_recur_use_film=True,
 +            value_recur_use_film_context=False,
++            value_recur_film_mode='',  # '' => legacy behavior, else one of: hidden | context | hidden_context.
 +            value_recur_use_layerscale=True,
 +            value_recur_shared_alpha=False,
 +            value_recur_use_act=False,
