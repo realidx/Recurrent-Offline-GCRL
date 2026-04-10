@@ -68,6 +68,15 @@ if [[ ! -f "${OGBENCH_DIR}/impls/agents/saw.py" ]]; then
   exit 4
 fi
 
+if [[ ! -f "${OGBENCH_DIR}/impls/agents/cgivl.py" ]]; then
+  echo "Error: expected ${OGBENCH_DIR}/impls/agents/cgivl.py after bootstrap." >&2
+  echo "Fix: make sure patches/ogbench_impls.patch includes newly added files, then re-run:" >&2
+  echo "  git -C third_party/ogbench add -N impls/agents/cgivl.py" >&2
+  echo "  git -C third_party/ogbench diff --binary HEAD > patches/ogbench_impls.patch" >&2
+  echo "  ./scripts/bootstrap_ogbench.sh CLEAN=1" >&2
+  exit 4
+fi
+
 if ! grep -q "critic_backbone" "${OGBENCH_DIR}/impls/agents/crl.py"; then
   echo "Error: bootstrap finished, but Phase 1 patch markers are missing (critic_backbone not found)." >&2
   echo "Fix: make sure you ran 'git pull' on this repo so patches/ogbench_impls.patch is up to date, then re-run:" >&2

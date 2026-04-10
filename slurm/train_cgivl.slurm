@@ -21,6 +21,9 @@ fi
 IMPL_DIR="${SLURM_SUBMIT_DIR}/third_party/ogbench/impls"
 if [[ ! -f "${IMPL_DIR}/agents/cgivl.py" ]]; then
   echo "Error: missing ${IMPL_DIR}/agents/cgivl.py." >&2
+  echo "This usually means third_party/ogbench was cloned but local patches were not re-applied on this machine." >&2
+  echo "Run on the login node after pulling:" >&2
+  echo "  ./scripts/bootstrap_ogbench.sh CLEAN=1" >&2
   exit 2
 fi
 

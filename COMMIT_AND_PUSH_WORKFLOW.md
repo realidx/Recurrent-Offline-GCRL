@@ -74,6 +74,12 @@ Then the workflow is:
 3. Commit the patch file in the outer repo
 4. Push the outer repo
 
+If you added a brand-new file under `third_party/ogbench` such as `impls/agents/cgivl.py`, first mark it with intent-to-add so `git diff` includes it:
+
+```bash
+git -C third_party/ogbench add -N path/to/new_file.py
+```
+
 Use:
 
 ```bash
@@ -92,6 +98,7 @@ If you touched both outer files and OGBench files:
 git status --short
 git -C third_party/ogbench status --short
 
+git -C third_party/ogbench add -N <new files under third_party/ogbench if any>
 git -C third_party/ogbench diff --binary HEAD > patches/ogbench_impls.patch
 
 git add patches/ogbench_impls.patch
@@ -117,6 +124,7 @@ Good practice:
 
 - make sure `patches/ogbench_impls.patch` is not empty
 - make sure it contains the expected file names or markers
+- if you added new files under `third_party/ogbench`, make sure they appear in the patch before committing
 - avoid accidentally committing unrelated local edits
 
 
@@ -163,4 +171,3 @@ If you changed OGBench code:
 - [ ] commit the patch in the outer repo
 - [ ] push the outer repo branch
 - [ ] after pulling elsewhere, run `./scripts/bootstrap_ogbench.sh CLEAN=1`
-
