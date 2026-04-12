@@ -1505,10 +1505,10 @@ index 0000000..16660f1
 +    return config
 diff --git a/impls/analyze_hiql_value_geometry.py b/impls/analyze_hiql_value_geometry.py
 new file mode 100644
-index 0000000..36b6b25
+index 0000000..b819d4d
 --- /dev/null
 +++ b/impls/analyze_hiql_value_geometry.py
-@@ -0,0 +1,1059 @@
+@@ -0,0 +1,1133 @@
 +import argparse
 +import glob
 +import json
@@ -1522,6 +1522,8 @@ index 0000000..36b6b25
 +def _parse_int_list(spec: str):
 +    if spec is None:
 +        return None
++    if isinstance(spec, int):
++        return [int(spec)]
 +    spec = spec.strip()
 +    if not spec:
 +        return None
@@ -2108,6 +2110,8 @@ index 0000000..36b6b25
 +    bottleneck_improvements = []
 +    hard_one_step = []
 +    bottleneck_one_step = []
++    hard_success_flags = []
++    bottleneck_success_flags = []
 +
 +    for idx in probe_indices:
 +        start_cell = tuple(probe_data['selected_cells'][int(idx)])
@@ -2156,9 +2160,11 @@ index 0000000..36b6b25
 +        if in_hard:
 +            hard_improvements.append(total_improve)
 +            hard_one_step.append(one_step_improve)
++            hard_success_flags.append(bool(reached))
 +        if in_bottleneck:
 +            bottleneck_improvements.append(total_improve)
 +            bottleneck_one_step.append(one_step_improve)
++            bottleneck_success_flags.append(bool(reached))
 +
 +    if not improvements:
 +        return None
@@ -2180,6 +2186,11 @@ index 0000000..36b6b25
 +            return np.nan
 +        return float(np.mean(values > 0))
 +
++    def _frac_true(values):
++        if len(values) == 0:
++            return np.nan
++        return float(np.mean(np.asarray(values, dtype=np.float64)))
++
 +    return dict(
 +        policy_probe_count=int(len(improvements)),
 +        policy_rollout_steps=int(rollout_steps),
@@ -2193,12 +2204,65 @@ index 0000000..36b6b25
 +        hard_policy_improve_frac=_frac_positive(hard_improvements),
 +        hard_policy_one_step_improve_mean=_mean_if(hard_one_step),
 +        hard_policy_one_step_improve_frac=_frac_positive(hard_one_step),
++        hard_policy_goal_reached_frac=_frac_true(hard_success_flags),
 +        bottleneck_policy_probe_count=int(sum(bottleneck_flags)),
 +        bottleneck_policy_improve_mean=_mean_if(bottleneck_improvements),
 +        bottleneck_policy_improve_frac=_frac_positive(bottleneck_improvements),
 +        bottleneck_policy_one_step_improve_mean=_mean_if(bottleneck_one_step),
 +        bottleneck_policy_one_step_improve_frac=_frac_positive(bottleneck_one_step),
++        bottleneck_policy_goal_reached_frac=_frac_true(bottleneck_success_flags),
 +    )
++
++
++def _compute_policy_diagnostics_multi(
++    runtime,
++    probe_data,
++    goal,
++    goal_xy,
++    dist_grid,
++    structure,
++    seed,
++    rollout_steps_list,
++    policy_probe_limit,
++):
++    if not rollout_steps_list:
++        return None
++
++    merged = {}
++    raw_by_steps = {}
++    valid_steps = [int(step) for step in rollout_steps_list if int(step) > 0]
++    if not valid_steps:
++        return None
++
++    for step_count in valid_steps:
++        cur = _compute_policy_diagnostics(
++            runtime,
++            probe_data,
++            goal,
++            goal_xy,
++            dist_grid,
++            structure,
++            seed,
++            step_count,
++            policy_probe_limit,
++        )
++        if cur is None:
++            continue
++        raw_by_steps[int(step_count)] = cur
++        for key, value in cur.items():
++            if key == 'policy_rollout_steps':
++                continue
++            merged[f'{key}_s{int(step_count)}'] = value
++
++    if not raw_by_steps:
++        return None
++
++    if len(raw_by_steps) == 1:
++        only_step = next(iter(raw_by_steps))
++        merged.update(raw_by_steps[only_step])
++
++    merged['policy_rollout_steps_list'] = [int(step) for step in sorted(raw_by_steps)]
++    return dict(flat=merged, by_steps=raw_by_steps)
 +
 +
 +def _plot_overview(results, output_path):
@@ -2283,13 +2347,19 @@ index 0000000..36b6b25
 +            structure_lines.append('cyan=s teleport in')
 +        if np.any(result['structure']['teleport_out_grid'] > 0):
 +            structure_lines.append('lime=D teleport out')
-+        policy_metrics = result.get('policy_metrics')
++        policy_metrics_bundle = result.get('policy_metrics')
++        if policy_metrics_bundle is not None:
++            by_steps = policy_metrics_bundle.get('by_steps', {})
++            display_step = max(by_steps) if by_steps else None
++            policy_metrics = by_steps.get(display_step) if display_step is not None else None
++        else:
++            policy_metrics = None
 +        if policy_metrics is not None:
 +            structure_lines += [
 +                '',
-+                f'pol10 d={policy_metrics["policy_improve_mean"]:.2f} frac={policy_metrics["policy_improve_frac"]:.2f}',
-+                f'hard d={policy_metrics["hard_policy_improve_mean"]:.2f} frac={policy_metrics["hard_policy_improve_frac"]:.2f}',
-+                f'bneck d={policy_metrics["bottleneck_policy_improve_mean"]:.2f} frac={policy_metrics["bottleneck_policy_improve_frac"]:.2f}',
++                f'pol{display_step} d={policy_metrics["policy_improve_mean"]:.2f} succ={policy_metrics["policy_goal_reached_frac"]:.2f}',
++                f'hard d={policy_metrics["hard_policy_improve_mean"]:.2f} succ={policy_metrics["hard_policy_goal_reached_frac"]:.2f}',
++                f'bneck d={policy_metrics["bottleneck_policy_improve_mean"]:.2f} succ={policy_metrics["bottleneck_policy_goal_reached_frac"]:.2f}',
 +            ]
 +        ax.text(0.03, 0.95, '\n'.join(structure_lines), va='top', ha='left', fontsize=9)
 +
@@ -2386,9 +2456,9 @@ index 0000000..36b6b25
 +    )
 +    parser.add_argument(
 +        '--policy_rollout_steps',
-+        type=int,
-+        default=10,
-+        help='Short deterministic policy rollout horizon for actor diagnostics. Set 0 to disable.',
++        type=str,
++        default='10',
++        help='Comma/colon/space-separated deterministic policy rollout horizons, e.g. "25,50". Use 0 or empty to disable.',
 +    )
 +    parser.add_argument(
 +        '--policy_probe_limit',
@@ -2407,6 +2477,7 @@ index 0000000..36b6b25
 +
 +    requested_epochs = _parse_int_list(args.epochs)
 +    requested_iters = _parse_int_list(args.iters)
++    requested_policy_rollout_steps = _parse_int_list(args.policy_rollout_steps)
 +    os.makedirs(args.output_dir, exist_ok=True)
 +
 +    results = []
@@ -2472,7 +2543,7 @@ index 0000000..36b6b25
 +                    'step': np.asarray([step], dtype=np.int32),
 +                    'task_id': np.asarray([task_id], dtype=np.int32),
 +                }
-+                policy_metrics = _compute_policy_diagnostics(
++                policy_metrics = _compute_policy_diagnostics_multi(
 +                    runtime,
 +                    probe_data,
 +                    goal,
@@ -2480,12 +2551,15 @@ index 0000000..36b6b25
 +                    dist_grid,
 +                    structure,
 +                    args.seed,
-+                    args.policy_rollout_steps,
++                    requested_policy_rollout_steps,
 +                    args.policy_probe_limit,
 +                )
 +                if policy_metrics is not None:
-+                    for key, value in policy_metrics.items():
-+                        dump_dict[key] = np.asarray([value], dtype=np.float32)
++                    for key, value in policy_metrics['flat'].items():
++                        if key == 'policy_rollout_steps_list':
++                            dump_dict[key] = np.asarray(value, dtype=np.int32)
++                        else:
++                            dump_dict[key] = np.asarray([value], dtype=np.float32)
 +
 +                prev_value_grid = None
 +                for k in iterations:
@@ -2525,7 +2599,7 @@ index 0000000..36b6b25
 +                            value_mean=metrics[k]['value_mean'],
 +                            value_std=metrics[k]['value_std'],
 +                            delta_mean_abs=(None if delta_grid is None else float(np.nanmean(np.abs(delta_grid)))),
-+                            **({} if policy_metrics is None else policy_metrics),
++                            **({} if policy_metrics is None else policy_metrics['flat']),
 +                        )
 +                    )
 +                    prev_value_grid = value_grid
