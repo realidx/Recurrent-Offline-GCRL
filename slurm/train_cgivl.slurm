@@ -79,19 +79,15 @@ FRAME_STACK="${FRAME_STACK:-}"
 ACTOR_HIDDEN_DIMS="${ACTOR_HIDDEN_DIMS:-512x512x512}"
 VALUE_HIDDEN_DIMS="${VALUE_HIDDEN_DIMS:-512x512x512}"
 VALUE_BACKBONE="${VALUE_BACKBONE:-mlp}"
-VALUE_BACKBONE_HIDDEN_DIM="${VALUE_BACKBONE_HIDDEN_DIM:-0}"
 VALUE_RECUR_ITERS="${VALUE_RECUR_ITERS:-4}"
 VALUE_RECUR_NUM_DENSE_LAYERS="${VALUE_RECUR_NUM_DENSE_LAYERS:-2}"
 VALUE_RECUR_MAX_ITERS="${VALUE_RECUR_MAX_ITERS:-4}"
-VALUE_RECUR_TIED_LN="${VALUE_RECUR_TIED_LN:-1}"
 VALUE_RECUR_LN_MODE="${VALUE_RECUR_LN_MODE:-per_layer_final}"
 VALUE_RECUR_USE_STEP_INFO="${VALUE_RECUR_USE_STEP_INFO:-0}"
 VALUE_RECUR_SINUSOIDAL="${VALUE_RECUR_SINUSOIDAL:-0}"
 VALUE_RECUR_USE_FILM="${VALUE_RECUR_USE_FILM:-1}"
-VALUE_RECUR_USE_FILM_CONTEXT="${VALUE_RECUR_USE_FILM_CONTEXT:-0}"
-VALUE_RECUR_FILM_MODE="${VALUE_RECUR_FILM_MODE:-}"
+VALUE_RECUR_FILM_MODE="${VALUE_RECUR_FILM_MODE:-hidden}"
 VALUE_RECUR_USE_LAYERSCALE="${VALUE_RECUR_USE_LAYERSCALE:-1}"
-VALUE_RECUR_SHARED_ALPHA="${VALUE_RECUR_SHARED_ALPHA:-0}"
 VALUE_RECUR_USE_ACT="${VALUE_RECUR_USE_ACT:-0}"
 VALUE_RECUR_ACT_EPSILON="${VALUE_RECUR_ACT_EPSILON:-0.01}"
 VALUE_RECUR_ACT_MIN_ITERS="${VALUE_RECUR_ACT_MIN_ITERS:-1}"
@@ -217,38 +213,33 @@ append_hidden_dims "actor_hidden_dims" "${ACTOR_HIDDEN_DIMS}"
 append_hidden_dims "value_hidden_dims" "${VALUE_HIDDEN_DIMS}"
 append_hidden_dims "goaldistance_hidden_dims" "${GOALDISTANCE_HIDDEN_DIMS}"
 
-if [[ "${VALUE_BACKBONE_HIDDEN_DIM}" != "0" ]]; then
-  if [[ ! "${VALUE_BACKBONE_HIDDEN_DIM}" =~ ^[1-9][0-9]*$ ]]; then
-    echo "Error: VALUE_BACKBONE_HIDDEN_DIM='${VALUE_BACKBONE_HIDDEN_DIM}' is not a positive integer." >&2
-    exit 2
-  fi
-  AGENT_FLAGS+=("--agent.value_backbone_hidden_dim=${VALUE_BACKBONE_HIDDEN_DIM}")
-fi
-
 case "${VALUE_BACKBONE}" in
   mlp)
     ;;
   recur_tied)
+    if [[ ! "${VALUE_RECUR_LN_MODE}" =~ ^(pre_loop|per_layer|per_layer_final|pre_loop_per_layer)$ ]]; then
+      echo "Error: VALUE_RECUR_LN_MODE='${VALUE_RECUR_LN_MODE}' is invalid. Use pre_loop, per_layer, per_layer_final, or pre_loop_per_layer." >&2
+      exit 2
+    fi
+    if [[ ! "${VALUE_RECUR_FILM_MODE}" =~ ^(hidden|context|hidden_context)$ ]]; then
+      echo "Error: VALUE_RECUR_FILM_MODE='${VALUE_RECUR_FILM_MODE}' is invalid. Use hidden, context, or hidden_context." >&2
+      exit 2
+    fi
     AGENT_FLAGS+=(
       "--agent.value_recur_iters=${VALUE_RECUR_ITERS}"
       "--agent.value_recur_num_dense_layers=${VALUE_RECUR_NUM_DENSE_LAYERS}"
       "--agent.value_recur_max_iters=${VALUE_RECUR_MAX_ITERS}"
-      "--agent.value_recur_tied_ln=${VALUE_RECUR_TIED_LN}"
       "--agent.value_recur_ln_mode=${VALUE_RECUR_LN_MODE}"
       "--agent.value_recur_use_step_info=${VALUE_RECUR_USE_STEP_INFO}"
       "--agent.value_recur_sinusoidal=${VALUE_RECUR_SINUSOIDAL}"
       "--agent.value_recur_use_film=${VALUE_RECUR_USE_FILM}"
-      "--agent.value_recur_use_film_context=${VALUE_RECUR_USE_FILM_CONTEXT}"
+      "--agent.value_recur_film_mode=${VALUE_RECUR_FILM_MODE}"
       "--agent.value_recur_use_layerscale=${VALUE_RECUR_USE_LAYERSCALE}"
-      "--agent.value_recur_shared_alpha=${VALUE_RECUR_SHARED_ALPHA}"
       "--agent.value_recur_use_act=${VALUE_RECUR_USE_ACT}"
       "--agent.value_recur_act_epsilon=${VALUE_RECUR_ACT_EPSILON}"
       "--agent.value_recur_act_min_iters=${VALUE_RECUR_ACT_MIN_ITERS}"
       "--agent.value_layerscale_init=${VALUE_LAYERSCALE_INIT}"
     )
-    if [[ -n "${VALUE_RECUR_FILM_MODE}" ]]; then
-      AGENT_FLAGS+=("--agent.value_recur_film_mode=${VALUE_RECUR_FILM_MODE}")
-    fi
     ;;
   *)
     echo "Error: VALUE_BACKBONE='${VALUE_BACKBONE}' is invalid. Use mlp or recur_tied." >&2

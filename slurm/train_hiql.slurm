@@ -54,23 +54,6 @@ DISCOUNT="${DISCOUNT:-0.99}"
 BATCH_SIZE="${BATCH_SIZE:-1024}"
 ACTOR_HIDDEN_DIMS="${ACTOR_HIDDEN_DIMS:-512x512x512}"
 VALUE_HIDDEN_DIMS="${VALUE_HIDDEN_DIMS:-512x512x512}"
-ACTOR_BACKBONE="${ACTOR_BACKBONE:-mlp}"
-ACTOR_BACKBONE_HIDDEN_DIM="${ACTOR_BACKBONE_HIDDEN_DIM:-0}"
-ACTOR_NUM_DENSE_LAYERS="${ACTOR_NUM_DENSE_LAYERS:-4}"
-ACTOR_RESIDUAL_SPAN="${ACTOR_RESIDUAL_SPAN:-4}"
-ACTOR_RESIDUAL_USE_SKIP="${ACTOR_RESIDUAL_USE_SKIP:-1}"
-LOW_ACTOR_BACKBONE="${LOW_ACTOR_BACKBONE:-}"
-LOW_ACTOR_BACKBONE_HIDDEN_DIM="${LOW_ACTOR_BACKBONE_HIDDEN_DIM:-0}"
-LOW_ACTOR_NUM_BLOCKS="${LOW_ACTOR_NUM_BLOCKS:-2}"
-LOW_ACTOR_BLOCK_NUM_LAYERS="${LOW_ACTOR_BLOCK_NUM_LAYERS:-4}"
-LOW_ACTOR_USE_INNER_LAYER_NORM="${LOW_ACTOR_USE_INNER_LAYER_NORM:-1}"
-LOW_ACTOR_PRENORM_NORM_MODE="${LOW_ACTOR_PRENORM_NORM_MODE:-pre_block}"
-HIGH_ACTOR_BACKBONE="${HIGH_ACTOR_BACKBONE:-}"
-HIGH_ACTOR_BACKBONE_HIDDEN_DIM="${HIGH_ACTOR_BACKBONE_HIDDEN_DIM:-0}"
-HIGH_ACTOR_NUM_BLOCKS="${HIGH_ACTOR_NUM_BLOCKS:-2}"
-HIGH_ACTOR_BLOCK_NUM_LAYERS="${HIGH_ACTOR_BLOCK_NUM_LAYERS:-4}"
-HIGH_ACTOR_USE_INNER_LAYER_NORM="${HIGH_ACTOR_USE_INNER_LAYER_NORM:-1}"
-HIGH_ACTOR_PRENORM_NORM_MODE="${HIGH_ACTOR_PRENORM_NORM_MODE:-pre_block}"
 LAYER_NORM="${LAYER_NORM:-1}"
 LOW_ALPHA="${LOW_ALPHA:-3.0}"
 HIGH_ALPHA="${HIGH_ALPHA:-3.0}"
@@ -81,17 +64,12 @@ DISCRETE="${DISCRETE:-0}"
 ENCODER="${ENCODER:-}"
 
 VALUE_BACKBONE="${VALUE_BACKBONE:-recur_tied}"
-VALUE_BACKBONE_HIDDEN_DIM="${VALUE_BACKBONE_HIDDEN_DIM:-0}"
-VALUE_NUM_DENSE_LAYERS="${VALUE_NUM_DENSE_LAYERS:-4}"
-VALUE_RESIDUAL_SPAN="${VALUE_RESIDUAL_SPAN:-4}"
-VALUE_RESIDUAL_USE_SKIP="${VALUE_RESIDUAL_USE_SKIP:-1}"
 VALUE_RECUR_ITERS="${VALUE_RECUR_ITERS:-6}"
 VALUE_RECUR_NUM_DENSE_LAYERS="${VALUE_RECUR_NUM_DENSE_LAYERS:-4}"
 VALUE_RECUR_MAX_ITERS="${VALUE_RECUR_MAX_ITERS:-6}"
 VALUE_RECUR_LN_MODE="${VALUE_RECUR_LN_MODE:-per_layer_final}"
 VALUE_RECUR_USE_STEP_INFO="${VALUE_RECUR_USE_STEP_INFO:-0}"
-VALUE_RECUR_USE_FILM_CONTEXT="${VALUE_RECUR_USE_FILM_CONTEXT:-0}"
-VALUE_RECUR_FILM_MODE="${VALUE_RECUR_FILM_MODE:-}"
+VALUE_RECUR_FILM_MODE="${VALUE_RECUR_FILM_MODE:-hidden}"
 VALUE_RECUR_USE_ACT="${VALUE_RECUR_USE_ACT:-0}"
 VALUE_RECUR_ACT_EPSILON="${VALUE_RECUR_ACT_EPSILON:-0.01}"
 VALUE_RECUR_ACT_MIN_ITERS="${VALUE_RECUR_ACT_MIN_ITERS:-1}"
@@ -176,7 +154,6 @@ AGENT_FLAGS=(
   "--agent.rep_dim=${REP_DIM}"
   "--agent.const_std=${CONST_STD}"
   "--agent.discrete=${DISCRETE}"
-  "--agent.actor_backbone=${ACTOR_BACKBONE}"
   "--agent.value_backbone=${VALUE_BACKBONE}"
   "--agent.value_p_curgoal=${VALUE_P_CURGOAL}"
   "--agent.value_p_trajgoal=${VALUE_P_TRAJGOAL}"
@@ -186,13 +163,6 @@ AGENT_FLAGS=(
   "--agent.actor_p_randomgoal=${ACTOR_P_RANDOMGOAL}"
 )
 
-if [[ -n "${LOW_ACTOR_BACKBONE}" ]]; then
-  AGENT_FLAGS+=("--agent.low_actor_backbone=${LOW_ACTOR_BACKBONE}")
-fi
-if [[ -n "${HIGH_ACTOR_BACKBONE}" ]]; then
-  AGENT_FLAGS+=("--agent.high_actor_backbone=${HIGH_ACTOR_BACKBONE}")
-fi
-
 append_hidden_dims "actor_hidden_dims" "${ACTOR_HIDDEN_DIMS}"
 append_hidden_dims "value_hidden_dims" "${VALUE_HIDDEN_DIMS}"
 
@@ -200,122 +170,15 @@ if [[ -n "${ENCODER}" ]]; then
   AGENT_FLAGS+=("--agent.encoder=${ENCODER}")
 fi
 
-if [[ "${ACTOR_BACKBONE_HIDDEN_DIM}" != "0" ]]; then
-  if [[ ! "${ACTOR_BACKBONE_HIDDEN_DIM}" =~ ^[1-9][0-9]*$ ]]; then
-    echo "Error: ACTOR_BACKBONE_HIDDEN_DIM='${ACTOR_BACKBONE_HIDDEN_DIM}' is not a positive integer." >&2
-    exit 2
-  fi
-  AGENT_FLAGS+=("--agent.actor_backbone_hidden_dim=${ACTOR_BACKBONE_HIDDEN_DIM}")
-fi
-
-if [[ "${LOW_ACTOR_BACKBONE_HIDDEN_DIM}" != "0" ]]; then
-  if [[ ! "${LOW_ACTOR_BACKBONE_HIDDEN_DIM}" =~ ^[1-9][0-9]*$ ]]; then
-    echo "Error: LOW_ACTOR_BACKBONE_HIDDEN_DIM='${LOW_ACTOR_BACKBONE_HIDDEN_DIM}' is not a positive integer." >&2
-    exit 2
-  fi
-  AGENT_FLAGS+=("--agent.low_actor_backbone_hidden_dim=${LOW_ACTOR_BACKBONE_HIDDEN_DIM}")
-fi
-
-if [[ "${HIGH_ACTOR_BACKBONE_HIDDEN_DIM}" != "0" ]]; then
-  if [[ ! "${HIGH_ACTOR_BACKBONE_HIDDEN_DIM}" =~ ^[1-9][0-9]*$ ]]; then
-    echo "Error: HIGH_ACTOR_BACKBONE_HIDDEN_DIM='${HIGH_ACTOR_BACKBONE_HIDDEN_DIM}' is not a positive integer." >&2
-    exit 2
-  fi
-  AGENT_FLAGS+=("--agent.high_actor_backbone_hidden_dim=${HIGH_ACTOR_BACKBONE_HIDDEN_DIM}")
-fi
-
-if [[ "${VALUE_BACKBONE_HIDDEN_DIM}" != "0" ]]; then
-  if [[ ! "${VALUE_BACKBONE_HIDDEN_DIM}" =~ ^[1-9][0-9]*$ ]]; then
-    echo "Error: VALUE_BACKBONE_HIDDEN_DIM='${VALUE_BACKBONE_HIDDEN_DIM}' is not a positive integer." >&2
-    exit 2
-  fi
-  AGENT_FLAGS+=("--agent.value_backbone_hidden_dim=${VALUE_BACKBONE_HIDDEN_DIM}")
-fi
-
-case "${ACTOR_BACKBONE}" in
-  mlp)
-    ;;
-  residual_dense|dense_ln)
-    AGENT_FLAGS+=(
-      "--agent.actor_num_dense_layers=${ACTOR_NUM_DENSE_LAYERS}"
-      "--agent.actor_residual_span=${ACTOR_RESIDUAL_SPAN}"
-      "--agent.actor_residual_use_skip=${ACTOR_RESIDUAL_USE_SKIP}"
-    )
-    ;;
-  prenorm_residual)
-    ;;
-  *)
-    echo "Error: ACTOR_BACKBONE='${ACTOR_BACKBONE}' is invalid. Use mlp, residual_dense, dense_ln, or prenorm_residual." >&2
-    exit 2
-    ;;
-esac
-
-LOW_ACTOR_BACKBONE_EFFECTIVE="${LOW_ACTOR_BACKBONE:-${ACTOR_BACKBONE}}"
-case "${LOW_ACTOR_BACKBONE_EFFECTIVE}" in
-  mlp)
-    ;;
-  residual_dense|dense_ln)
-    AGENT_FLAGS+=(
-      "--agent.actor_num_dense_layers=${ACTOR_NUM_DENSE_LAYERS}"
-      "--agent.actor_residual_span=${ACTOR_RESIDUAL_SPAN}"
-      "--agent.actor_residual_use_skip=${ACTOR_RESIDUAL_USE_SKIP}"
-    )
-    ;;
-  prenorm_residual)
-    AGENT_FLAGS+=(
-      "--agent.low_actor_num_blocks=${LOW_ACTOR_NUM_BLOCKS}"
-      "--agent.low_actor_block_num_layers=${LOW_ACTOR_BLOCK_NUM_LAYERS}"
-      "--agent.low_actor_use_inner_layer_norm=${LOW_ACTOR_USE_INNER_LAYER_NORM}"
-      "--agent.low_actor_prenorm_norm_mode=${LOW_ACTOR_PRENORM_NORM_MODE}"
-    )
-    ;;
-  *)
-    echo "Error: LOW_ACTOR_BACKBONE='${LOW_ACTOR_BACKBONE_EFFECTIVE}' is invalid. Use mlp, residual_dense, dense_ln, or prenorm_residual." >&2
-    exit 2
-    ;;
-esac
-
-HIGH_ACTOR_BACKBONE_EFFECTIVE="${HIGH_ACTOR_BACKBONE:-${ACTOR_BACKBONE}}"
-case "${HIGH_ACTOR_BACKBONE_EFFECTIVE}" in
-  mlp)
-    ;;
-  residual_dense|dense_ln)
-    AGENT_FLAGS+=(
-      "--agent.actor_num_dense_layers=${ACTOR_NUM_DENSE_LAYERS}"
-      "--agent.actor_residual_span=${ACTOR_RESIDUAL_SPAN}"
-      "--agent.actor_residual_use_skip=${ACTOR_RESIDUAL_USE_SKIP}"
-    )
-    ;;
-  prenorm_residual)
-    AGENT_FLAGS+=(
-      "--agent.high_actor_num_blocks=${HIGH_ACTOR_NUM_BLOCKS}"
-      "--agent.high_actor_block_num_layers=${HIGH_ACTOR_BLOCK_NUM_LAYERS}"
-      "--agent.high_actor_use_inner_layer_norm=${HIGH_ACTOR_USE_INNER_LAYER_NORM}"
-      "--agent.high_actor_prenorm_norm_mode=${HIGH_ACTOR_PRENORM_NORM_MODE}"
-    )
-    ;;
-  *)
-    echo "Error: HIGH_ACTOR_BACKBONE='${HIGH_ACTOR_BACKBONE_EFFECTIVE}' is invalid. Use mlp, residual_dense, dense_ln, or prenorm_residual." >&2
-    exit 2
-    ;;
-esac
-
 case "${VALUE_BACKBONE}" in
   mlp)
     ;;
-  residual_dense|dense_ln)
-    AGENT_FLAGS+=(
-      "--agent.value_num_dense_layers=${VALUE_NUM_DENSE_LAYERS}"
-      "--agent.value_residual_span=${VALUE_RESIDUAL_SPAN}"
-      "--agent.value_residual_use_skip=${VALUE_RESIDUAL_USE_SKIP}"
-    )
-    ;;
   recur_tied)
-    if [[ ! "${VALUE_RECUR_LN_MODE}" =~ ^(pre_loop|per_layer|per_layer_final)$ ]]; then
-      echo "Error: VALUE_RECUR_LN_MODE='${VALUE_RECUR_LN_MODE}' is invalid. Use pre_loop, per_layer, or per_layer_final." >&2
+    if [[ ! "${VALUE_RECUR_LN_MODE}" =~ ^(pre_loop|per_layer|per_layer_final|pre_loop_per_layer)$ ]]; then
+      echo "Error: VALUE_RECUR_LN_MODE='${VALUE_RECUR_LN_MODE}' is invalid. Use pre_loop, per_layer, per_layer_final, or pre_loop_per_layer." >&2
       exit 2
     fi
-    if [[ -n "${VALUE_RECUR_FILM_MODE}" && ! "${VALUE_RECUR_FILM_MODE}" =~ ^(hidden|context|hidden_context)$ ]]; then
+    if [[ ! "${VALUE_RECUR_FILM_MODE}" =~ ^(hidden|context|hidden_context)$ ]]; then
       echo "Error: VALUE_RECUR_FILM_MODE='${VALUE_RECUR_FILM_MODE}' is invalid. Use hidden, context, or hidden_context." >&2
       exit 2
     fi
@@ -325,19 +188,16 @@ case "${VALUE_BACKBONE}" in
       "--agent.value_recur_max_iters=${VALUE_RECUR_MAX_ITERS}"
       "--agent.value_recur_ln_mode=${VALUE_RECUR_LN_MODE}"
       "--agent.value_recur_use_step_info=${VALUE_RECUR_USE_STEP_INFO}"
-      "--agent.value_recur_use_film_context=${VALUE_RECUR_USE_FILM_CONTEXT}"
+      "--agent.value_recur_film_mode=${VALUE_RECUR_FILM_MODE}"
       "--agent.value_recur_use_act=${VALUE_RECUR_USE_ACT}"
       "--agent.value_recur_act_epsilon=${VALUE_RECUR_ACT_EPSILON}"
       "--agent.value_recur_act_min_iters=${VALUE_RECUR_ACT_MIN_ITERS}"
       "--agent.value_recur_act_ponder_weight=${VALUE_RECUR_ACT_PONDER_WEIGHT}"
       "--agent.value_layerscale_init=${VALUE_LAYERSCALE_INIT}"
     )
-    if [[ -n "${VALUE_RECUR_FILM_MODE}" ]]; then
-      AGENT_FLAGS+=("--agent.value_recur_film_mode=${VALUE_RECUR_FILM_MODE}")
-    fi
     ;;
   *)
-    echo "Error: VALUE_BACKBONE='${VALUE_BACKBONE}' is invalid. Use mlp, residual_dense, dense_ln, or recur_tied." >&2
+    echo "Error: VALUE_BACKBONE='${VALUE_BACKBONE}' is invalid. Use mlp or recur_tied." >&2
     exit 2
     ;;
 esac

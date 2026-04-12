@@ -28,10 +28,6 @@
 #    sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=P4_AntMaze_MLP_Actor32L,CRITIC_BACKBONE=mlp,ACTOR_NUM_LAYERS=32,ACTOR_LAYER_WIDTH=512,ALPHA=0.1,DISCOUNT=0.99,WANDB_MODE=online" \
 #      slurm/phase4_train_crl_generic_array.slurm
 #
-# 5) Residual actor with 16 Dense layers and 4-layer residual spans:
-#    sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=humanoidmaze-large-stitch-v0,RUN_GROUP=P4_Humanoid_ResActor16,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,ACTOR_BACKBONE=residual_dense,ACTOR_NUM_LAYERS=16,ACTOR_LAYER_WIDTH=512,ALPHA=0.1,DISCOUNT=0.995,WANDB_MODE=online" \
-#      slurm/phase4_train_crl_generic_array.slurm
-#
 # Explicit x-separated dims still work and take precedence if both forms are set.
 
 set -euo pipefail
@@ -92,12 +88,6 @@ ACTOR_NUM_LAYERS="${ACTOR_NUM_LAYERS:-}"     # Shortcut: e.g., 32
 ACTOR_LAYER_WIDTH="${ACTOR_LAYER_WIDTH:-512}" # Shortcut width used with ACTOR_NUM_LAYERS
 VALUE_NUM_LAYERS="${VALUE_NUM_LAYERS:-}"     # Shortcut: e.g., 32
 VALUE_LAYER_WIDTH="${VALUE_LAYER_WIDTH:-512}" # Shortcut width used with VALUE_NUM_LAYERS
-ACTOR_BACKBONE="${ACTOR_BACKBONE:-mlp}"      # mlp | resnet | residual_dense | dense_ln
-ACTOR_BACKBONE_HIDDEN_DIM="${ACTOR_BACKBONE_HIDDEN_DIM:-0}"
-ACTOR_RESNET_DEPTH="${ACTOR_RESNET_DEPTH:-3}" # Residual block count for actor_backbone=resnet.
-ACTOR_RESIDUAL_NUM_DENSE_LAYERS="${ACTOR_RESIDUAL_NUM_DENSE_LAYERS:-}"
-ACTOR_RESIDUAL_SPAN="${ACTOR_RESIDUAL_SPAN:-4}"
-ACTOR_RESIDUAL_USE_SKIP="${ACTOR_RESIDUAL_USE_SKIP:-1}"
 ACTOR_P_CURGOAL="${ACTOR_P_CURGOAL:-0.0}"
 ACTOR_P_TRAJGOAL="${ACTOR_P_TRAJGOAL:-1.0}"
 ACTOR_P_RANDOMGOAL="${ACTOR_P_RANDOMGOAL:-0.0}"
@@ -113,13 +103,8 @@ ENCODER="${ENCODER:-}"
 QUASIMETRIC_TYPE="${QUASIMETRIC_TYPE:-iqe}"
 
 # Critic backbone selection.
-CRITIC_BACKBONE="${CRITIC_BACKBONE:-mlp}"   # mlp | resnet | recur_tied | partial_tied
-CRITIC_BACKBONE_HIDDEN_DIM="${CRITIC_BACKBONE_HIDDEN_DIM:-0}"
+CRITIC_BACKBONE="${CRITIC_BACKBONE:-mlp}"   # mlp | recur_tied
 LAYERSCALE_INIT="${LAYERSCALE_INIT:-1e-2}"
-
-# ResNet options.
-RESNET_DEPTH="${RESNET_DEPTH:-3}" # Residual block count for critic_backbone=resnet.
-RESNET_USE_FILM="${RESNET_USE_FILM:-0}"
 
 # recurrent tied options.
 KTRAIN="${KTRAIN:-4}"
@@ -129,19 +114,11 @@ RECUR_MAX_ITERS="${RECUR_MAX_ITERS:-8}"
 CRITIC_RECUR_LN_MODE="${CRITIC_RECUR_LN_MODE:-per_layer_final}"
 RECUR_USE_STEP_INFO="${RECUR_USE_STEP_INFO:-0}"
 RECUR_SINUSOIDAL="${RECUR_SINUSOIDAL:-0}"
-RECUR_USE_FILM_CONTEXT="${RECUR_USE_FILM_CONTEXT:-0}"
-CRITIC_RECUR_FILM_MODE="${CRITIC_RECUR_FILM_MODE:-}"
+CRITIC_RECUR_FILM_MODE="${CRITIC_RECUR_FILM_MODE:-hidden}"
 RECUR_USE_ACT="${RECUR_USE_ACT:-0}"
 RECUR_ACT_EPSILON="${RECUR_ACT_EPSILON:-0.01}"
 RECUR_ACT_MIN_ITERS="${RECUR_ACT_MIN_ITERS:-1}"
 RECUR_ACT_PONDER_WEIGHT="${RECUR_ACT_PONDER_WEIGHT:-0.0}"
-
-# partial tied options.
-PARTIAL_GROUPS="${PARTIAL_GROUPS:-2}"
-PARTIAL_ITERS_PER_GROUP="${PARTIAL_ITERS_PER_GROUP:-2}"
-PARTIAL_PER_GROUP_FILM="${PARTIAL_PER_GROUP_FILM:-0}"
-PARTIAL_CYCLE_STEP_PARAMS="${PARTIAL_CYCLE_STEP_PARAMS:-1}"
-PARTIAL_BLOCK_SCHEDULE="${PARTIAL_BLOCK_SCHEDULE:-grouped}"   # grouped | stack
 
 # Seeds controlled via env var: SEEDS="0 1 2"
 SEEDS="${SEEDS:-0 1 2}"
@@ -191,7 +168,6 @@ AGENT_FLAGS=(
   "--agent.latent_dim=${LATENT_DIM}"
   "--agent.const_std=${CONST_STD}"
   "--agent.discrete=${DISCRETE}"
-  "--agent.actor_backbone=${ACTOR_BACKBONE}"
 )
 
 if [[ "${AGENT_NAME}" == "crl" ]]; then
@@ -213,11 +189,6 @@ if [[ "${AGENT_NAME}" == "qrl" ]]; then
   AGENT_FLAGS+=("--agent.quasimetric_type=${QUASIMETRIC_TYPE}")
 fi
 
-if [[ ! "${ACTOR_BACKBONE}" =~ ^(mlp|resnet|residual_dense|dense_ln)$ ]]; then
-  echo "Error: ACTOR_BACKBONE='${ACTOR_BACKBONE}' is invalid. Use mlp, resnet, residual_dense, or dense_ln." >&2
-  exit 2
-fi
-
 if [[ -n "${ACTOR_NUM_LAYERS}" && ! "${ACTOR_NUM_LAYERS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "Error: ACTOR_NUM_LAYERS='${ACTOR_NUM_LAYERS}' is not a positive integer." >&2
   exit 2
@@ -227,49 +198,12 @@ if [[ ! "${ACTOR_LAYER_WIDTH}" =~ ^[1-9][0-9]*$ ]]; then
   exit 2
 fi
 
-if [[ "${ACTOR_BACKBONE}" == "mlp" ]]; then
-  if [[ -z "${ACTOR_HIDDEN_DIMS}" && -n "${ACTOR_NUM_LAYERS}" ]]; then
-    ACTOR_DIMS=()
-    for ((i = 0; i < ACTOR_NUM_LAYERS; i++)); do
-      ACTOR_DIMS+=("${ACTOR_LAYER_WIDTH}")
-    done
-    ACTOR_HIDDEN_DIMS="$(IFS=x; echo "${ACTOR_DIMS[*]}")"
-  fi
-elif [[ "${ACTOR_BACKBONE}" == "resnet" ]]; then
-  if [[ -n "${ACTOR_NUM_LAYERS}" ]]; then
-    ACTOR_RESNET_DEPTH="${ACTOR_NUM_LAYERS}"
-  fi
-  if [[ ! "${ACTOR_RESNET_DEPTH}" =~ ^[1-9][0-9]*$ ]]; then
-    echo "Error: ACTOR_RESNET_DEPTH='${ACTOR_RESNET_DEPTH}' is not a positive integer." >&2
-    exit 2
-  fi
-  AGENT_FLAGS+=("--agent.actor_resnet_depth=${ACTOR_RESNET_DEPTH}")
-else
-  if [[ -z "${ACTOR_RESIDUAL_NUM_DENSE_LAYERS}" && -n "${ACTOR_NUM_LAYERS}" ]]; then
-    ACTOR_RESIDUAL_NUM_DENSE_LAYERS="${ACTOR_NUM_LAYERS}"
-  fi
-  if [[ -z "${ACTOR_RESIDUAL_NUM_DENSE_LAYERS}" ]]; then
-    ACTOR_RESIDUAL_NUM_DENSE_LAYERS="4"
-  fi
-  if [[ ! "${ACTOR_RESIDUAL_NUM_DENSE_LAYERS}" =~ ^[1-9][0-9]*$ ]]; then
-    echo "Error: ACTOR_RESIDUAL_NUM_DENSE_LAYERS='${ACTOR_RESIDUAL_NUM_DENSE_LAYERS}' is not a positive integer." >&2
-    exit 2
-  fi
-  if [[ ! "${ACTOR_RESIDUAL_SPAN}" =~ ^[1-9][0-9]*$ ]]; then
-    echo "Error: ACTOR_RESIDUAL_SPAN='${ACTOR_RESIDUAL_SPAN}' is not a positive integer." >&2
-    exit 2
-  fi
-  if (( ACTOR_BACKBONE_HIDDEN_DIM == 0 )); then
-    ACTOR_BACKBONE_HIDDEN_DIM="${ACTOR_LAYER_WIDTH}"
-  fi
-  if [[ "${ACTOR_BACKBONE}" == "dense_ln" ]]; then
-    ACTOR_RESIDUAL_USE_SKIP="0"
-  fi
-  AGENT_FLAGS+=(
-    "--agent.actor_num_dense_layers=${ACTOR_RESIDUAL_NUM_DENSE_LAYERS}"
-    "--agent.actor_residual_span=${ACTOR_RESIDUAL_SPAN}"
-    "--agent.actor_residual_use_skip=${ACTOR_RESIDUAL_USE_SKIP}"
-  )
+if [[ -z "${ACTOR_HIDDEN_DIMS}" && -n "${ACTOR_NUM_LAYERS}" ]]; then
+  ACTOR_DIMS=()
+  for ((i = 0; i < ACTOR_NUM_LAYERS; i++)); do
+    ACTOR_DIMS+=("${ACTOR_LAYER_WIDTH}")
+  done
+  ACTOR_HIDDEN_DIMS="$(IFS=x; echo "${ACTOR_DIMS[*]}")"
 fi
 
 if [[ -n "${ACTOR_HIDDEN_DIMS}" ]]; then
@@ -291,14 +225,6 @@ if [[ -n "${ACTOR_HIDDEN_DIMS}" ]]; then
     fi
     AGENT_FLAGS+=("--agent.actor_hidden_dims=${dim}")
   done
-fi
-
-if [[ "${ACTOR_BACKBONE_HIDDEN_DIM}" != "0" ]]; then
-  if [[ ! "${ACTOR_BACKBONE_HIDDEN_DIM}" =~ ^[1-9][0-9]*$ ]]; then
-    echo "Error: ACTOR_BACKBONE_HIDDEN_DIM='${ACTOR_BACKBONE_HIDDEN_DIM}' is not a positive integer." >&2
-    exit 2
-  fi
-  AGENT_FLAGS+=("--agent.actor_backbone_hidden_dim=${ACTOR_BACKBONE_HIDDEN_DIM}")
 fi
 
 if [[ -z "${VALUE_HIDDEN_DIMS}" && -n "${VALUE_NUM_LAYERS}" ]]; then
@@ -342,10 +268,6 @@ if [[ -n "${ACTOR_GEOM_SAMPLE}" ]]; then
   AGENT_FLAGS+=("--agent.actor_geom_sample=${ACTOR_GEOM_SAMPLE}")
 fi
 
-if [[ "${CRITIC_BACKBONE_HIDDEN_DIM}" != "0" ]]; then
-  AGENT_FLAGS+=("--agent.critic_backbone_hidden_dim=${CRITIC_BACKBONE_HIDDEN_DIM}")
-fi
-
 if [[ -n "${RECUR_NUM_DENSE_LAYERS}" ]]; then
   if [[ ! "${RECUR_NUM_DENSE_LAYERS}" =~ ^[1-9][0-9]*$ ]]; then
     echo "Error: RECUR_NUM_DENSE_LAYERS='${RECUR_NUM_DENSE_LAYERS}' is not a positive integer." >&2
@@ -358,18 +280,12 @@ fi
 case "${CRITIC_BACKBONE}" in
   mlp)
     ;;
-  resnet)
-    AGENT_FLAGS+=(
-      "--agent.critic_resnet_depth=${RESNET_DEPTH}"
-      "--agent.critic_resnet_use_film=${RESNET_USE_FILM}"
-    )
-    ;;
   recur_tied)
-    if [[ ! "${CRITIC_RECUR_LN_MODE}" =~ ^(pre_loop|per_layer|per_layer_final)$ ]]; then
-      echo "Error: CRITIC_RECUR_LN_MODE='${CRITIC_RECUR_LN_MODE}' is invalid. Use pre_loop, per_layer, or per_layer_final." >&2
+    if [[ ! "${CRITIC_RECUR_LN_MODE}" =~ ^(pre_loop|per_layer|per_layer_final|pre_loop_per_layer)$ ]]; then
+      echo "Error: CRITIC_RECUR_LN_MODE='${CRITIC_RECUR_LN_MODE}' is invalid. Use pre_loop, per_layer, per_layer_final, or pre_loop_per_layer." >&2
       exit 2
     fi
-    if [[ -n "${CRITIC_RECUR_FILM_MODE}" && ! "${CRITIC_RECUR_FILM_MODE}" =~ ^(hidden|context|hidden_context)$ ]]; then
+    if [[ ! "${CRITIC_RECUR_FILM_MODE}" =~ ^(hidden|context|hidden_context)$ ]]; then
       echo "Error: CRITIC_RECUR_FILM_MODE='${CRITIC_RECUR_FILM_MODE}' is invalid. Use hidden, context, or hidden_context." >&2
       exit 2
     fi
@@ -380,24 +296,11 @@ case "${CRITIC_BACKBONE}" in
       "--agent.critic_recur_ln_mode=${CRITIC_RECUR_LN_MODE}"
       "--agent.critic_recur_use_step_info=${RECUR_USE_STEP_INFO}"
       "--agent.critic_recur_sinusoidal=${RECUR_SINUSOIDAL}"
-      "--agent.critic_recur_use_film_context=${RECUR_USE_FILM_CONTEXT}"
+      "--agent.critic_recur_film_mode=${CRITIC_RECUR_FILM_MODE}"
       "--agent.critic_recur_use_act=${RECUR_USE_ACT}"
       "--agent.critic_recur_act_epsilon=${RECUR_ACT_EPSILON}"
       "--agent.critic_recur_act_min_iters=${RECUR_ACT_MIN_ITERS}"
       "--agent.critic_recur_act_ponder_weight=${RECUR_ACT_PONDER_WEIGHT}"
-    )
-    if [[ -n "${CRITIC_RECUR_FILM_MODE}" ]]; then
-      AGENT_FLAGS+=("--agent.critic_recur_film_mode=${CRITIC_RECUR_FILM_MODE}")
-    fi
-    ;;
-  partial_tied)
-    AGENT_FLAGS+=(
-      "--agent.critic_partial_groups=${PARTIAL_GROUPS}"
-      "--agent.critic_partial_iters_per_group=${PARTIAL_ITERS_PER_GROUP}"
-      "--agent.critic_partial_per_group_film=${PARTIAL_PER_GROUP_FILM}"
-      "--agent.critic_partial_cycle_step_params=${PARTIAL_CYCLE_STEP_PARAMS}"
-      "--agent.critic_partial_block_schedule=${PARTIAL_BLOCK_SCHEDULE}"
-      "--agent.critic_recur_max_iters=${RECUR_MAX_ITERS}"
     )
     ;;
   *)
