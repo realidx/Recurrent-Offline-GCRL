@@ -1505,10 +1505,10 @@ index 0000000..16660f1
 +    return config
 diff --git a/impls/analyze_hiql_value_geometry.py b/impls/analyze_hiql_value_geometry.py
 new file mode 100644
-index 0000000..2a4e3fc
+index 0000000..36b6b25
 --- /dev/null
 +++ b/impls/analyze_hiql_value_geometry.py
-@@ -0,0 +1,869 @@
+@@ -0,0 +1,1059 @@
 +import argparse
 +import glob
 +import json
@@ -1857,6 +1857,27 @@ index 0000000..2a4e3fc
 +    return region
 +
 +
++def _region_metric_masks(dist_grid, structure, env):
++    finite_dist = dist_grid[np.isfinite(dist_grid)]
++    if len(finite_dist) >= 3:
++        hard_threshold = float(np.quantile(finite_dist, 2.0 / 3.0))
++        hard_mask = np.isfinite(dist_grid) & (dist_grid >= hard_threshold)
++    else:
++        hard_threshold = np.nan
++        hard_mask = np.zeros_like(dist_grid, dtype=bool)
++
++    articulation_nodes = list(zip(*np.where(structure['articulation_grid'] > 0)))
++    teleport_in_nodes = list(zip(*np.where(structure['teleport_in_grid'] > 0)))
++    teleport_out_nodes = list(zip(*np.where(structure['teleport_out_grid'] > 0)))
++    bottleneck_seed_nodes = articulation_nodes + teleport_in_nodes + teleport_out_nodes
++    bottleneck_mask = _region_mask_from_nodes(env, bottleneck_seed_nodes, hops=1)
++    return dict(
++        hard_threshold=hard_threshold,
++        hard_mask=hard_mask,
++        bottleneck_mask=bottleneck_mask,
++    )
++
++
 +def _select_probe_mode(args, runtime):
 +    if args.probe_mode != 'auto':
 +        return args.probe_mode
@@ -1883,6 +1904,7 @@ index 0000000..2a4e3fc
 +        env.unwrapped.set_xy(original_xy)
 +    return dict(
 +        observations=np.asarray(observations),
++        selected_cells=list(free_cells),
 +        cell_to_obs_index=cell_to_obs_index,
 +        count_grid=np.where(maze_map == 0, 1.0, 0.0).astype(np.float32),
 +    )
@@ -1923,6 +1945,8 @@ index 0000000..2a4e3fc
 +
 +    return dict(
 +        observations=observations[np.asarray(selected_indices)],
++        qpos=np.asarray(raw_dataset['qpos'])[np.asarray(selected_indices)],
++        qvel=(np.asarray(raw_dataset['qvel'])[np.asarray(selected_indices)] if 'qvel' in raw_dataset else None),
 +        selected_cells=selected_cells,
 +        count_grid=count_grid,
 +    )
@@ -2014,19 +2038,9 @@ index 0000000..2a4e3fc
 +    mask = np.isfinite(value_grid) & np.isfinite(dist_grid)
 +    masked_values = value_grid[mask]
 +    masked_neg_dist = -dist_grid[mask]
-+    finite_dist = dist_grid[np.isfinite(dist_grid)]
-+    if len(finite_dist) >= 3:
-+        hard_threshold = float(np.quantile(finite_dist, 2.0 / 3.0))
-+        hard_mask = np.isfinite(dist_grid) & (dist_grid >= hard_threshold)
-+    else:
-+        hard_threshold = np.nan
-+        hard_mask = np.zeros_like(dist_grid, dtype=bool)
-+
-+    articulation_nodes = list(zip(*np.where(structure['articulation_grid'] > 0)))
-+    teleport_in_nodes = list(zip(*np.where(structure['teleport_in_grid'] > 0)))
-+    teleport_out_nodes = list(zip(*np.where(structure['teleport_out_grid'] > 0)))
-+    bottleneck_seed_nodes = articulation_nodes + teleport_in_nodes + teleport_out_nodes
-+    bottleneck_mask = _region_mask_from_nodes(env, bottleneck_seed_nodes, hops=1)
++    region_masks = _region_metric_masks(dist_grid, structure, env)
++    hard_mask = region_masks['hard_mask']
++    bottleneck_mask = region_masks['bottleneck_mask']
 +
 +    hard_metrics = _subset_corrs(value_grid, dist_grid, hard_mask)
 +    bottleneck_metrics = _subset_corrs(value_grid, dist_grid, bottleneck_mask)
@@ -2035,7 +2049,7 @@ index 0000000..2a4e3fc
 +        value_std=float(np.nanstd(value_grid)),
 +        graph_corr=_pearson_corr(masked_values, masked_neg_dist),
 +        graph_spearman=_spearman_corr(masked_values, masked_neg_dist),
-+        hard_threshold=hard_threshold,
++        hard_threshold=region_masks['hard_threshold'],
 +        hard_count=hard_metrics['count'],
 +        hard_graph_corr=hard_metrics['graph_corr'],
 +        hard_graph_spearman=hard_metrics['graph_spearman'],
@@ -2044,6 +2058,146 @@ index 0000000..2a4e3fc
 +        bottleneck_graph_spearman=bottleneck_metrics['graph_spearman'],
 +        hard_mask=hard_mask,
 +        bottleneck_mask=bottleneck_mask,
++    )
++
++
++def _deterministic_hiql_action(agent, observation, goal):
++    import jax.numpy as jnp
++
++    observation = jnp.asarray(observation)[None, ...]
++    goal = jnp.asarray(goal)[None, ...]
++    high_dist = agent.network.select('high_actor')(observation, goal, temperature=0.0)
++    goal_reps = high_dist.mode()
++    goal_reps = goal_reps / jnp.linalg.norm(goal_reps, axis=-1, keepdims=True) * jnp.sqrt(goal_reps.shape[-1])
++    low_dist = agent.network.select('low_actor')(observation, goal_reps, goal_encoded=True, temperature=0.0)
++    action = low_dist.mode()
++    if not agent.config['discrete']:
++        action = jnp.clip(action, -1, 1)
++    return np.asarray(action[0])
++
++
++def _compute_policy_diagnostics(runtime, probe_data, goal, goal_xy, dist_grid, structure, seed, rollout_steps, policy_probe_limit):
++    if rollout_steps <= 0:
++        return None
++    if 'qpos' not in probe_data or probe_data.get('qvel') is None:
++        return None
++
++    env = runtime['env']
++    qpos = np.asarray(probe_data['qpos'])
++    qvel = np.asarray(probe_data['qvel'])
++    if len(qpos) == 0:
++        return None
++
++    rng = np.random.RandomState(seed + 911)
++    all_indices = np.arange(len(qpos))
++    if policy_probe_limit is not None and policy_probe_limit > 0 and len(all_indices) > policy_probe_limit:
++        probe_indices = rng.choice(all_indices, size=policy_probe_limit, replace=False)
++    else:
++        probe_indices = all_indices
++
++    region_masks = _region_metric_masks(dist_grid, structure, env)
++    hard_mask = region_masks['hard_mask']
++    bottleneck_mask = region_masks['bottleneck_mask']
++
++    improvements = []
++    one_step_improvements = []
++    success_flags = []
++    hard_flags = []
++    bottleneck_flags = []
++    hard_improvements = []
++    bottleneck_improvements = []
++    hard_one_step = []
++    bottleneck_one_step = []
++
++    for idx in probe_indices:
++        start_cell = tuple(probe_data['selected_cells'][int(idx)])
++        if not np.isfinite(dist_grid[start_cell]):
++            continue
++
++        try:
++            env.unwrapped.set_state(np.asarray(qpos[idx]).copy(), np.asarray(qvel[idx]).copy())
++        except Exception:
++            continue
++        if hasattr(env.unwrapped, 'set_goal'):
++            env.unwrapped.set_goal(goal_xy=np.asarray(goal_xy).copy())
++        observation = np.asarray(env.unwrapped.get_ob())
++        start_dist = float(dist_grid[start_cell])
++        cur_dist = start_dist
++        one_step_improve = np.nan
++        reached = False
++
++        for t in range(int(rollout_steps)):
++            action = _deterministic_hiql_action(runtime['agent'], observation, goal)
++            next_observation, _, terminated, truncated, info = env.step(action)
++            next_xy = np.asarray(env.unwrapped.get_xy())
++            next_cell = tuple(map(int, env.unwrapped.xy_to_ij(next_xy)))
++            if 0 <= next_cell[0] < dist_grid.shape[0] and 0 <= next_cell[1] < dist_grid.shape[1]:
++                next_dist = float(dist_grid[next_cell])
++            else:
++                next_dist = np.inf
++            if t == 0 and np.isfinite(next_dist):
++                one_step_improve = start_dist - next_dist
++            if np.isfinite(next_dist):
++                cur_dist = next_dist
++            observation = np.asarray(next_observation)
++            if next_dist <= 0:
++                reached = True
++            if terminated or truncated:
++                break
++
++        total_improve = start_dist - cur_dist if np.isfinite(cur_dist) else np.nan
++        improvements.append(total_improve)
++        one_step_improvements.append(one_step_improve)
++        success_flags.append(bool(reached))
++        in_hard = bool(hard_mask[start_cell])
++        in_bottleneck = bool(bottleneck_mask[start_cell])
++        hard_flags.append(in_hard)
++        bottleneck_flags.append(in_bottleneck)
++        if in_hard:
++            hard_improvements.append(total_improve)
++            hard_one_step.append(one_step_improve)
++        if in_bottleneck:
++            bottleneck_improvements.append(total_improve)
++            bottleneck_one_step.append(one_step_improve)
++
++    if not improvements:
++        return None
++
++    improvements = np.asarray(improvements, dtype=np.float64)
++    one_step_improvements = np.asarray(one_step_improvements, dtype=np.float64)
++    success_flags = np.asarray(success_flags, dtype=np.float64)
++
++    def _mean_if(values):
++        values = np.asarray(values, dtype=np.float64)
++        if len(values) == 0:
++            return np.nan
++        return float(np.nanmean(values))
++
++    def _frac_positive(values):
++        values = np.asarray(values, dtype=np.float64)
++        values = values[np.isfinite(values)]
++        if len(values) == 0:
++            return np.nan
++        return float(np.mean(values > 0))
++
++    return dict(
++        policy_probe_count=int(len(improvements)),
++        policy_rollout_steps=int(rollout_steps),
++        policy_improve_mean=float(np.nanmean(improvements)),
++        policy_improve_frac=_frac_positive(improvements),
++        policy_one_step_improve_mean=float(np.nanmean(one_step_improvements)),
++        policy_one_step_improve_frac=_frac_positive(one_step_improvements),
++        policy_goal_reached_frac=float(np.mean(success_flags)),
++        hard_policy_probe_count=int(sum(hard_flags)),
++        hard_policy_improve_mean=_mean_if(hard_improvements),
++        hard_policy_improve_frac=_frac_positive(hard_improvements),
++        hard_policy_one_step_improve_mean=_mean_if(hard_one_step),
++        hard_policy_one_step_improve_frac=_frac_positive(hard_one_step),
++        bottleneck_policy_probe_count=int(sum(bottleneck_flags)),
++        bottleneck_policy_improve_mean=_mean_if(bottleneck_improvements),
++        bottleneck_policy_improve_frac=_frac_positive(bottleneck_improvements),
++        bottleneck_policy_one_step_improve_mean=_mean_if(bottleneck_one_step),
++        bottleneck_policy_one_step_improve_frac=_frac_positive(bottleneck_one_step),
 +    )
 +
 +
@@ -2129,6 +2283,14 @@ index 0000000..2a4e3fc
 +            structure_lines.append('cyan=s teleport in')
 +        if np.any(result['structure']['teleport_out_grid'] > 0):
 +            structure_lines.append('lime=D teleport out')
++        policy_metrics = result.get('policy_metrics')
++        if policy_metrics is not None:
++            structure_lines += [
++                '',
++                f'pol10 d={policy_metrics["policy_improve_mean"]:.2f} frac={policy_metrics["policy_improve_frac"]:.2f}',
++                f'hard d={policy_metrics["hard_policy_improve_mean"]:.2f} frac={policy_metrics["hard_policy_improve_frac"]:.2f}',
++                f'bneck d={policy_metrics["bottleneck_policy_improve_mean"]:.2f} frac={policy_metrics["bottleneck_policy_improve_frac"]:.2f}',
++            ]
 +        ax.text(0.03, 0.95, '\n'.join(structure_lines), va='top', ha='left', fontsize=9)
 +
 +        for idx in range(max_cols - 2):
@@ -2222,6 +2384,18 @@ index 0000000..2a4e3fc
 +        default=64,
 +        help='Dataset mode only: cap the number of states averaged per maze cell.',
 +    )
++    parser.add_argument(
++        '--policy_rollout_steps',
++        type=int,
++        default=10,
++        help='Short deterministic policy rollout horizon for actor diagnostics. Set 0 to disable.',
++    )
++    parser.add_argument(
++        '--policy_probe_limit',
++        type=int,
++        default=256,
++        help='Maximum number of probe states used for actor rollout diagnostics.',
++    )
 +    parser.add_argument('--seed', type=int, default=0, help='Seed for probe subsampling and deterministic goal reset.')
 +    parser.add_argument(
 +        '--output_dir',
@@ -2298,6 +2472,20 @@ index 0000000..2a4e3fc
 +                    'step': np.asarray([step], dtype=np.int32),
 +                    'task_id': np.asarray([task_id], dtype=np.int32),
 +                }
++                policy_metrics = _compute_policy_diagnostics(
++                    runtime,
++                    probe_data,
++                    goal,
++                    goal_xy,
++                    dist_grid,
++                    structure,
++                    args.seed,
++                    args.policy_rollout_steps,
++                    args.policy_probe_limit,
++                )
++                if policy_metrics is not None:
++                    for key, value in policy_metrics.items():
++                        dump_dict[key] = np.asarray([value], dtype=np.float32)
 +
 +                prev_value_grid = None
 +                for k in iterations:
@@ -2337,6 +2525,7 @@ index 0000000..2a4e3fc
 +                            value_mean=metrics[k]['value_mean'],
 +                            value_std=metrics[k]['value_std'],
 +                            delta_mean_abs=(None if delta_grid is None else float(np.nanmean(np.abs(delta_grid)))),
++                            **({} if policy_metrics is None else policy_metrics),
 +                        )
 +                    )
 +                    prev_value_grid = value_grid
@@ -2360,6 +2549,7 @@ index 0000000..2a4e3fc
 +                    count_grid=np.asarray(probe_data['count_grid'], dtype=np.float32),
 +                    structure=structure,
 +                    maze_map=np.asarray(runtime['env'].unwrapped.maze_map),
++                    policy_metrics=policy_metrics,
 +                )
 +                results.append(result)
 +                task_overview_results[int(task_id)].append(result)
