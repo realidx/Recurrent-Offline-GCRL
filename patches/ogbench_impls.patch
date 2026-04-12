@@ -1503,6 +1503,604 @@ index 0000000..16660f1
 +        )
 +    )
 +    return config
+diff --git a/impls/analyze_hiql_value_geometry.py b/impls/analyze_hiql_value_geometry.py
+new file mode 100644
+index 0000000..cda9d1f
+--- /dev/null
++++ b/impls/analyze_hiql_value_geometry.py
+@@ -0,0 +1,592 @@
++import argparse
++import glob
++import json
++import os
++import re
++from collections import defaultdict, deque
++
++import numpy as np
++
++
++def _parse_int_list(spec: str):
++    if spec is None:
++        return None
++    spec = spec.strip()
++    if not spec:
++        return None
++    tokens = [tok for tok in re.split(r'[\s,:;]+', spec) if tok]
++    return [int(tok) for tok in tokens]
++
++
++def _parse_task_ids(task_id: int | None, task_ids_spec: str | None, env):
++    if task_ids_spec:
++        return _parse_int_list(task_ids_spec)
++    if task_id is not None:
++        return [int(task_id)]
++
++    task_infos = getattr(env.unwrapped, 'task_infos', None)
++    if task_infos is None:
++        return [1]
++    return list(range(1, len(task_infos) + 1))
++
++
++def _slugify(text: str) -> str:
++    return re.sub(r'[^a-zA-Z0-9._-]+', '_', text).strip('_') or 'run'
++
++
++def _infer_latest_epoch_from_dir(restore_dir: str):
++    epochs = []
++    for path in glob.glob(os.path.join(restore_dir, 'params_*.pkl')):
++        match = re.search(r'params_(\d+)\.pkl$', os.path.basename(path))
++        if match:
++            epochs.append(int(match.group(1)))
++    return max(epochs) if epochs else None
++
++
++def _resolve_checkpoint(run_path: str, epoch: int | None):
++    candidates = glob.glob(run_path)
++    if len(candidates) == 1:
++        candidate = candidates[0]
++    elif os.path.exists(run_path):
++        candidate = run_path
++    else:
++        raise FileNotFoundError(f'Could not resolve restore path: {run_path}')
++
++    if os.path.isfile(candidate):
++        if not candidate.endswith('.pkl'):
++            raise ValueError(f'Expected a checkpoint .pkl file, got: {candidate}')
++        step_match = re.search(r'params_(\d+)\.pkl$', os.path.basename(candidate))
++        step = int(step_match.group(1)) if step_match else -1
++        return candidate, os.path.dirname(candidate), step
++
++    if epoch is None:
++        epoch = _infer_latest_epoch_from_dir(candidate)
++    if epoch is None:
++        raise FileNotFoundError(f'No params_*.pkl checkpoints found in {candidate}')
++
++    checkpoint_path = os.path.join(candidate, f'params_{epoch}.pkl')
++    if not os.path.exists(checkpoint_path):
++        raise FileNotFoundError(f'Checkpoint does not exist: {checkpoint_path}')
++    return checkpoint_path, candidate, int(epoch)
++
++
++def _load_flags(run_dir: str):
++    flags_path = os.path.join(run_dir, 'flags.json')
++    if not os.path.exists(flags_path):
++        raise FileNotFoundError(f'Missing flags.json next to checkpoint: {flags_path}')
++    with open(flags_path, 'r') as f:
++        flags_dict = json.load(f)
++    if not isinstance(flags_dict, dict):
++        raise ValueError(f'flags.json is not a JSON object: {flags_path}')
++    if 'agent' not in flags_dict or not isinstance(flags_dict['agent'], dict):
++        raise ValueError(f'flags.json does not contain agent config: {flags_path}')
++    return flags_dict
++
++
++def _sample_dataset(dataset, batch_size, *, idxs=None, evaluation=False, config=None):
++    sample_kwargs = dict(idxs=idxs, evaluation=evaluation)
++    if config is not None and config.get('agent_name') == 'cgivl':
++        sample_kwargs.update(
++            dict(
++                init_goal_rep=config.get('init_goal_rep', False),
++                use_subgoals=config.get('use_subgoals', True),
++                min_d=config.get('min_d', 0),
++            )
++        )
++    return dataset.sample(batch_size, **sample_kwargs)
++
++
++def _build_runtime(run_dir: str, checkpoint_path: str):
++    import ogbench
++
++    from agents import agents
++    from utils.datasets import Dataset, GCDataset, HGCDataset, SHGCDataset
++    from utils.env_utils import FrameStackWrapper
++    from utils.flax_utils import restore_agent
++
++    flags_dict = _load_flags(run_dir)
++    config = dict(flags_dict['agent'])
++    env_name = flags_dict['env_name']
++    seed = int(flags_dict.get('seed', 0))
++
++    env, train_raw, val_raw = ogbench.make_env_and_datasets(
++        env_name,
++        compact_dataset=True,
++        add_info=True,
++    )
++    if config.get('frame_stack') is not None:
++        env = FrameStackWrapper(env, int(config['frame_stack']))
++
++    dataset_class = {
++        'GCDataset': GCDataset,
++        'HGCDataset': HGCDataset,
++        'SHGCDataset': SHGCDataset,
++    }[config['dataset_class']]
++
++    train_dataset = dataset_class(Dataset.create(**train_raw), config)
++    val_dataset = dataset_class(Dataset.create(**val_raw), config) if val_raw is not None else None
++
++    example_batch = _sample_dataset(train_dataset, 1, config=config)
++    if config['discrete']:
++        example_batch['actions'] = np.full_like(example_batch['actions'], env.action_space.n - 1)
++
++    agent_class = agents[config['agent_name']]
++    if config['agent_name'] == 'cgivl':
++        agent = agent_class.create(
++            seed,
++            example_batch['observations'],
++            example_batch['goals'],
++            example_batch['actions'],
++            config,
++        )
++    else:
++        agent = agent_class.create(
++            seed,
++            example_batch['observations'],
++            example_batch['actions'],
++            config,
++        )
++    agent = restore_agent(agent, checkpoint_path, restore_epoch=None)
++    return dict(
++        agent=agent,
++        env=env,
++        train_dataset=train_dataset,
++        val_dataset=val_dataset,
++        config=config,
++        env_name=env_name,
++        seed=seed,
++    )
++
++
++def _get_goal(env, task_id: int, seed: int):
++    reset_kwargs = dict(options=dict(task_id=task_id, render_goal=False), seed=seed + task_id * 100_000)
++    try:
++        _, info = env.reset(**reset_kwargs)
++    except TypeError:
++        reset_kwargs.pop('seed', None)
++        _, info = env.reset(**reset_kwargs)
++    goal = np.asarray(info['goal'])
++    goal_xy = np.asarray(env.unwrapped.cur_goal_xy, dtype=np.float32)
++    return goal, goal_xy
++
++
++def _value_iterations(config: dict, requested_iters):
++    if requested_iters is not None:
++        return list(requested_iters)
++    if str(config.get('value_backbone', 'mlp')) == 'recur_tied':
++        total_iters = int(config.get('value_recur_iters', 1))
++        return list(range(1, total_iters + 1))
++    return [None]
++
++
++def _free_cells(maze_map):
++    return [(i, j) for i in range(maze_map.shape[0]) for j in range(maze_map.shape[1]) if maze_map[i, j] == 0]
++
++
++def _cell_center_xy(env, ij):
++    return np.asarray(env.unwrapped.ij_to_xy(ij), dtype=np.float32)
++
++
++def _valid_cell(env, ij):
++    i, j = ij
++    maze_map = np.asarray(env.unwrapped.maze_map)
++    return 0 <= i < maze_map.shape[0] and 0 <= j < maze_map.shape[1] and maze_map[i, j] == 0
++
++
++def _teleport_out_cells(env):
++    info = getattr(env.unwrapped, '_teleport_info', None)
++    if not info:
++        return []
++    return [tuple(map(int, env.unwrapped.xy_to_ij(np.asarray(xy)))) for xy in info.get('teleport_out_xys', [])]
++
++
++def _teleport_in_cells(env):
++    info = getattr(env.unwrapped, '_teleport_info', None)
++    if not info:
++        return []
++    return [tuple(map(int, env.unwrapped.xy_to_ij(np.asarray(xy)))) for xy in info.get('teleport_in_xys', [])]
++
++
++def _shortest_path_grid(env, goal_ij):
++    maze_map = np.asarray(env.unwrapped.maze_map)
++    dist = np.full(maze_map.shape, np.inf, dtype=np.float32)
++    if not _valid_cell(env, goal_ij):
++        return dist
++
++    teleport_in = [ij for ij in _teleport_in_cells(env) if _valid_cell(env, ij)]
++    teleport_out = set(_teleport_out_cells(env))
++    queue = deque([goal_ij])
++    dist[goal_ij] = 0.0
++
++    def reverse_neighbors(ij):
++        i, j = ij
++        for di, dj in [(-1, 0), (0, -1), (1, 0), (0, 1)]:
++            nxt = (i + di, j + dj)
++            if _valid_cell(env, nxt):
++                yield nxt
++        if ij in teleport_out:
++            for nxt in teleport_in:
++                yield nxt
++
++    while queue:
++        cur = queue.popleft()
++        cur_d = dist[cur]
++        for nxt in reverse_neighbors(cur):
++            if dist[nxt] > cur_d + 1:
++                dist[nxt] = cur_d + 1
++                queue.append(nxt)
++    return dist
++
++
++def _select_probe_mode(args, runtime):
++    if args.probe_mode != 'auto':
++        return args.probe_mode
++    if args.exact_pointmaze and runtime['env_name'].startswith('pointmaze') and runtime['config'].get('frame_stack') is None:
++        return 'exact'
++    return 'dataset'
++
++
++def _exact_pointmaze_probes(runtime):
++    env = runtime['env']
++    maze_map = np.asarray(env.unwrapped.maze_map)
++    free_cells = _free_cells(maze_map)
++    observations = []
++    cell_to_obs_index = {}
++    original_xy = None
++    if hasattr(env.unwrapped, 'get_xy'):
++        original_xy = np.asarray(env.unwrapped.get_xy()).copy()
++    for obs_index, ij in enumerate(free_cells):
++        xy = _cell_center_xy(env, ij)
++        env.unwrapped.set_xy(xy)
++        observations.append(np.asarray(env.unwrapped.get_ob()))
++        cell_to_obs_index[ij] = obs_index
++    if original_xy is not None:
++        env.unwrapped.set_xy(original_xy)
++    return dict(
++        observations=np.asarray(observations),
++        cell_to_obs_index=cell_to_obs_index,
++        count_grid=np.where(maze_map == 0, 1.0, 0.0).astype(np.float32),
++    )
++
++
++def _dataset_probes(runtime, split: str, max_states_per_cell: int, seed: int):
++    dataset_obj = runtime['train_dataset'] if split == 'train' or runtime['val_dataset'] is None else runtime['val_dataset']
++    raw_dataset = dataset_obj.dataset
++    if 'qpos' not in raw_dataset:
++        raise ValueError('Dataset does not contain qpos. Re-run with a dataset that includes info fields.')
++
++    observations = np.asarray(raw_dataset['observations'])
++    qpos = np.asarray(raw_dataset['qpos'])
++    xy = qpos[:, :2]
++    maze_map = np.asarray(runtime['env'].unwrapped.maze_map)
++    rng = np.random.RandomState(seed)
++    grouped = defaultdict(list)
++
++    for obs_index, cur_xy in enumerate(xy):
++        ij = tuple(map(int, runtime['env'].unwrapped.xy_to_ij(np.asarray(cur_xy))))
++        if 0 <= ij[0] < maze_map.shape[0] and 0 <= ij[1] < maze_map.shape[1] and maze_map[ij] == 0:
++            grouped[ij].append(obs_index)
++
++    selected_indices = []
++    selected_cells = []
++    count_grid = np.full(maze_map.shape, np.nan, dtype=np.float32)
++    for ij in _free_cells(maze_map):
++        idxs = grouped.get(ij, [])
++        if len(idxs) > max_states_per_cell:
++            idxs = list(rng.choice(idxs, size=max_states_per_cell, replace=False))
++        count_grid[ij] = float(len(idxs))
++        for idx in idxs:
++            selected_indices.append(idx)
++            selected_cells.append(ij)
++
++    if not selected_indices:
++        raise ValueError(f'No dataset-backed probe states found for split={split}.')
++
++    return dict(
++        observations=observations[np.asarray(selected_indices)],
++        selected_cells=selected_cells,
++        count_grid=count_grid,
++    )
++
++
++def _batched_value_eval(agent, observations, goal, iterations, batch_size: int):
++    values_by_iter = {k: [] for k in iterations}
++    goal_batch = np.repeat(goal[None, ...], len(observations), axis=0)
++
++    for start in range(0, len(observations), batch_size):
++        end = min(start + batch_size, len(observations))
++        obs_chunk = observations[start:end]
++        goal_chunk = goal_batch[start:end]
++        for k in iterations:
++            if k is None:
++                heads = agent.network.select('value')(obs_chunk, goal_chunk)
++            else:
++                heads = agent.network.select('value')(obs_chunk, goal_chunk, num_iters=int(k))
++            chunk_values = np.asarray(heads).mean(axis=0)
++            values_by_iter[k].append(chunk_values)
++
++    return {k: np.concatenate(v, axis=0) for k, v in values_by_iter.items()}
++
++
++def _aggregate_to_grid(env, values, probe_data):
++    maze_map = np.asarray(env.unwrapped.maze_map)
++    grid = np.full(maze_map.shape, np.nan, dtype=np.float32)
++    if 'cell_to_obs_index' in probe_data:
++        for ij, obs_index in probe_data['cell_to_obs_index'].items():
++            grid[ij] = float(values[obs_index])
++        return grid
++
++    grouped_values = defaultdict(list)
++    for value, ij in zip(values, probe_data['selected_cells']):
++        grouped_values[ij].append(float(value))
++    for ij, cell_values in grouped_values.items():
++        grid[ij] = float(np.mean(cell_values))
++    return grid
++
++
++def _pearson_corr(a, b):
++    a = np.asarray(a, dtype=np.float64)
++    b = np.asarray(b, dtype=np.float64)
++    if len(a) < 2:
++        return np.nan
++    a = a - a.mean()
++    b = b - b.mean()
++    denom = np.sqrt(np.sum(a**2) * np.sum(b**2))
++    if denom <= 0:
++        return np.nan
++    return float(np.sum(a * b) / denom)
++
++
++def _summarize_grid(value_grid, dist_grid):
++    mask = np.isfinite(value_grid) & np.isfinite(dist_grid)
++    return dict(
++        value_mean=float(np.nanmean(value_grid)),
++        value_std=float(np.nanstd(value_grid)),
++        graph_corr=_pearson_corr(value_grid[mask], -dist_grid[mask]),
++    )
++
++
++def _plot_overview(results, output_path):
++    try:
++        import matplotlib.pyplot as plt
++    except Exception as exc:
++        print(f'Skipping figure generation because matplotlib is unavailable: {exc}')
++        return
++
++    max_cols = max(len(result['iterations']) for result in results)
++    num_rows = len(results)
++    fig, axes = plt.subplots(
++        num_rows,
++        max_cols,
++        figsize=(4.2 * max_cols, 3.8 * num_rows),
++        squeeze=False,
++        constrained_layout=True,
++    )
++
++    all_grids = [grid for result in results for grid in result['value_grids'].values()]
++    vmin = min(float(np.nanmin(grid)) for grid in all_grids if np.isfinite(grid).any())
++    vmax = max(float(np.nanmax(grid)) for grid in all_grids if np.isfinite(grid).any())
++
++    for row, result in enumerate(results):
++        for col in range(max_cols):
++            ax = axes[row][col]
++            if col >= len(result['iterations']):
++                ax.axis('off')
++                continue
++            k = result['iterations'][col]
++            value_grid = result['value_grids'][k]
++            im = ax.imshow(value_grid, origin='lower', cmap='viridis', vmin=vmin, vmax=vmax)
++            goal_ij = result['goal_ij']
++            ax.scatter(goal_ij[1], goal_ij[0], marker='*', s=120, c='red', edgecolors='white', linewidths=0.7)
++            metric = result['metrics'][k]
++            title = 'MLP' if k is None else f'k={k}'
++            ax.set_title(f'{title}\nr={metric["graph_corr"]:.3f}')
++            ax.set_xticks([])
++            ax.set_yticks([])
++            if col == 0:
++                ax.set_ylabel(f'{result["label"]}\nstep={result["step"]}')
++
++    fig.colorbar(im, ax=axes.ravel().tolist(), shrink=0.9, label='V(s, g)')
++    fig.savefig(output_path, dpi=200)
++    plt.close(fig)
++
++
++def main():
++    parser = argparse.ArgumentParser(
++        description='Probe HIQL value geometry over maze cells, recurrent iterations, and checkpoints.'
++    )
++    parser.add_argument(
++        '--run_dir',
++        action='append',
++        required=True,
++        help='Run directory containing flags.json and params_*.pkl. Repeat for multiple runs.',
++    )
++    parser.add_argument(
++        '--epochs',
++        type=str,
++        default='',
++        help='Comma/colon/space-separated checkpoint steps to evaluate for each run. Empty = latest only.',
++    )
++    parser.add_argument('--task_id', type=int, default=None, help='Single task id used to define the fixed goal.')
++    parser.add_argument(
++        '--task_ids',
++        type=str,
++        default='',
++        help='Optional comma/colon/space-separated task ids. If unset, uses --task_id when provided, else all env tasks.',
++    )
++    parser.add_argument(
++        '--dataset_split',
++        choices=['train', 'val'],
++        default='train',
++        help='Dataset split used for dataset-backed geometry probes.',
++    )
++    parser.add_argument(
++        '--probe_mode',
++        choices=['auto', 'dataset', 'exact'],
++        default='auto',
++        help='Probe state source. exact is intended for non-stacked pointmaze runs.',
++    )
++    parser.add_argument(
++        '--exact_pointmaze',
++        action='store_true',
++        help='Allow exact free-cell probes for pointmaze in auto mode. Otherwise auto uses dataset probes.',
++    )
++    parser.add_argument(
++        '--iters',
++        type=str,
++        default='',
++        help='Optional iteration subset for recurrent values, e.g. "1,2,4". Empty = all trained iterations.',
++    )
++    parser.add_argument('--batch_size', type=int, default=4096, help='Batch size for value evaluation.')
++    parser.add_argument(
++        '--max_states_per_cell',
++        type=int,
++        default=64,
++        help='Dataset mode only: cap the number of states averaged per maze cell.',
++    )
++    parser.add_argument('--seed', type=int, default=0, help='Seed for probe subsampling and deterministic goal reset.')
++    parser.add_argument(
++        '--output_dir',
++        type=str,
++        default='exp/value_geometry',
++        help='Directory for npz dumps, summary JSON, and overview figures.',
++    )
++    args = parser.parse_args()
++
++    requested_epochs = _parse_int_list(args.epochs)
++    requested_iters = _parse_int_list(args.iters)
++    os.makedirs(args.output_dir, exist_ok=True)
++
++    results = []
++    summary_rows = []
++    canonical_env_name = None
++    task_overview_results = defaultdict(list)
++
++    for run_dir in args.run_dir:
++        label = os.path.basename(os.path.normpath(run_dir))
++        epochs = requested_epochs
++        if not epochs:
++            epochs = [None]
++
++        for epoch in epochs:
++            checkpoint_path, resolved_run_dir, step = _resolve_checkpoint(run_dir, epoch)
++            runtime = _build_runtime(resolved_run_dir, checkpoint_path)
++
++            if canonical_env_name is None:
++                canonical_env_name = runtime['env_name']
++            elif canonical_env_name != runtime['env_name']:
++                raise ValueError(
++                    f'All runs must use the same env_name. Saw {canonical_env_name!r} and {runtime["env_name"]!r}.'
++                )
++
++            task_ids = _parse_task_ids(args.task_id, args.task_ids, runtime['env'])
++            iterations = _value_iterations(runtime['config'], requested_iters)
++            probe_mode = _select_probe_mode(args, runtime)
++            if probe_mode == 'exact':
++                probe_data = _exact_pointmaze_probes(runtime)
++            else:
++                probe_data = _dataset_probes(runtime, args.dataset_split, args.max_states_per_cell, args.seed)
++
++            task_infos = getattr(runtime['env'].unwrapped, 'task_infos', None)
++
++            for task_id in task_ids:
++                goal, goal_xy = _get_goal(runtime['env'], task_id, args.seed)
++                goal_ij = tuple(map(int, runtime['env'].unwrapped.xy_to_ij(goal_xy)))
++                values_by_iter = _batched_value_eval(
++                    runtime['agent'],
++                    probe_data['observations'],
++                    goal,
++                    iterations,
++                    batch_size=args.batch_size,
++                )
++                dist_grid = _shortest_path_grid(runtime['env'], goal_ij)
++                value_grids = {}
++                metrics = {}
++                task_name = None
++                if task_infos is not None and 1 <= task_id <= len(task_infos):
++                    task_name = task_infos[task_id - 1].get('task_name')
++                dump_dict = {
++                    'maze_map': np.asarray(runtime['env'].unwrapped.maze_map),
++                    'goal_xy': goal_xy.astype(np.float32),
++                    'goal_ij': np.asarray(goal_ij, dtype=np.int32),
++                    'count_grid': np.asarray(probe_data['count_grid'], dtype=np.float32),
++                    'distance_grid': dist_grid.astype(np.float32),
++                    'step': np.asarray([step], dtype=np.int32),
++                    'task_id': np.asarray([task_id], dtype=np.int32),
++                }
++
++                for k in iterations:
++                    value_grid = _aggregate_to_grid(runtime['env'], values_by_iter[k], probe_data)
++                    value_grids[k] = value_grid
++                    metrics[k] = _summarize_grid(value_grid, dist_grid)
++                    key = 'value_mlp' if k is None else f'value_step_{int(k)}'
++                    dump_dict[key] = value_grid.astype(np.float32)
++                    summary_rows.append(
++                        dict(
++                            label=label,
++                            run_dir=resolved_run_dir,
++                            env_name=runtime['env_name'],
++                            step=int(step),
++                            task_id=int(task_id),
++                            task_name=task_name,
++                            probe_mode=probe_mode,
++                            dataset_split=args.dataset_split,
++                            iteration=('mlp' if k is None else int(k)),
++                            graph_corr=metrics[k]['graph_corr'],
++                            value_mean=metrics[k]['value_mean'],
++                            value_std=metrics[k]['value_std'],
++                        )
++                    )
++
++                out_prefix = f'{_slugify(label)}_step_{step:09d}_task_{int(task_id):02d}'
++                np.savez_compressed(os.path.join(args.output_dir, f'{out_prefix}.npz'), **dump_dict)
++                result = dict(
++                    label=label,
++                    step=int(step),
++                    checkpoint_path=checkpoint_path,
++                    iterations=iterations,
++                    value_grids=value_grids,
++                    metrics=metrics,
++                    goal_xy=goal_xy,
++                    goal_ij=goal_ij,
++                    probe_mode=probe_mode,
++                    task_id=int(task_id),
++                    task_name=task_name,
++                )
++                results.append(result)
++                task_overview_results[int(task_id)].append(result)
++
++    summary_path = os.path.join(args.output_dir, 'summary.json')
++    with open(summary_path, 'w') as f:
++        json.dump(summary_rows, f, indent=2)
++
++    for task_id, task_results in sorted(task_overview_results.items()):
++        overview_path = os.path.join(args.output_dir, f'overview_task_{int(task_id):02d}.png')
++        _plot_overview(task_results, overview_path)
++
++    print(f'Wrote {len(results)} probe dumps to {args.output_dir}')
++    print(f'Summary: {summary_path}')
++
++
++if __name__ == '__main__':
++    main()
 diff --git a/impls/main.py b/impls/main.py
 index 3660e03..7610084 100644
 --- a/impls/main.py
@@ -3097,7 +3695,7 @@ index 9c421dd..3da1eab 100644
  
      return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..06fd691 100644
+index 4ee2b26..0de82b6 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
 @@ -6,6 +6,8 @@ import flax.linen as nn
@@ -3109,7 +3707,7 @@ index 4ee2b26..06fd691 100644
  
  def default_init(scale=1.0):
      """Default kernel initializer."""
-@@ -60,6 +62,498 @@ class MLP(nn.Module):
+@@ -60,6 +62,314 @@ class MLP(nn.Module):
          return x
  
  
@@ -3118,7 +3716,7 @@ index 4ee2b26..06fd691 100644
 +    layer_norm: bool = True
 +    layerscale_init: float = 1e-2
 +    use_film: bool = False
-+    activations: Any = nn.silu
++    activations: Any = nn.gelu
 +
 +    @nn.compact
 +    def __call__(self, h, step_embed=None):
@@ -3149,7 +3747,7 @@ index 4ee2b26..06fd691 100644
 +    layer_norm: bool = True
 +    layerscale_init: float = 1e-2
 +    use_film: bool = False
-+    activations: Any = nn.silu
++    activations: Any = nn.gelu
 +
 +    @nn.compact
 +    def __call__(self, x):
@@ -3174,48 +3772,12 @@ index 4ee2b26..06fd691 100644
 +        return nn.Dense(self.out_dim)(h)
 +
 +
-+class ResidualDenseBackbone(nn.Module):
-+    hidden_dim: int
-+    out_dim: int
-+    num_dense_layers: int
-+    residual_span: int = 4
-+    activations: Any = nn.silu
-+    use_residual: bool = True
-+
-+    @nn.compact
-+    def __call__(self, x):
-+        num_dense_layers = int(self.num_dense_layers)
-+        residual_span = int(self.residual_span)
-+        if num_dense_layers <= 0:
-+            raise ValueError(f'num_dense_layers must be positive. Got {num_dense_layers}.')
-+        if residual_span <= 0:
-+            raise ValueError(f'residual_span must be positive. Got {residual_span}.')
-+
-+        h = nn.Dense(self.hidden_dim, name='input_proj')(x)
-+        branch = h
-+        residual = h
-+
-+        for layer_index in range(num_dense_layers):
-+            branch = nn.Dense(self.hidden_dim, name=f'resid_dense_{layer_index + 1}')(branch)
-+            branch = nn.LayerNorm(name=f'resid_ln_{layer_index + 1}')(branch)
-+            branch = self.activations(branch)
-+
-+            is_span_end = (layer_index + 1) % residual_span == 0
-+            is_last_layer = layer_index + 1 == num_dense_layers
-+            if is_span_end or is_last_layer:
-+                h = residual + branch if self.use_residual else branch
-+                residual = h
-+                branch = h
-+
-+        return nn.Dense(self.out_dim, name='output_proj')(h)
-+
-+
 +class PreNormResidualDenseBlock(nn.Module):
 +    hidden_dim: int
 +    num_layers: int = 4
 +    use_inner_layer_norm: bool = True
 +    norm_mode: str = 'pre_block'
-+    activations: Any = nn.silu
++    activations: Any = nn.gelu
 +
 +    @nn.compact
 +    def __call__(self, h):
@@ -3246,7 +3808,7 @@ index 4ee2b26..06fd691 100644
 +    block_num_layers: int = 4
 +    use_inner_layer_norm: bool = True
 +    norm_mode: str = 'pre_block'
-+    activations: Any = nn.silu
++    activations: Any = nn.gelu
 +
 +    @nn.compact
 +    def __call__(self, x):
@@ -3284,7 +3846,7 @@ index 4ee2b26..06fd691 100644
 +    use_act: bool = False
 +    act_epsilon: float = 0.01
 +    act_min_iters: int = 1
-+    activations: Any = nn.silu
++    activations: Any = nn.gelu
 +
 +    @nn.compact
 +    def __call__(self, x, num_iters=None, return_aux=False, context=None):
@@ -3457,158 +4019,10 @@ index 4ee2b26..06fd691 100644
 +        return outputs
 +
 +
-+class PartiallyTiedBackbone(nn.Module):
-+    """Partially-tied recurrent backbone.
-+
-+    Structure: split total unroll steps into `num_groups` groups, each group has its own MLP block
-+    (untied across groups) but the block is reused for `iters_per_group` iterations within the group.
-+
-+    Total iterations = num_groups * iters_per_group.
-+    """
-+
-+    hidden_dim: int
-+    out_dim: int
-+    num_groups: int
-+    iters_per_group: int
-+    max_iters: int = 16
-+    layer_norm: bool = True
-+    tied_layer_norm: bool = True
-+    per_group_film: bool = False
-+    use_sinusoidal_step_encoding: bool = False
-+    cycle_step_params: bool = True
-+    block_schedule: str = 'grouped'  # 'grouped' (default) | 'stack'
-+    layerscale_init: float = 1e-2
-+    activations: Any = nn.silu
-+
-+    @nn.compact
-+    def __call__(self, x, num_iters=None):
-+        num_groups = int(self.num_groups)
-+        iters_per_group = int(self.iters_per_group)
-+        if num_groups <= 0 or iters_per_group <= 0:
-+            raise ValueError(f'num_groups and iters_per_group must be positive. Got num_groups={num_groups} iters_per_group={iters_per_group}')
-+
-+        total_iters = num_groups * iters_per_group
-+        iters = total_iters if num_iters is None else int(num_iters)
-+        if self.block_schedule not in ('grouped', 'stack'):
-+            raise ValueError(f"Unsupported block_schedule={self.block_schedule!r}. Use 'grouped' or 'stack'.")
-+
-+        # For 'grouped', step-dependent parameters are indexed by unroll step k (0..total_iters-1),
-+        # so we need total_iters <= max_iters.
-+        #
-+        # For 'stack', this backbone represents a stack of `num_groups` blocks iterated for
-+        # `iters_per_group` outer steps (Universal Transformer style). Step-dependent parameters are
-+        # indexed by outer step t (0..iters_per_group-1), so we need iters_per_group <= max_iters.
-+        if self.block_schedule == 'grouped':
-+            if total_iters > self.max_iters:
-+                raise ValueError(f'total_iters={total_iters} exceeds max_iters={self.max_iters} for block_schedule=grouped')
-+            max_allowed_iters = self.max_iters
-+        else:  # 'stack'
-+            if iters_per_group > self.max_iters:
-+                raise ValueError(
-+                    f'iters_per_group={iters_per_group} exceeds max_iters={self.max_iters} for block_schedule=stack'
-+                )
-+            # In stack mode, total unroll steps can exceed max_iters because step params are per outer step.
-+            max_allowed_iters = num_groups * self.max_iters
-+
-+        # Allow optional test-time scaling beyond training steps. 'cycle_step_params' ensures we do not
-+        # introduce new learned per-step parameters beyond training.
-+        if iters > max_allowed_iters:
-+            raise ValueError(f'num_iters={iters} exceeds supported maximum {max_allowed_iters} for block_schedule={self.block_schedule}')
-+
-+        h = nn.Dense(self.hidden_dim)(x)
-+
-+        # Step embeddings: discrete lookup table OR continuous sinusoidal encoding.
-+        if not self.use_sinusoidal_step_encoding:
-+            step_embed = self.param(
-+                'step_embed',
-+                nn.initializers.normal(stddev=0.02),
-+                (self.max_iters, self.hidden_dim),
-+            )
-+        else:
-+            step_embed = None
-+
-+        alpha = self.param('alpha', nn.initializers.constant(self.layerscale_init), (self.max_iters,))
-+
-+        # FiLM conditioning: either shared across groups or per-group (untied per group).
-+        if self.per_group_film:
-+            film_fc1_step = [
-+                nn.Dense(self.hidden_dim, use_bias=False, name=f"g{g}_film_fc1_step") for g in range(int(self.num_groups))
-+            ]
-+            film_fc1_h = [nn.Dense(self.hidden_dim, name=f"g{g}_film_fc1_h") for g in range(int(self.num_groups))]
-+            film_fc2 = [nn.Dense(2 * self.hidden_dim, name=f"g{g}_film_fc2") for g in range(int(self.num_groups))]
-+            if step_embed is not None:
-+                step_contributions = [film_fc1_step[g](step_embed) for g in range(int(self.num_groups))]
-+            else:
-+                step_contributions = None
-+        else:
-+            film_fc1_step = nn.Dense(self.hidden_dim, use_bias=False)
-+            film_fc1_h = nn.Dense(self.hidden_dim)
-+            film_fc2 = nn.Dense(2 * self.hidden_dim)
-+            step_contributions = film_fc1_step(step_embed) if step_embed is not None else None  # (max_iters, hidden_dim)
-+
-+        # Group-specific (partially untied) MLP blocks.
-+        group_fc1 = [nn.Dense(self.hidden_dim, name=f'group{g}_fc1') for g in range(int(self.num_groups))]
-+        group_fc2 = [nn.Dense(self.hidden_dim, name=f'group{g}_fc2') for g in range(int(self.num_groups))]
-+
-+        ln = None
-+        lns = None
-+        if self.layer_norm:
-+            if self.tied_layer_norm:
-+                ln = nn.LayerNorm(name='ln')
-+            else:
-+                lns = [nn.LayerNorm(name=f'LayerNorm_{k}') for k in range(int(self.max_iters))]
-+
-+        for k in range(iters):
-+            h1 = h
-+            if self.layer_norm:
-+                if ln is not None:
-+                    h1 = ln(h1)
-+                else:
-+                    if self.block_schedule == 'grouped':
-+                        step_idx = (k % total_iters) if self.cycle_step_params else k
-+                    else:
-+                        # Stack mode: t = outer iteration index.
-+                        t = k // num_groups
-+                        step_idx = (t % iters_per_group) if self.cycle_step_params else t
-+                    h1 = lns[step_idx](h1)
-+
-+            if self.block_schedule == 'grouped':
-+                # "Chunked" schedule: apply group g for iters_per_group consecutive steps, then move to g+1.
-+                g = (k // iters_per_group) % num_groups
-+                k_param = (k % total_iters) if self.cycle_step_params else k
-+                step_for_encoding = k  # keep legacy behavior (per-step encoding)
-+            else:
-+                # Universal Transformer schedule: apply the stack of blocks in order, then repeat the stack.
-+                g = k % num_groups
-+                t = k // num_groups
-+                k_param = (t % iters_per_group) if self.cycle_step_params else t
-+                step_for_encoding = t  # step encoding matches outer iteration
-+
-+            if self.use_sinusoidal_step_encoding:
-+                step_emb_k = sinusoidal_step_encoding(step_for_encoding, self.max_iters, self.hidden_dim)
-+                step_contrib = film_fc1_step[g](step_emb_k) if self.per_group_film else film_fc1_step(step_emb_k)
-+            else:
-+                step_contrib = step_contributions[g][k_param] if self.per_group_film else step_contributions[k_param]
-+
-+            if self.per_group_film:
-+                fc1_out = step_contrib + film_fc1_h[g](h1)
-+                film = film_fc2[g](self.activations(fc1_out))
-+            else:
-+                fc1_out = step_contrib + film_fc1_h(h1)
-+                film = film_fc2(self.activations(fc1_out))
-+            gamma, beta = jnp.split(film, 2, axis=-1)
-+            h_film = (1.0 + gamma) * h1 + beta
-+
-+            u = group_fc2[g](self.activations(group_fc1[g](h_film)))
-+            h = h + alpha[k_param] * u
-+
-+        return nn.Dense(self.out_dim)(h)
-+
-+
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -164,6 +658,7 @@ class GCActor(nn.Module):
+@@ -164,6 +474,7 @@ class GCActor(nn.Module):
      const_std: bool = True
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -3616,7 +4030,7 @@ index 4ee2b26..06fd691 100644
  
      def setup(self):
          self.actor_net = MLP(self.hidden_dims, activate_final=True)
-@@ -230,6 +725,7 @@ class GCDiscreteActor(nn.Module):
+@@ -230,6 +541,7 @@ class GCDiscreteActor(nn.Module):
      action_dim: int
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -3624,7 +4038,7 @@ index 4ee2b26..06fd691 100644
  
      def setup(self):
          self.actor_net = MLP(self.hidden_dims, activate_final=True)
-@@ -282,14 +778,22 @@ class GCValue(nn.Module):
+@@ -282,14 +594,22 @@ class GCValue(nn.Module):
      layer_norm: bool = True
      ensemble: bool = True
      gc_encoder: nn.Module = None
@@ -3652,7 +4066,7 @@ index 4ee2b26..06fd691 100644
  
      def __call__(self, observations, goals=None, actions=None):
          """Return the value/critic function.
-@@ -314,6 +818,69 @@ class GCValue(nn.Module):
+@@ -314,6 +634,69 @@ class GCValue(nn.Module):
          return v
  
  
@@ -3722,7 +4136,7 @@ index 4ee2b26..06fd691 100644
  class GCDiscreteCritic(GCValue):
      """Goal-conditioned critic for discrete actions."""
  
-@@ -347,16 +914,79 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +730,79 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
@@ -3807,7 +4221,7 @@ index 4ee2b26..06fd691 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +994,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +810,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -3815,7 +4229,7 @@ index 4ee2b26..06fd691 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,16 +1006,38 @@ class GCBilinearValue(nn.Module):
+@@ -375,16 +822,38 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
@@ -3856,7 +4270,7 @@ index 4ee2b26..06fd691 100644
          else:
              return v
  
-@@ -394,9 +1047,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+@@ -394,9 +863,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
  
      action_dim: int = None
  
@@ -3868,7 +4282,7 @@ index 4ee2b26..06fd691 100644
  
  
  class GCMRNValue(nn.Module):
-@@ -416,9 +1069,50 @@ class GCMRNValue(nn.Module):
+@@ -416,9 +885,50 @@ class GCMRNValue(nn.Module):
      latent_dim: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -3920,7 +4334,7 @@ index 4ee2b26..06fd691 100644
  
      def __call__(self, observations, goals, is_phi=False, info=False):
          """Return the MRN value function.
-@@ -436,8 +1130,12 @@ class GCMRNValue(nn.Module):
+@@ -436,8 +946,12 @@ class GCMRNValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)
@@ -3935,7 +4349,7 @@ index 4ee2b26..06fd691 100644
  
          sym_s = phi_s[..., : self.latent_dim // 2]
          sym_g = phi_g[..., : self.latent_dim // 2]
-@@ -471,9 +1169,50 @@ class GCIQEValue(nn.Module):
+@@ -471,9 +985,50 @@ class GCIQEValue(nn.Module):
      dim_per_component: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -3987,7 +4401,7 @@ index 4ee2b26..06fd691 100644
          self.alpha = Param()
  
      def __call__(self, observations, goals, is_phi=False, info=False):
-@@ -493,8 +1232,12 @@ class GCIQEValue(nn.Module):
+@@ -493,8 +1048,12 @@ class GCIQEValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)
