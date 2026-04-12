@@ -1505,10 +1505,10 @@ index 0000000..16660f1
 +    return config
 diff --git a/impls/analyze_hiql_value_geometry.py b/impls/analyze_hiql_value_geometry.py
 new file mode 100644
-index 0000000..cda9d1f
+index 0000000..635a2e4
 --- /dev/null
 +++ b/impls/analyze_hiql_value_geometry.py
-@@ -0,0 +1,592 @@
+@@ -0,0 +1,793 @@
 +import argparse
 +import glob
 +import json
@@ -1608,6 +1608,8 @@ index 0000000..cda9d1f
 +
 +
 +def _build_runtime(run_dir: str, checkpoint_path: str):
++    import importlib
++
 +    import ogbench
 +
 +    from agents import agents
@@ -1616,7 +1618,17 @@ index 0000000..cda9d1f
 +    from utils.flax_utils import restore_agent
 +
 +    flags_dict = _load_flags(run_dir)
-+    config = dict(flags_dict['agent'])
++    saved_config = dict(flags_dict['agent'])
++    agent_name = saved_config.get('agent_name')
++    if agent_name is None:
++        raise ValueError(f"flags.json at {run_dir} is missing agent['agent_name'].")
++
++    agent_module = importlib.import_module(f'agents.{agent_name}')
++    if not hasattr(agent_module, 'get_config'):
++        raise ValueError(f'Agent module agents.{agent_name} does not expose get_config().')
++    default_config = dict(agent_module.get_config())
++    default_config.update(saved_config)
++    config = default_config
 +    env_name = flags_dict['env_name']
 +    seed = int(flags_dict.get('seed', 0))
 +
@@ -1749,6 +1761,77 @@ index 0000000..cda9d1f
 +    return dist
 +
 +
++def _maze_adjacency(env):
++    maze_map = np.asarray(env.unwrapped.maze_map)
++    free_cells = _free_cells(maze_map)
++    adjacency = {ij: [] for ij in free_cells}
++    for i, j in free_cells:
++        for di, dj in [(-1, 0), (0, -1), (1, 0), (0, 1)]:
++            nxt = (i + di, j + dj)
++            if 0 <= nxt[0] < maze_map.shape[0] and 0 <= nxt[1] < maze_map.shape[1] and maze_map[nxt] == 0:
++                adjacency[(i, j)].append(nxt)
++    return adjacency
++
++
++def _tarjan_articulation_points(adjacency):
++    discovery = {}
++    low = {}
++    parent = {}
++    articulation = set()
++    time = [0]
++
++    def dfs(node):
++        discovery[node] = low[node] = time[0]
++        time[0] += 1
++        child_count = 0
++        for nxt in adjacency[node]:
++            if nxt not in discovery:
++                parent[nxt] = node
++                child_count += 1
++                dfs(nxt)
++                low[node] = min(low[node], low[nxt])
++                if node not in parent and child_count > 1:
++                    articulation.add(node)
++                if node in parent and low[nxt] >= discovery[node]:
++                    articulation.add(node)
++            elif parent.get(node) != nxt:
++                low[node] = min(low[node], discovery[nxt])
++
++    for node in adjacency:
++        if node not in discovery:
++            dfs(node)
++    return articulation
++
++
++def _structural_overlay(env):
++    maze_map = np.asarray(env.unwrapped.maze_map)
++    adjacency = _maze_adjacency(env)
++    articulation_points = _tarjan_articulation_points(adjacency)
++    articulation_grid = np.zeros(maze_map.shape, dtype=np.float32)
++    dead_end_grid = np.zeros(maze_map.shape, dtype=np.float32)
++    for ij, neighbors in adjacency.items():
++        if ij in articulation_points:
++            articulation_grid[ij] = 1.0
++        if len(neighbors) <= 1:
++            dead_end_grid[ij] = 1.0
++
++    teleport_in_grid = np.zeros(maze_map.shape, dtype=np.float32)
++    teleport_out_grid = np.zeros(maze_map.shape, dtype=np.float32)
++    for ij in _teleport_in_cells(env):
++        if _valid_cell(env, ij):
++            teleport_in_grid[ij] = 1.0
++    for ij in _teleport_out_cells(env):
++        if _valid_cell(env, ij):
++            teleport_out_grid[ij] = 1.0
++
++    return dict(
++        articulation_grid=articulation_grid,
++        dead_end_grid=dead_end_grid,
++        teleport_in_grid=teleport_in_grid,
++        teleport_out_grid=teleport_out_grid,
++    )
++
++
 +def _select_probe_mode(args, runtime):
 +    if args.probe_mode != 'auto':
 +        return args.probe_mode
@@ -1868,12 +1951,38 @@ index 0000000..cda9d1f
 +    return float(np.sum(a * b) / denom)
 +
 +
++def _rankdata_average_ties(x):
++    x = np.asarray(x, dtype=np.float64)
++    order = np.argsort(x, kind='mergesort')
++    ranks = np.empty(len(x), dtype=np.float64)
++    i = 0
++    while i < len(x):
++        j = i + 1
++        while j < len(x) and x[order[j]] == x[order[i]]:
++            j += 1
++        avg_rank = 0.5 * (i + j - 1)
++        ranks[order[i:j]] = avg_rank
++        i = j
++    return ranks
++
++
++def _spearman_corr(a, b):
++    a = np.asarray(a, dtype=np.float64)
++    b = np.asarray(b, dtype=np.float64)
++    if len(a) < 2:
++        return np.nan
++    return _pearson_corr(_rankdata_average_ties(a), _rankdata_average_ties(b))
++
++
 +def _summarize_grid(value_grid, dist_grid):
 +    mask = np.isfinite(value_grid) & np.isfinite(dist_grid)
++    masked_values = value_grid[mask]
++    masked_neg_dist = -dist_grid[mask]
 +    return dict(
 +        value_mean=float(np.nanmean(value_grid)),
 +        value_std=float(np.nanstd(value_grid)),
-+        graph_corr=_pearson_corr(value_grid[mask], -dist_grid[mask]),
++        graph_corr=_pearson_corr(masked_values, masked_neg_dist),
++        graph_spearman=_spearman_corr(masked_values, masked_neg_dist),
 +    )
 +
 +
@@ -1884,40 +1993,113 @@ index 0000000..cda9d1f
 +        print(f'Skipping figure generation because matplotlib is unavailable: {exc}')
 +        return
 +
-+    max_cols = max(len(result['iterations']) for result in results)
-+    num_rows = len(results)
++    max_cols = max(2 + len(result['iterations']) for result in results)
++    num_rows = 2 * len(results)
 +    fig, axes = plt.subplots(
 +        num_rows,
 +        max_cols,
-+        figsize=(4.2 * max_cols, 3.8 * num_rows),
++        figsize=(3.9 * max_cols, 2.8 * num_rows),
 +        squeeze=False,
 +        constrained_layout=True,
 +    )
 +
 +    all_grids = [grid for result in results for grid in result['value_grids'].values()]
++    delta_grids = [
++        delta
++        for result in results
++        for delta in result.get('delta_grids', {}).values()
++        if delta is not None and np.isfinite(delta).any()
++    ]
 +    vmin = min(float(np.nanmin(grid)) for grid in all_grids if np.isfinite(grid).any())
 +    vmax = max(float(np.nanmax(grid)) for grid in all_grids if np.isfinite(grid).any())
++    delta_abs = max(float(np.nanmax(np.abs(delta))) for delta in delta_grids) if delta_grids else 1.0
++
++    def _style_axis(ax):
++        ax.set_xticks([])
++        ax.set_yticks([])
++
++    def _plot_goal(ax, result):
++        goal_ij = result['goal_ij']
++        ax.scatter(goal_ij[1], goal_ij[0], marker='*', s=120, c='red', edgecolors='white', linewidths=0.7)
++
++    def _show(ax, grid, *, cmap, vmin=None, vmax=None):
++        return ax.imshow(np.ma.masked_invalid(grid), origin='lower', cmap=cmap, vmin=vmin, vmax=vmax)
 +
 +    for row, result in enumerate(results):
-+        for col in range(max_cols):
-+            ax = axes[row][col]
-+            if col >= len(result['iterations']):
-+                ax.axis('off')
++        top_row = 2 * row
++        bottom_row = top_row + 1
++
++        ax = axes[top_row][0]
++        dist_im = _show(ax, -result['dist_grid'], cmap='magma')
++        _plot_goal(ax, result)
++        ax.set_title('Graph Dist')
++        ax.set_ylabel(f'{result["label"]}\nstep={result["step"]}')
++        _style_axis(ax)
++
++        ax = axes[top_row][1]
++        base_grid = np.where(np.asarray(result['maze_map']) == 0, 0.0, np.nan)
++        _show(ax, base_grid, cmap='Greys', vmin=0.0, vmax=1.0)
++        structure = result['structure']
++        dead_end_ys, dead_end_xs = np.where(structure['dead_end_grid'] > 0)
++        art_ys, art_xs = np.where(structure['articulation_grid'] > 0)
++        tin_ys, tin_xs = np.where(structure['teleport_in_grid'] > 0)
++        tout_ys, tout_xs = np.where(structure['teleport_out_grid'] > 0)
++        if len(dead_end_xs):
++            ax.scatter(dead_end_xs, dead_end_ys, marker='x', s=32, c='white', linewidths=1.0)
++        if len(art_xs):
++            ax.scatter(art_xs, art_ys, marker='o', s=40, facecolors='none', edgecolors='orange', linewidths=1.2)
++        if len(tin_xs):
++            ax.scatter(tin_xs, tin_ys, marker='s', s=42, facecolors='none', edgecolors='cyan', linewidths=1.2)
++        if len(tout_xs):
++            ax.scatter(tout_xs, tout_ys, marker='D', s=34, facecolors='none', edgecolors='lime', linewidths=1.2)
++        _plot_goal(ax, result)
++        ax.set_title('Structure')
++        _style_axis(ax)
++
++        ax = axes[bottom_row][0]
++        count_im = _show(ax, result['count_grid'], cmap='cividis')
++        ax.set_title('Probe Count')
++        _style_axis(ax)
++
++        ax = axes[bottom_row][1]
++        ax.axis('off')
++        structure_lines = ['orange=o bottleneck', 'white=x dead end']
++        if np.any(result['structure']['teleport_in_grid'] > 0):
++            structure_lines.append('cyan=s teleport in')
++        if np.any(result['structure']['teleport_out_grid'] > 0):
++            structure_lines.append('lime=D teleport out')
++        ax.text(0.03, 0.95, '\n'.join(structure_lines), va='top', ha='left', fontsize=9)
++
++        for idx in range(max_cols - 2):
++            top_ax = axes[top_row][idx + 2]
++            bottom_ax = axes[bottom_row][idx + 2]
++            if idx >= len(result['iterations']):
++                top_ax.axis('off')
++                bottom_ax.axis('off')
 +                continue
-+            k = result['iterations'][col]
++            k = result['iterations'][idx]
 +            value_grid = result['value_grids'][k]
-+            im = ax.imshow(value_grid, origin='lower', cmap='viridis', vmin=vmin, vmax=vmax)
-+            goal_ij = result['goal_ij']
-+            ax.scatter(goal_ij[1], goal_ij[0], marker='*', s=120, c='red', edgecolors='white', linewidths=0.7)
++            im = _show(top_ax, value_grid, cmap='viridis', vmin=vmin, vmax=vmax)
++            _plot_goal(top_ax, result)
 +            metric = result['metrics'][k]
 +            title = 'MLP' if k is None else f'k={k}'
-+            ax.set_title(f'{title}\nr={metric["graph_corr"]:.3f}')
-+            ax.set_xticks([])
-+            ax.set_yticks([])
-+            if col == 0:
-+                ax.set_ylabel(f'{result["label"]}\nstep={result["step"]}')
++            top_ax.set_title(f'{title}\nr={metric["graph_corr"]:.3f}  rho={metric["graph_spearman"]:.3f}')
++            _style_axis(top_ax)
 +
-+    fig.colorbar(im, ax=axes.ravel().tolist(), shrink=0.9, label='V(s, g)')
++            delta_grid = result['delta_grids'].get(k)
++            if delta_grid is None:
++                bottom_ax.axis('off')
++            else:
++                delta_im = _show(bottom_ax, delta_grid, cmap='coolwarm', vmin=-delta_abs, vmax=delta_abs)
++                _plot_goal(bottom_ax, result)
++                bottom_ax.set_title(f'Delta k={k}\n|dV|={float(np.nanmean(np.abs(delta_grid))):.2f}')
++                _style_axis(bottom_ax)
++
++    fig.colorbar(im, ax=axes[:, 2:].ravel().tolist(), shrink=0.8, label='V(s, g)')
++    if delta_grids:
++        fig.colorbar(delta_im, ax=axes[1::2, 2:].ravel().tolist(), shrink=0.7, label='Delta V(s, g)')
++    fig.colorbar(dist_im, ax=[axes[r][0] for r in range(0, num_rows, 2)], shrink=0.7, label='-graph distance')
++    fig.colorbar(count_im, ax=[axes[r][0] for r in range(1, num_rows, 2)], shrink=0.7, label='probe count')
 +    fig.savefig(output_path, dpi=200)
 +    plt.close(fig)
 +
@@ -2031,7 +2213,9 @@ index 0000000..cda9d1f
 +                    batch_size=args.batch_size,
 +                )
 +                dist_grid = _shortest_path_grid(runtime['env'], goal_ij)
++                structure = _structural_overlay(runtime['env'])
 +                value_grids = {}
++                delta_grids = {}
 +                metrics = {}
 +                task_name = None
 +                if task_infos is not None and 1 <= task_id <= len(task_infos):
@@ -2042,16 +2226,25 @@ index 0000000..cda9d1f
 +                    'goal_ij': np.asarray(goal_ij, dtype=np.int32),
 +                    'count_grid': np.asarray(probe_data['count_grid'], dtype=np.float32),
 +                    'distance_grid': dist_grid.astype(np.float32),
++                    'articulation_grid': structure['articulation_grid'].astype(np.float32),
++                    'dead_end_grid': structure['dead_end_grid'].astype(np.float32),
++                    'teleport_in_grid': structure['teleport_in_grid'].astype(np.float32),
++                    'teleport_out_grid': structure['teleport_out_grid'].astype(np.float32),
 +                    'step': np.asarray([step], dtype=np.int32),
 +                    'task_id': np.asarray([task_id], dtype=np.int32),
 +                }
 +
++                prev_value_grid = None
 +                for k in iterations:
 +                    value_grid = _aggregate_to_grid(runtime['env'], values_by_iter[k], probe_data)
 +                    value_grids[k] = value_grid
++                    delta_grid = None if prev_value_grid is None else (value_grid - prev_value_grid)
++                    delta_grids[k] = delta_grid
 +                    metrics[k] = _summarize_grid(value_grid, dist_grid)
 +                    key = 'value_mlp' if k is None else f'value_step_{int(k)}'
 +                    dump_dict[key] = value_grid.astype(np.float32)
++                    if delta_grid is not None:
++                        dump_dict[f'delta_step_{int(k)}'] = delta_grid.astype(np.float32)
 +                    summary_rows.append(
 +                        dict(
 +                            label=label,
@@ -2064,10 +2257,13 @@ index 0000000..cda9d1f
 +                            dataset_split=args.dataset_split,
 +                            iteration=('mlp' if k is None else int(k)),
 +                            graph_corr=metrics[k]['graph_corr'],
++                            graph_spearman=metrics[k]['graph_spearman'],
 +                            value_mean=metrics[k]['value_mean'],
 +                            value_std=metrics[k]['value_std'],
++                            delta_mean_abs=(None if delta_grid is None else float(np.nanmean(np.abs(delta_grid)))),
 +                        )
 +                    )
++                    prev_value_grid = value_grid
 +
 +                out_prefix = f'{_slugify(label)}_step_{step:09d}_task_{int(task_id):02d}'
 +                np.savez_compressed(os.path.join(args.output_dir, f'{out_prefix}.npz'), **dump_dict)
@@ -2077,12 +2273,17 @@ index 0000000..cda9d1f
 +                    checkpoint_path=checkpoint_path,
 +                    iterations=iterations,
 +                    value_grids=value_grids,
++                    delta_grids=delta_grids,
 +                    metrics=metrics,
 +                    goal_xy=goal_xy,
 +                    goal_ij=goal_ij,
 +                    probe_mode=probe_mode,
 +                    task_id=int(task_id),
 +                    task_name=task_name,
++                    dist_grid=dist_grid,
++                    count_grid=np.asarray(probe_data['count_grid'], dtype=np.float32),
++                    structure=structure,
++                    maze_map=np.asarray(runtime['env'].unwrapped.maze_map),
 +                )
 +                results.append(result)
 +                task_overview_results[int(task_id)].append(result)
