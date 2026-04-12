@@ -1505,10 +1505,10 @@ index 0000000..16660f1
 +    return config
 diff --git a/impls/analyze_hiql_value_geometry.py b/impls/analyze_hiql_value_geometry.py
 new file mode 100644
-index 0000000..635a2e4
+index 0000000..2a4e3fc
 --- /dev/null
 +++ b/impls/analyze_hiql_value_geometry.py
-@@ -0,0 +1,793 @@
+@@ -0,0 +1,869 @@
 +import argparse
 +import glob
 +import json
@@ -1832,6 +1832,31 @@ index 0000000..635a2e4
 +    )
 +
 +
++def _region_mask_from_nodes(env, seed_nodes, hops: int = 1):
++    maze_map = np.asarray(env.unwrapped.maze_map)
++    region = np.zeros(maze_map.shape, dtype=bool)
++    if not seed_nodes:
++        return region
++    adjacency = _maze_adjacency(env)
++    queue = deque()
++    visited = set()
++    for node in seed_nodes:
++        if node in adjacency:
++            queue.append((node, 0))
++            visited.add(node)
++            region[node] = True
++    while queue:
++        node, depth = queue.popleft()
++        if depth >= hops:
++            continue
++        for nxt in adjacency.get(node, []):
++            if nxt not in visited:
++                visited.add(nxt)
++                region[nxt] = True
++                queue.append((nxt, depth + 1))
++    return region
++
++
 +def _select_probe_mode(args, runtime):
 +    if args.probe_mode != 'auto':
 +        return args.probe_mode
@@ -1974,15 +1999,51 @@ index 0000000..635a2e4
 +    return _pearson_corr(_rankdata_average_ties(a), _rankdata_average_ties(b))
 +
 +
-+def _summarize_grid(value_grid, dist_grid):
++def _subset_corrs(value_grid, dist_grid, mask):
++    subset_mask = np.asarray(mask, dtype=bool) & np.isfinite(value_grid) & np.isfinite(dist_grid)
++    values = value_grid[subset_mask]
++    neg_dist = -dist_grid[subset_mask]
++    return dict(
++        count=int(subset_mask.sum()),
++        graph_corr=_pearson_corr(values, neg_dist),
++        graph_spearman=_spearman_corr(values, neg_dist),
++    )
++
++
++def _summarize_grid(value_grid, dist_grid, structure, env):
 +    mask = np.isfinite(value_grid) & np.isfinite(dist_grid)
 +    masked_values = value_grid[mask]
 +    masked_neg_dist = -dist_grid[mask]
++    finite_dist = dist_grid[np.isfinite(dist_grid)]
++    if len(finite_dist) >= 3:
++        hard_threshold = float(np.quantile(finite_dist, 2.0 / 3.0))
++        hard_mask = np.isfinite(dist_grid) & (dist_grid >= hard_threshold)
++    else:
++        hard_threshold = np.nan
++        hard_mask = np.zeros_like(dist_grid, dtype=bool)
++
++    articulation_nodes = list(zip(*np.where(structure['articulation_grid'] > 0)))
++    teleport_in_nodes = list(zip(*np.where(structure['teleport_in_grid'] > 0)))
++    teleport_out_nodes = list(zip(*np.where(structure['teleport_out_grid'] > 0)))
++    bottleneck_seed_nodes = articulation_nodes + teleport_in_nodes + teleport_out_nodes
++    bottleneck_mask = _region_mask_from_nodes(env, bottleneck_seed_nodes, hops=1)
++
++    hard_metrics = _subset_corrs(value_grid, dist_grid, hard_mask)
++    bottleneck_metrics = _subset_corrs(value_grid, dist_grid, bottleneck_mask)
 +    return dict(
 +        value_mean=float(np.nanmean(value_grid)),
 +        value_std=float(np.nanstd(value_grid)),
 +        graph_corr=_pearson_corr(masked_values, masked_neg_dist),
 +        graph_spearman=_spearman_corr(masked_values, masked_neg_dist),
++        hard_threshold=hard_threshold,
++        hard_count=hard_metrics['count'],
++        hard_graph_corr=hard_metrics['graph_corr'],
++        hard_graph_spearman=hard_metrics['graph_spearman'],
++        bottleneck_count=bottleneck_metrics['count'],
++        bottleneck_graph_corr=bottleneck_metrics['graph_corr'],
++        bottleneck_graph_spearman=bottleneck_metrics['graph_spearman'],
++        hard_mask=hard_mask,
++        bottleneck_mask=bottleneck_mask,
 +    )
 +
 +
@@ -2063,7 +2124,7 @@ index 0000000..635a2e4
 +
 +        ax = axes[bottom_row][1]
 +        ax.axis('off')
-+        structure_lines = ['orange=o bottleneck', 'white=x dead end']
++        structure_lines = ['orange=o bottleneck', 'white=x dead end', 'hard = farthest reachable third']
 +        if np.any(result['structure']['teleport_in_grid'] > 0):
 +            structure_lines.append('cyan=s teleport in')
 +        if np.any(result['structure']['teleport_out_grid'] > 0):
@@ -2083,7 +2144,11 @@ index 0000000..635a2e4
 +            _plot_goal(top_ax, result)
 +            metric = result['metrics'][k]
 +            title = 'MLP' if k is None else f'k={k}'
-+            top_ax.set_title(f'{title}\nr={metric["graph_corr"]:.3f}  rho={metric["graph_spearman"]:.3f}')
++            top_ax.set_title(
++                f'{title}\n'
++                f'r={metric["graph_corr"]:.3f} rho={metric["graph_spearman"]:.3f}\n'
++                f'hard={metric["hard_graph_corr"]:.3f} bneck={metric["bottleneck_graph_corr"]:.3f}'
++            )
 +            _style_axis(top_ax)
 +
 +            delta_grid = result['delta_grids'].get(k)
@@ -2240,11 +2305,15 @@ index 0000000..635a2e4
 +                    value_grids[k] = value_grid
 +                    delta_grid = None if prev_value_grid is None else (value_grid - prev_value_grid)
 +                    delta_grids[k] = delta_grid
-+                    metrics[k] = _summarize_grid(value_grid, dist_grid)
++                    metrics[k] = _summarize_grid(value_grid, dist_grid, structure, runtime['env'])
 +                    key = 'value_mlp' if k is None else f'value_step_{int(k)}'
 +                    dump_dict[key] = value_grid.astype(np.float32)
 +                    if delta_grid is not None:
 +                        dump_dict[f'delta_step_{int(k)}'] = delta_grid.astype(np.float32)
++                    dump_dict[f'hard_mask_{"mlp" if k is None else int(k)}'] = metrics[k]['hard_mask'].astype(np.float32)
++                    dump_dict[f'bottleneck_mask_{"mlp" if k is None else int(k)}'] = metrics[k][
++                        'bottleneck_mask'
++                    ].astype(np.float32)
 +                    summary_rows.append(
 +                        dict(
 +                            label=label,
@@ -2258,6 +2327,13 @@ index 0000000..635a2e4
 +                            iteration=('mlp' if k is None else int(k)),
 +                            graph_corr=metrics[k]['graph_corr'],
 +                            graph_spearman=metrics[k]['graph_spearman'],
++                            hard_threshold=metrics[k]['hard_threshold'],
++                            hard_count=metrics[k]['hard_count'],
++                            hard_graph_corr=metrics[k]['hard_graph_corr'],
++                            hard_graph_spearman=metrics[k]['hard_graph_spearman'],
++                            bottleneck_count=metrics[k]['bottleneck_count'],
++                            bottleneck_graph_corr=metrics[k]['bottleneck_graph_corr'],
++                            bottleneck_graph_spearman=metrics[k]['bottleneck_graph_spearman'],
 +                            value_mean=metrics[k]['value_mean'],
 +                            value_std=metrics[k]['value_std'],
 +                            delta_mean_abs=(None if delta_grid is None else float(np.nanmean(np.abs(delta_grid)))),
