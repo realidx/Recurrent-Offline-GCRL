@@ -1505,10 +1505,10 @@ index 0000000..16660f1
 +    return config
 diff --git a/impls/analyze_hiql_value_geometry.py b/impls/analyze_hiql_value_geometry.py
 new file mode 100644
-index 0000000..a2d77cf
+index 0000000..18c2b3b
 --- /dev/null
 +++ b/impls/analyze_hiql_value_geometry.py
-@@ -0,0 +1,1393 @@
+@@ -0,0 +1,1558 @@
 +import argparse
 +import glob
 +import json
@@ -2129,6 +2129,55 @@ index 0000000..a2d77cf
 +    )
 +
 +
++def _rollout_from_reset(runtime, task_id, episode_idx, episode_seed_base, *, max_steps):
++    env = runtime['env']
++    reset_kwargs = dict(options=dict(task_id=task_id, render_goal=False))
++    if episode_seed_base is not None:
++        reset_kwargs['seed'] = int(episode_seed_base) + int(task_id or 0) * 100_000 + int(episode_idx)
++    try:
++        observation, info = env.reset(**reset_kwargs)
++    except TypeError:
++        reset_kwargs.pop('seed', None)
++        observation, info = env.reset(**reset_kwargs)
++
++    goal = np.asarray(info['goal'])
++    goal_xy_raw = getattr(env.unwrapped, 'cur_goal_xy', None)
++    if goal_xy_raw is None:
++        goal_xy_raw = env.unwrapped.get_goal()
++    goal_xy = np.asarray(goal_xy_raw, dtype=np.float32)
++    start_xy = np.asarray(env.unwrapped.get_xy(), dtype=np.float32)
++    start_cell = tuple(map(int, env.unwrapped.xy_to_ij(start_xy)))
++
++    visited_cells = [start_cell]
++    success = bool(info.get('success', 0.0))
++    done = False
++    steps = 0
++    last_info = info
++
++    while not done and steps < int(max_steps):
++        action = _deterministic_hiql_action(runtime['agent'], np.asarray(observation), goal)
++        next_observation, _, terminated, truncated, info = env.step(action)
++        done = bool(terminated or truncated)
++        steps += 1
++        cur_xy = np.asarray(env.unwrapped.get_xy(), dtype=np.float32)
++        cur_cell = tuple(map(int, env.unwrapped.xy_to_ij(cur_xy)))
++        visited_cells.append(cur_cell)
++        success = success or bool(info.get('success', 0.0))
++        observation = np.asarray(next_observation)
++        last_info = info
++
++    return dict(
++        goal=goal,
++        goal_xy=goal_xy,
++        start_xy=start_xy,
++        start_cell=start_cell,
++        visited_cells=visited_cells,
++        success=bool(success),
++        episode_steps=int(steps),
++        last_info=last_info,
++    )
++
++
 +def _shortest_path_successors(env, start_cell, dist_grid):
 +    adjacency = _maze_adjacency(env)
 +    if start_cell not in adjacency or not np.isfinite(dist_grid[start_cell]):
@@ -2461,6 +2510,92 @@ index 0000000..a2d77cf
 +    )
 +
 +
++def _compute_reset_eval_diagnostics(
++    runtime,
++    task_id,
++    dist_grid,
++    structure,
++    seed,
++    reset_eval_episodes,
++    junction_decision_steps,
++):
++    if reset_eval_episodes is None or int(reset_eval_episodes) <= 0:
++        return None
++    env = runtime['env']
++    if not hasattr(env.unwrapped, 'get_xy') or not hasattr(env.unwrapped, 'xy_to_ij'):
++        return None
++
++    region_masks = _region_metric_masks(dist_grid, structure, env)
++    hard_mask = region_masks['hard_mask']
++    bottleneck_mask = region_masks['bottleneck_mask']
++    junction_mask = region_masks['junction_mask']
++    horizon = _max_episode_steps(env)
++
++    successes = []
++    hard_successes = []
++    bottleneck_successes = []
++    junction_successes = []
++    junction_correct = []
++    junction_improve = []
++
++    for episode_idx in range(int(reset_eval_episodes)):
++        try:
++            rollout = _rollout_from_reset(runtime, task_id, episode_idx, seed, max_steps=horizon)
++        except Exception:
++            continue
++
++        start_cell = rollout['start_cell']
++        if not (0 <= start_cell[0] < dist_grid.shape[0] and 0 <= start_cell[1] < dist_grid.shape[1]):
++            continue
++        if not np.isfinite(dist_grid[start_cell]):
++            continue
++
++        success = bool(rollout['success'])
++        successes.append(success)
++        if hard_mask[start_cell]:
++            hard_successes.append(success)
++        if bottleneck_mask[start_cell]:
++            bottleneck_successes.append(success)
++        if junction_mask[start_cell]:
++            junction_successes.append(success)
++            valid_successors = _shortest_path_successors(env, start_cell, dist_grid)
++            if valid_successors:
++                end_cell = start_cell
++                for cell in rollout['visited_cells'][1 : 1 + max(1, int(junction_decision_steps))]:
++                    if cell != start_cell:
++                        end_cell = cell
++                        break
++                junction_correct.append(float(end_cell in valid_successors))
++                if (
++                    0 <= end_cell[0] < dist_grid.shape[0]
++                    and 0 <= end_cell[1] < dist_grid.shape[1]
++                    and np.isfinite(dist_grid[end_cell])
++                ):
++                    junction_improve.append(float(dist_grid[end_cell] < dist_grid[start_cell]))
++
++    def _frac(vals):
++        if len(vals) == 0:
++            return np.nan
++        return float(np.mean(np.asarray(vals, dtype=np.float64)))
++
++    if not successes:
++        return None
++    return dict(
++        reset_eval_episode_count=int(len(successes)),
++        reset_eval_episode_steps=int(horizon),
++        reset_eval_success_frac=_frac(successes),
++        reset_eval_hard_episode_count=int(len(hard_successes)),
++        reset_eval_hard_success_frac=_frac(hard_successes),
++        reset_eval_bottleneck_episode_count=int(len(bottleneck_successes)),
++        reset_eval_bottleneck_success_frac=_frac(bottleneck_successes),
++        reset_eval_junction_episode_count=int(len(junction_successes)),
++        reset_eval_junction_success_frac=_frac(junction_successes),
++        reset_eval_junction_decision_steps=int(max(1, int(junction_decision_steps))),
++        reset_eval_junction_correct_branch_frac=_frac(junction_correct),
++        reset_eval_junction_improve_frac=_frac(junction_improve),
++    )
++
++
 +def _plot_overview(results, output_path):
 +    try:
 +        import matplotlib.pyplot as plt
@@ -2571,6 +2706,16 @@ index 0000000..a2d77cf
 +                '',
 +                f'junc corr={junction_metrics["junction_correct_branch_frac"]:.2f}',
 +                f'junc imp={junction_metrics["junction_improve_frac"]:.2f}',
++            ]
++        reset_eval_metrics = result.get('reset_eval_metrics')
++        if reset_eval_metrics is not None:
++            structure_lines += [
++                '',
++                f'eval succ={reset_eval_metrics["reset_eval_success_frac"]:.2f}',
++                f'eval hard={reset_eval_metrics["reset_eval_hard_success_frac"]:.2f}',
++                f'eval bneck={reset_eval_metrics["reset_eval_bottleneck_success_frac"]:.2f}',
++                f'eval junc={reset_eval_metrics["reset_eval_junction_success_frac"]:.2f}',
++                f'eval jc={reset_eval_metrics["reset_eval_junction_correct_branch_frac"]:.2f}',
 +            ]
 +        ax.text(0.03, 0.95, '\n'.join(structure_lines), va='top', ha='left', fontsize=9)
 +
@@ -2695,6 +2840,12 @@ index 0000000..a2d77cf
 +        default=5,
 +        help='Number of steps allowed when evaluating the first branch choice at a junction.',
 +    )
++    parser.add_argument(
++        '--reset_eval_episodes',
++        type=int,
++        default=50,
++        help='Number of real eval-style reset episodes used for reset-conditioned success and junction diagnostics.',
++    )
 +    parser.add_argument('--seed', type=int, default=0, help='Seed for probe subsampling and deterministic goal reset.')
 +    parser.add_argument(
 +        '--output_dir',
@@ -2816,6 +2967,18 @@ index 0000000..a2d77cf
 +                if junction_metrics is not None:
 +                    for key, value in junction_metrics.items():
 +                        dump_dict[key] = np.asarray([value], dtype=np.float32)
++                reset_eval_metrics = _compute_reset_eval_diagnostics(
++                    runtime,
++                    task_id,
++                    dist_grid,
++                    structure,
++                    args.seed,
++                    args.reset_eval_episodes,
++                    args.junction_decision_steps,
++                )
++                if reset_eval_metrics is not None:
++                    for key, value in reset_eval_metrics.items():
++                        dump_dict[key] = np.asarray([value], dtype=np.float32)
 +
 +                prev_value_grid = None
 +                for k in iterations:
@@ -2858,6 +3021,7 @@ index 0000000..a2d77cf
 +                            **({} if policy_metrics is None else policy_metrics['flat']),
 +                            **({} if episode_metrics is None else episode_metrics),
 +                            **({} if junction_metrics is None else junction_metrics),
++                            **({} if reset_eval_metrics is None else reset_eval_metrics),
 +                        )
 +                    )
 +                    prev_value_grid = value_grid
@@ -2884,6 +3048,7 @@ index 0000000..a2d77cf
 +                    policy_metrics=policy_metrics,
 +                    episode_metrics=episode_metrics,
 +                    junction_metrics=junction_metrics,
++                    reset_eval_metrics=reset_eval_metrics,
 +                )
 +                results.append(result)
 +                task_overview_results[int(task_id)].append(result)
