@@ -1503,6 +1503,1570 @@ index 0000000..16660f1
 +        )
 +    )
 +    return config
+diff --git a/impls/analyze_hiql_value_geometry.py b/impls/analyze_hiql_value_geometry.py
+new file mode 100644
+index 0000000..18c2b3b
+--- /dev/null
++++ b/impls/analyze_hiql_value_geometry.py
+@@ -0,0 +1,1558 @@
++import argparse
++import glob
++import json
++import os
++import re
++from collections import defaultdict, deque
++
++import numpy as np
++
++
++def _parse_int_list(spec: str):
++    if spec is None:
++        return None
++    if isinstance(spec, int):
++        return [int(spec)]
++    spec = spec.strip()
++    if not spec:
++        return None
++    tokens = [tok for tok in re.split(r'[\s,:;]+', spec) if tok]
++    return [int(tok) for tok in tokens]
++
++
++def _parse_task_ids(task_id: int | None, task_ids_spec: str | None, env):
++    if task_ids_spec:
++        return _parse_int_list(task_ids_spec)
++    if task_id is not None:
++        return [int(task_id)]
++
++    task_infos = getattr(env.unwrapped, 'task_infos', None)
++    if task_infos is None:
++        return [1]
++    return list(range(1, len(task_infos) + 1))
++
++
++def _slugify(text: str) -> str:
++    return re.sub(r'[^a-zA-Z0-9._-]+', '_', text).strip('_') or 'run'
++
++
++def _infer_latest_epoch_from_dir(restore_dir: str):
++    epochs = []
++    for path in glob.glob(os.path.join(restore_dir, 'params_*.pkl')):
++        match = re.search(r'params_(\d+)\.pkl$', os.path.basename(path))
++        if match:
++            epochs.append(int(match.group(1)))
++    return max(epochs) if epochs else None
++
++
++def _resolve_checkpoint(run_path: str, epoch: int | None):
++    candidates = glob.glob(run_path)
++    if len(candidates) == 1:
++        candidate = candidates[0]
++    elif os.path.exists(run_path):
++        candidate = run_path
++    else:
++        raise FileNotFoundError(f'Could not resolve restore path: {run_path}')
++
++    if os.path.isfile(candidate):
++        if not candidate.endswith('.pkl'):
++            raise ValueError(f'Expected a checkpoint .pkl file, got: {candidate}')
++        step_match = re.search(r'params_(\d+)\.pkl$', os.path.basename(candidate))
++        step = int(step_match.group(1)) if step_match else -1
++        return candidate, os.path.dirname(candidate), step
++
++    if epoch is None:
++        epoch = _infer_latest_epoch_from_dir(candidate)
++    if epoch is None:
++        raise FileNotFoundError(f'No params_*.pkl checkpoints found in {candidate}')
++
++    checkpoint_path = os.path.join(candidate, f'params_{epoch}.pkl')
++    if not os.path.exists(checkpoint_path):
++        raise FileNotFoundError(f'Checkpoint does not exist: {checkpoint_path}')
++    return checkpoint_path, candidate, int(epoch)
++
++
++def _load_flags(run_dir: str):
++    flags_path = os.path.join(run_dir, 'flags.json')
++    if not os.path.exists(flags_path):
++        raise FileNotFoundError(f'Missing flags.json next to checkpoint: {flags_path}')
++    with open(flags_path, 'r') as f:
++        flags_dict = json.load(f)
++    if not isinstance(flags_dict, dict):
++        raise ValueError(f'flags.json is not a JSON object: {flags_path}')
++    if 'agent' not in flags_dict or not isinstance(flags_dict['agent'], dict):
++        raise ValueError(f'flags.json does not contain agent config: {flags_path}')
++    return flags_dict
++
++
++def _sample_dataset(dataset, batch_size, *, idxs=None, evaluation=False, config=None):
++    sample_kwargs = dict(idxs=idxs, evaluation=evaluation)
++    if config is not None and config.get('agent_name') == 'cgivl':
++        sample_kwargs.update(
++            dict(
++                init_goal_rep=config.get('init_goal_rep', False),
++                use_subgoals=config.get('use_subgoals', True),
++                min_d=config.get('min_d', 0),
++            )
++        )
++    return dataset.sample(batch_size, **sample_kwargs)
++
++
++def _build_runtime(run_dir: str, checkpoint_path: str):
++    import importlib
++
++    import ogbench
++
++    from agents import agents
++    from utils.datasets import Dataset, GCDataset, HGCDataset, SHGCDataset
++    from utils.env_utils import FrameStackWrapper
++    from utils.flax_utils import restore_agent
++
++    flags_dict = _load_flags(run_dir)
++    saved_config = dict(flags_dict['agent'])
++    agent_name = saved_config.get('agent_name')
++    if agent_name is None:
++        raise ValueError(f"flags.json at {run_dir} is missing agent['agent_name'].")
++
++    agent_module = importlib.import_module(f'agents.{agent_name}')
++    if not hasattr(agent_module, 'get_config'):
++        raise ValueError(f'Agent module agents.{agent_name} does not expose get_config().')
++    default_config = dict(agent_module.get_config())
++    default_config.update(saved_config)
++    config = default_config
++    env_name = flags_dict['env_name']
++    seed = int(flags_dict.get('seed', 0))
++
++    env, train_raw, val_raw = ogbench.make_env_and_datasets(
++        env_name,
++        compact_dataset=True,
++        add_info=True,
++    )
++    if config.get('frame_stack') is not None:
++        env = FrameStackWrapper(env, int(config['frame_stack']))
++
++    dataset_class = {
++        'GCDataset': GCDataset,
++        'HGCDataset': HGCDataset,
++        'SHGCDataset': SHGCDataset,
++    }[config['dataset_class']]
++
++    train_dataset = dataset_class(Dataset.create(**train_raw), config)
++    val_dataset = dataset_class(Dataset.create(**val_raw), config) if val_raw is not None else None
++
++    example_batch = _sample_dataset(train_dataset, 1, config=config)
++    if config['discrete']:
++        example_batch['actions'] = np.full_like(example_batch['actions'], env.action_space.n - 1)
++
++    agent_class = agents[config['agent_name']]
++    if config['agent_name'] == 'cgivl':
++        agent = agent_class.create(
++            seed,
++            example_batch['observations'],
++            example_batch['goals'],
++            example_batch['actions'],
++            config,
++        )
++    else:
++        agent = agent_class.create(
++            seed,
++            example_batch['observations'],
++            example_batch['actions'],
++            config,
++        )
++    agent = restore_agent(agent, checkpoint_path, restore_epoch=None)
++    return dict(
++        agent=agent,
++        env=env,
++        train_dataset=train_dataset,
++        val_dataset=val_dataset,
++        config=config,
++        env_name=env_name,
++        seed=seed,
++    )
++
++
++def _get_goal(env, task_id: int, seed: int):
++    reset_kwargs = dict(options=dict(task_id=task_id, render_goal=False), seed=seed + task_id * 100_000)
++    try:
++        _, info = env.reset(**reset_kwargs)
++    except TypeError:
++        reset_kwargs.pop('seed', None)
++        _, info = env.reset(**reset_kwargs)
++    goal = np.asarray(info['goal'])
++    goal_xy = np.asarray(env.unwrapped.cur_goal_xy, dtype=np.float32)
++    return goal, goal_xy
++
++
++def _value_iterations(config: dict, requested_iters):
++    if requested_iters is not None:
++        return list(requested_iters)
++    if str(config.get('value_backbone', 'mlp')) == 'recur_tied':
++        total_iters = int(config.get('value_recur_iters', 1))
++        return list(range(1, total_iters + 1))
++    return [None]
++
++
++def _free_cells(maze_map):
++    return [(i, j) for i in range(maze_map.shape[0]) for j in range(maze_map.shape[1]) if maze_map[i, j] == 0]
++
++
++def _cell_center_xy(env, ij):
++    return np.asarray(env.unwrapped.ij_to_xy(ij), dtype=np.float32)
++
++
++def _valid_cell(env, ij):
++    i, j = ij
++    maze_map = np.asarray(env.unwrapped.maze_map)
++    return 0 <= i < maze_map.shape[0] and 0 <= j < maze_map.shape[1] and maze_map[i, j] == 0
++
++
++def _teleport_out_cells(env):
++    info = getattr(env.unwrapped, '_teleport_info', None)
++    if not info:
++        return []
++    return [tuple(map(int, env.unwrapped.xy_to_ij(np.asarray(xy)))) for xy in info.get('teleport_out_xys', [])]
++
++
++def _teleport_in_cells(env):
++    info = getattr(env.unwrapped, '_teleport_info', None)
++    if not info:
++        return []
++    return [tuple(map(int, env.unwrapped.xy_to_ij(np.asarray(xy)))) for xy in info.get('teleport_in_xys', [])]
++
++
++def _shortest_path_grid(env, goal_ij):
++    maze_map = np.asarray(env.unwrapped.maze_map)
++    dist = np.full(maze_map.shape, np.inf, dtype=np.float32)
++    if not _valid_cell(env, goal_ij):
++        return dist
++
++    teleport_in = [ij for ij in _teleport_in_cells(env) if _valid_cell(env, ij)]
++    teleport_out = set(_teleport_out_cells(env))
++    queue = deque([goal_ij])
++    dist[goal_ij] = 0.0
++
++    def reverse_neighbors(ij):
++        i, j = ij
++        for di, dj in [(-1, 0), (0, -1), (1, 0), (0, 1)]:
++            nxt = (i + di, j + dj)
++            if _valid_cell(env, nxt):
++                yield nxt
++        if ij in teleport_out:
++            for nxt in teleport_in:
++                yield nxt
++
++    while queue:
++        cur = queue.popleft()
++        cur_d = dist[cur]
++        for nxt in reverse_neighbors(cur):
++            if dist[nxt] > cur_d + 1:
++                dist[nxt] = cur_d + 1
++                queue.append(nxt)
++    return dist
++
++
++def _maze_adjacency(env):
++    maze_map = np.asarray(env.unwrapped.maze_map)
++    free_cells = _free_cells(maze_map)
++    adjacency = {ij: [] for ij in free_cells}
++    for i, j in free_cells:
++        for di, dj in [(-1, 0), (0, -1), (1, 0), (0, 1)]:
++            nxt = (i + di, j + dj)
++            if 0 <= nxt[0] < maze_map.shape[0] and 0 <= nxt[1] < maze_map.shape[1] and maze_map[nxt] == 0:
++                adjacency[(i, j)].append(nxt)
++    return adjacency
++
++
++def _tarjan_articulation_points(adjacency):
++    discovery = {}
++    low = {}
++    parent = {}
++    articulation = set()
++    time = [0]
++
++    def dfs(node):
++        discovery[node] = low[node] = time[0]
++        time[0] += 1
++        child_count = 0
++        for nxt in adjacency[node]:
++            if nxt not in discovery:
++                parent[nxt] = node
++                child_count += 1
++                dfs(nxt)
++                low[node] = min(low[node], low[nxt])
++                if node not in parent and child_count > 1:
++                    articulation.add(node)
++                if node in parent and low[nxt] >= discovery[node]:
++                    articulation.add(node)
++            elif parent.get(node) != nxt:
++                low[node] = min(low[node], discovery[nxt])
++
++    for node in adjacency:
++        if node not in discovery:
++            dfs(node)
++    return articulation
++
++
++def _structural_overlay(env):
++    maze_map = np.asarray(env.unwrapped.maze_map)
++    adjacency = _maze_adjacency(env)
++    articulation_points = _tarjan_articulation_points(adjacency)
++    articulation_grid = np.zeros(maze_map.shape, dtype=np.float32)
++    dead_end_grid = np.zeros(maze_map.shape, dtype=np.float32)
++    junction_grid = np.zeros(maze_map.shape, dtype=np.float32)
++    for ij, neighbors in adjacency.items():
++        if ij in articulation_points:
++            articulation_grid[ij] = 1.0
++        if len(neighbors) <= 1:
++            dead_end_grid[ij] = 1.0
++        if len(neighbors) >= 3:
++            junction_grid[ij] = 1.0
++
++    teleport_in_grid = np.zeros(maze_map.shape, dtype=np.float32)
++    teleport_out_grid = np.zeros(maze_map.shape, dtype=np.float32)
++    for ij in _teleport_in_cells(env):
++        if _valid_cell(env, ij):
++            teleport_in_grid[ij] = 1.0
++    for ij in _teleport_out_cells(env):
++        if _valid_cell(env, ij):
++            teleport_out_grid[ij] = 1.0
++
++    return dict(
++        articulation_grid=articulation_grid,
++        dead_end_grid=dead_end_grid,
++        junction_grid=junction_grid,
++        teleport_in_grid=teleport_in_grid,
++        teleport_out_grid=teleport_out_grid,
++    )
++
++
++def _region_mask_from_nodes(env, seed_nodes, hops: int = 1):
++    maze_map = np.asarray(env.unwrapped.maze_map)
++    region = np.zeros(maze_map.shape, dtype=bool)
++    if not seed_nodes:
++        return region
++    adjacency = _maze_adjacency(env)
++    queue = deque()
++    visited = set()
++    for node in seed_nodes:
++        if node in adjacency:
++            queue.append((node, 0))
++            visited.add(node)
++            region[node] = True
++    while queue:
++        node, depth = queue.popleft()
++        if depth >= hops:
++            continue
++        for nxt in adjacency.get(node, []):
++            if nxt not in visited:
++                visited.add(nxt)
++                region[nxt] = True
++                queue.append((nxt, depth + 1))
++    return region
++
++
++def _region_metric_masks(dist_grid, structure, env):
++    finite_dist = dist_grid[np.isfinite(dist_grid)]
++    if len(finite_dist) >= 3:
++        hard_threshold = float(np.quantile(finite_dist, 2.0 / 3.0))
++        hard_mask = np.isfinite(dist_grid) & (dist_grid >= hard_threshold)
++    else:
++        hard_threshold = np.nan
++        hard_mask = np.zeros_like(dist_grid, dtype=bool)
++
++    articulation_nodes = list(zip(*np.where(structure['articulation_grid'] > 0)))
++    junction_nodes = list(zip(*np.where(structure['junction_grid'] > 0)))
++    teleport_in_nodes = list(zip(*np.where(structure['teleport_in_grid'] > 0)))
++    teleport_out_nodes = list(zip(*np.where(structure['teleport_out_grid'] > 0)))
++    bottleneck_seed_nodes = articulation_nodes + teleport_in_nodes + teleport_out_nodes
++    bottleneck_mask = _region_mask_from_nodes(env, bottleneck_seed_nodes, hops=1)
++    junction_mask = _region_mask_from_nodes(env, junction_nodes, hops=0)
++    return dict(
++        hard_threshold=hard_threshold,
++        hard_mask=hard_mask,
++        bottleneck_mask=bottleneck_mask,
++        junction_mask=junction_mask,
++    )
++
++
++def _select_probe_mode(args, runtime):
++    if args.probe_mode != 'auto':
++        return args.probe_mode
++    if args.exact_pointmaze and runtime['env_name'].startswith('pointmaze') and runtime['config'].get('frame_stack') is None:
++        return 'exact'
++    return 'dataset'
++
++
++def _exact_pointmaze_probes(runtime):
++    env = runtime['env']
++    maze_map = np.asarray(env.unwrapped.maze_map)
++    free_cells = _free_cells(maze_map)
++    observations = []
++    cell_to_obs_index = {}
++    original_xy = None
++    if hasattr(env.unwrapped, 'get_xy'):
++        original_xy = np.asarray(env.unwrapped.get_xy()).copy()
++    for obs_index, ij in enumerate(free_cells):
++        xy = _cell_center_xy(env, ij)
++        env.unwrapped.set_xy(xy)
++        observations.append(np.asarray(env.unwrapped.get_ob()))
++        cell_to_obs_index[ij] = obs_index
++    if original_xy is not None:
++        env.unwrapped.set_xy(original_xy)
++    return dict(
++        observations=np.asarray(observations),
++        selected_cells=list(free_cells),
++        cell_to_obs_index=cell_to_obs_index,
++        count_grid=np.where(maze_map == 0, 1.0, 0.0).astype(np.float32),
++    )
++
++
++def _dataset_probes(runtime, split: str, max_states_per_cell: int, seed: int):
++    dataset_obj = runtime['train_dataset'] if split == 'train' or runtime['val_dataset'] is None else runtime['val_dataset']
++    raw_dataset = dataset_obj.dataset
++    if 'qpos' not in raw_dataset:
++        raise ValueError('Dataset does not contain qpos. Re-run with a dataset that includes info fields.')
++
++    observations = np.asarray(raw_dataset['observations'])
++    qpos = np.asarray(raw_dataset['qpos'])
++    xy = qpos[:, :2]
++    maze_map = np.asarray(runtime['env'].unwrapped.maze_map)
++    rng = np.random.RandomState(seed)
++    grouped = defaultdict(list)
++
++    for obs_index, cur_xy in enumerate(xy):
++        ij = tuple(map(int, runtime['env'].unwrapped.xy_to_ij(np.asarray(cur_xy))))
++        if 0 <= ij[0] < maze_map.shape[0] and 0 <= ij[1] < maze_map.shape[1] and maze_map[ij] == 0:
++            grouped[ij].append(obs_index)
++
++    selected_indices = []
++    selected_cells = []
++    count_grid = np.full(maze_map.shape, np.nan, dtype=np.float32)
++    for ij in _free_cells(maze_map):
++        idxs = grouped.get(ij, [])
++        if len(idxs) > max_states_per_cell:
++            idxs = list(rng.choice(idxs, size=max_states_per_cell, replace=False))
++        count_grid[ij] = float(len(idxs))
++        for idx in idxs:
++            selected_indices.append(idx)
++            selected_cells.append(ij)
++
++    if not selected_indices:
++        raise ValueError(f'No dataset-backed probe states found for split={split}.')
++
++    return dict(
++        observations=observations[np.asarray(selected_indices)],
++        qpos=np.asarray(raw_dataset['qpos'])[np.asarray(selected_indices)],
++        qvel=(np.asarray(raw_dataset['qvel'])[np.asarray(selected_indices)] if 'qvel' in raw_dataset else None),
++        selected_cells=selected_cells,
++        count_grid=count_grid,
++    )
++
++
++def _batched_value_eval(agent, observations, goal, iterations, batch_size: int):
++    values_by_iter = {k: [] for k in iterations}
++    goal_batch = np.repeat(goal[None, ...], len(observations), axis=0)
++
++    for start in range(0, len(observations), batch_size):
++        end = min(start + batch_size, len(observations))
++        obs_chunk = observations[start:end]
++        goal_chunk = goal_batch[start:end]
++        for k in iterations:
++            if k is None:
++                heads = agent.network.select('value')(obs_chunk, goal_chunk)
++            else:
++                heads = agent.network.select('value')(obs_chunk, goal_chunk, num_iters=int(k))
++            chunk_values = np.asarray(heads).mean(axis=0)
++            values_by_iter[k].append(chunk_values)
++
++    return {k: np.concatenate(v, axis=0) for k, v in values_by_iter.items()}
++
++
++def _aggregate_to_grid(env, values, probe_data):
++    maze_map = np.asarray(env.unwrapped.maze_map)
++    grid = np.full(maze_map.shape, np.nan, dtype=np.float32)
++    if 'cell_to_obs_index' in probe_data:
++        for ij, obs_index in probe_data['cell_to_obs_index'].items():
++            grid[ij] = float(values[obs_index])
++        return grid
++
++    grouped_values = defaultdict(list)
++    for value, ij in zip(values, probe_data['selected_cells']):
++        grouped_values[ij].append(float(value))
++    for ij, cell_values in grouped_values.items():
++        grid[ij] = float(np.mean(cell_values))
++    return grid
++
++
++def _pearson_corr(a, b):
++    a = np.asarray(a, dtype=np.float64)
++    b = np.asarray(b, dtype=np.float64)
++    if len(a) < 2:
++        return np.nan
++    a = a - a.mean()
++    b = b - b.mean()
++    denom = np.sqrt(np.sum(a**2) * np.sum(b**2))
++    if denom <= 0:
++        return np.nan
++    return float(np.sum(a * b) / denom)
++
++
++def _rankdata_average_ties(x):
++    x = np.asarray(x, dtype=np.float64)
++    order = np.argsort(x, kind='mergesort')
++    ranks = np.empty(len(x), dtype=np.float64)
++    i = 0
++    while i < len(x):
++        j = i + 1
++        while j < len(x) and x[order[j]] == x[order[i]]:
++            j += 1
++        avg_rank = 0.5 * (i + j - 1)
++        ranks[order[i:j]] = avg_rank
++        i = j
++    return ranks
++
++
++def _spearman_corr(a, b):
++    a = np.asarray(a, dtype=np.float64)
++    b = np.asarray(b, dtype=np.float64)
++    if len(a) < 2:
++        return np.nan
++    return _pearson_corr(_rankdata_average_ties(a), _rankdata_average_ties(b))
++
++
++def _subset_corrs(value_grid, dist_grid, mask):
++    subset_mask = np.asarray(mask, dtype=bool) & np.isfinite(value_grid) & np.isfinite(dist_grid)
++    values = value_grid[subset_mask]
++    neg_dist = -dist_grid[subset_mask]
++    return dict(
++        count=int(subset_mask.sum()),
++        graph_corr=_pearson_corr(values, neg_dist),
++        graph_spearman=_spearman_corr(values, neg_dist),
++    )
++
++
++def _summarize_grid(value_grid, dist_grid, structure, env):
++    mask = np.isfinite(value_grid) & np.isfinite(dist_grid)
++    masked_values = value_grid[mask]
++    masked_neg_dist = -dist_grid[mask]
++    region_masks = _region_metric_masks(dist_grid, structure, env)
++    hard_mask = region_masks['hard_mask']
++    bottleneck_mask = region_masks['bottleneck_mask']
++
++    hard_metrics = _subset_corrs(value_grid, dist_grid, hard_mask)
++    bottleneck_metrics = _subset_corrs(value_grid, dist_grid, bottleneck_mask)
++    return dict(
++        value_mean=float(np.nanmean(value_grid)),
++        value_std=float(np.nanstd(value_grid)),
++        graph_corr=_pearson_corr(masked_values, masked_neg_dist),
++        graph_spearman=_spearman_corr(masked_values, masked_neg_dist),
++        hard_threshold=region_masks['hard_threshold'],
++        hard_count=hard_metrics['count'],
++        hard_graph_corr=hard_metrics['graph_corr'],
++        hard_graph_spearman=hard_metrics['graph_spearman'],
++        bottleneck_count=bottleneck_metrics['count'],
++        bottleneck_graph_corr=bottleneck_metrics['graph_corr'],
++        bottleneck_graph_spearman=bottleneck_metrics['graph_spearman'],
++        hard_mask=hard_mask,
++        bottleneck_mask=bottleneck_mask,
++    )
++
++
++def _deterministic_hiql_action(agent, observation, goal):
++    import jax.numpy as jnp
++
++    observation = jnp.asarray(observation)[None, ...]
++    goal = jnp.asarray(goal)[None, ...]
++    high_dist = agent.network.select('high_actor')(observation, goal, temperature=0.0)
++    goal_reps = high_dist.mode()
++    goal_reps = goal_reps / jnp.linalg.norm(goal_reps, axis=-1, keepdims=True) * jnp.sqrt(goal_reps.shape[-1])
++    low_dist = agent.network.select('low_actor')(observation, goal_reps, goal_encoded=True, temperature=0.0)
++    action = low_dist.mode()
++    if not agent.config['discrete']:
++        action = jnp.clip(action, -1, 1)
++    return np.asarray(action[0])
++
++
++def _max_episode_steps(env):
++    try:
++        if getattr(env, 'spec', None) is not None and getattr(env.spec, 'max_episode_steps', None) is not None:
++            return int(env.spec.max_episode_steps)
++    except Exception:
++        pass
++    try:
++        if getattr(env, '_max_episode_steps', None) is not None:
++            return int(env._max_episode_steps)
++    except Exception:
++        pass
++    return 1000
++
++
++def _rollout_from_state(runtime, qpos, qvel, goal, goal_xy, *, max_steps):
++    env = runtime['env']
++    env.unwrapped.set_state(np.asarray(qpos).copy(), np.asarray(qvel).copy())
++    if hasattr(env.unwrapped, 'set_goal'):
++        env.unwrapped.set_goal(goal_xy=np.asarray(goal_xy).copy())
++    observation = np.asarray(env.unwrapped.get_ob())
++    visited_cells = []
++    success = False
++    for _ in range(int(max_steps)):
++        cur_xy = np.asarray(env.unwrapped.get_xy())
++        visited_cells.append(tuple(map(int, env.unwrapped.xy_to_ij(cur_xy))))
++        action = _deterministic_hiql_action(runtime['agent'], observation, goal)
++        next_observation, _, terminated, truncated, _ = env.step(action)
++        observation = np.asarray(next_observation)
++        next_xy = np.asarray(env.unwrapped.get_xy())
++        next_cell = tuple(map(int, env.unwrapped.xy_to_ij(next_xy)))
++        visited_cells.append(next_cell)
++        if hasattr(env.unwrapped, 'compute_success'):
++            try:
++                success = bool(env.unwrapped.compute_success())
++            except Exception:
++                success = False
++        if terminated or truncated or success:
++            break
++    return dict(
++        visited_cells=visited_cells,
++        success=bool(success),
++    )
++
++
++def _rollout_from_reset(runtime, task_id, episode_idx, episode_seed_base, *, max_steps):
++    env = runtime['env']
++    reset_kwargs = dict(options=dict(task_id=task_id, render_goal=False))
++    if episode_seed_base is not None:
++        reset_kwargs['seed'] = int(episode_seed_base) + int(task_id or 0) * 100_000 + int(episode_idx)
++    try:
++        observation, info = env.reset(**reset_kwargs)
++    except TypeError:
++        reset_kwargs.pop('seed', None)
++        observation, info = env.reset(**reset_kwargs)
++
++    goal = np.asarray(info['goal'])
++    goal_xy_raw = getattr(env.unwrapped, 'cur_goal_xy', None)
++    if goal_xy_raw is None:
++        goal_xy_raw = env.unwrapped.get_goal()
++    goal_xy = np.asarray(goal_xy_raw, dtype=np.float32)
++    start_xy = np.asarray(env.unwrapped.get_xy(), dtype=np.float32)
++    start_cell = tuple(map(int, env.unwrapped.xy_to_ij(start_xy)))
++
++    visited_cells = [start_cell]
++    success = bool(info.get('success', 0.0))
++    done = False
++    steps = 0
++    last_info = info
++
++    while not done and steps < int(max_steps):
++        action = _deterministic_hiql_action(runtime['agent'], np.asarray(observation), goal)
++        next_observation, _, terminated, truncated, info = env.step(action)
++        done = bool(terminated or truncated)
++        steps += 1
++        cur_xy = np.asarray(env.unwrapped.get_xy(), dtype=np.float32)
++        cur_cell = tuple(map(int, env.unwrapped.xy_to_ij(cur_xy)))
++        visited_cells.append(cur_cell)
++        success = success or bool(info.get('success', 0.0))
++        observation = np.asarray(next_observation)
++        last_info = info
++
++    return dict(
++        goal=goal,
++        goal_xy=goal_xy,
++        start_xy=start_xy,
++        start_cell=start_cell,
++        visited_cells=visited_cells,
++        success=bool(success),
++        episode_steps=int(steps),
++        last_info=last_info,
++    )
++
++
++def _shortest_path_successors(env, start_cell, dist_grid):
++    adjacency = _maze_adjacency(env)
++    if start_cell not in adjacency or not np.isfinite(dist_grid[start_cell]):
++        return set()
++    cur_dist = float(dist_grid[start_cell])
++    successors = set()
++    for nxt in adjacency[start_cell]:
++        if np.isfinite(dist_grid[nxt]) and dist_grid[nxt] < cur_dist:
++            successors.add(nxt)
++    if start_cell in set(_teleport_in_cells(env)):
++        for nxt in _teleport_out_cells(env):
++            nxt = tuple(nxt)
++            if (
++                0 <= nxt[0] < dist_grid.shape[0]
++                and 0 <= nxt[1] < dist_grid.shape[1]
++                and np.isfinite(dist_grid[nxt])
++                and dist_grid[nxt] < cur_dist
++            ):
++                successors.add(nxt)
++    return successors
++
++
++def _compute_policy_diagnostics(runtime, probe_data, goal, goal_xy, dist_grid, structure, seed, rollout_steps, policy_probe_limit):
++    if rollout_steps <= 0:
++        return None
++    if 'qpos' not in probe_data or probe_data.get('qvel') is None:
++        return None
++
++    env = runtime['env']
++    qpos = np.asarray(probe_data['qpos'])
++    qvel = np.asarray(probe_data['qvel'])
++    if len(qpos) == 0:
++        return None
++
++    rng = np.random.RandomState(seed + 911)
++    all_indices = np.arange(len(qpos))
++    if policy_probe_limit is not None and policy_probe_limit > 0 and len(all_indices) > policy_probe_limit:
++        probe_indices = rng.choice(all_indices, size=policy_probe_limit, replace=False)
++    else:
++        probe_indices = all_indices
++
++    region_masks = _region_metric_masks(dist_grid, structure, env)
++    hard_mask = region_masks['hard_mask']
++    bottleneck_mask = region_masks['bottleneck_mask']
++
++    improvements = []
++    one_step_improvements = []
++    success_flags = []
++    hard_flags = []
++    bottleneck_flags = []
++    hard_improvements = []
++    bottleneck_improvements = []
++    hard_one_step = []
++    bottleneck_one_step = []
++    hard_success_flags = []
++    bottleneck_success_flags = []
++
++    for idx in probe_indices:
++        start_cell = tuple(probe_data['selected_cells'][int(idx)])
++        if not np.isfinite(dist_grid[start_cell]):
++            continue
++
++        try:
++            env.unwrapped.set_state(np.asarray(qpos[idx]).copy(), np.asarray(qvel[idx]).copy())
++        except Exception:
++            continue
++        if hasattr(env.unwrapped, 'set_goal'):
++            env.unwrapped.set_goal(goal_xy=np.asarray(goal_xy).copy())
++        observation = np.asarray(env.unwrapped.get_ob())
++        start_dist = float(dist_grid[start_cell])
++        cur_dist = start_dist
++        one_step_improve = np.nan
++        reached = False
++
++        for t in range(int(rollout_steps)):
++            action = _deterministic_hiql_action(runtime['agent'], observation, goal)
++            next_observation, _, terminated, truncated, info = env.step(action)
++            next_xy = np.asarray(env.unwrapped.get_xy())
++            next_cell = tuple(map(int, env.unwrapped.xy_to_ij(next_xy)))
++            if 0 <= next_cell[0] < dist_grid.shape[0] and 0 <= next_cell[1] < dist_grid.shape[1]:
++                next_dist = float(dist_grid[next_cell])
++            else:
++                next_dist = np.inf
++            if t == 0 and np.isfinite(next_dist):
++                one_step_improve = start_dist - next_dist
++            if np.isfinite(next_dist):
++                cur_dist = next_dist
++            observation = np.asarray(next_observation)
++            if next_dist <= 0:
++                reached = True
++            if terminated or truncated:
++                break
++
++        total_improve = start_dist - cur_dist if np.isfinite(cur_dist) else np.nan
++        improvements.append(total_improve)
++        one_step_improvements.append(one_step_improve)
++        success_flags.append(bool(reached))
++        in_hard = bool(hard_mask[start_cell])
++        in_bottleneck = bool(bottleneck_mask[start_cell])
++        hard_flags.append(in_hard)
++        bottleneck_flags.append(in_bottleneck)
++        if in_hard:
++            hard_improvements.append(total_improve)
++            hard_one_step.append(one_step_improve)
++            hard_success_flags.append(bool(reached))
++        if in_bottleneck:
++            bottleneck_improvements.append(total_improve)
++            bottleneck_one_step.append(one_step_improve)
++            bottleneck_success_flags.append(bool(reached))
++
++    if not improvements:
++        return None
++
++    improvements = np.asarray(improvements, dtype=np.float64)
++    one_step_improvements = np.asarray(one_step_improvements, dtype=np.float64)
++    success_flags = np.asarray(success_flags, dtype=np.float64)
++
++    def _mean_if(values):
++        values = np.asarray(values, dtype=np.float64)
++        if len(values) == 0:
++            return np.nan
++        return float(np.nanmean(values))
++
++    def _frac_positive(values):
++        values = np.asarray(values, dtype=np.float64)
++        values = values[np.isfinite(values)]
++        if len(values) == 0:
++            return np.nan
++        return float(np.mean(values > 0))
++
++    def _frac_true(values):
++        if len(values) == 0:
++            return np.nan
++        return float(np.mean(np.asarray(values, dtype=np.float64)))
++
++    return dict(
++        policy_probe_count=int(len(improvements)),
++        policy_rollout_steps=int(rollout_steps),
++        policy_improve_mean=float(np.nanmean(improvements)),
++        policy_improve_frac=_frac_positive(improvements),
++        policy_one_step_improve_mean=float(np.nanmean(one_step_improvements)),
++        policy_one_step_improve_frac=_frac_positive(one_step_improvements),
++        policy_goal_reached_frac=float(np.mean(success_flags)),
++        hard_policy_probe_count=int(sum(hard_flags)),
++        hard_policy_improve_mean=_mean_if(hard_improvements),
++        hard_policy_improve_frac=_frac_positive(hard_improvements),
++        hard_policy_one_step_improve_mean=_mean_if(hard_one_step),
++        hard_policy_one_step_improve_frac=_frac_positive(hard_one_step),
++        hard_policy_goal_reached_frac=_frac_true(hard_success_flags),
++        bottleneck_policy_probe_count=int(sum(bottleneck_flags)),
++        bottleneck_policy_improve_mean=_mean_if(bottleneck_improvements),
++        bottleneck_policy_improve_frac=_frac_positive(bottleneck_improvements),
++        bottleneck_policy_one_step_improve_mean=_mean_if(bottleneck_one_step),
++        bottleneck_policy_one_step_improve_frac=_frac_positive(bottleneck_one_step),
++        bottleneck_policy_goal_reached_frac=_frac_true(bottleneck_success_flags),
++    )
++
++
++def _compute_policy_diagnostics_multi(
++    runtime,
++    probe_data,
++    goal,
++    goal_xy,
++    dist_grid,
++    structure,
++    seed,
++    rollout_steps_list,
++    policy_probe_limit,
++):
++    if not rollout_steps_list:
++        return None
++
++    merged = {}
++    raw_by_steps = {}
++    valid_steps = [int(step) for step in rollout_steps_list if int(step) > 0]
++    if not valid_steps:
++        return None
++
++    for step_count in valid_steps:
++        cur = _compute_policy_diagnostics(
++            runtime,
++            probe_data,
++            goal,
++            goal_xy,
++            dist_grid,
++            structure,
++            seed,
++            step_count,
++            policy_probe_limit,
++        )
++        if cur is None:
++            continue
++        raw_by_steps[int(step_count)] = cur
++        for key, value in cur.items():
++            if key == 'policy_rollout_steps':
++                continue
++            merged[f'{key}_s{int(step_count)}'] = value
++
++    if not raw_by_steps:
++        return None
++
++    if len(raw_by_steps) == 1:
++        only_step = next(iter(raw_by_steps))
++        merged.update(raw_by_steps[only_step])
++
++    merged['policy_rollout_steps_list'] = [int(step) for step in sorted(raw_by_steps)]
++    return dict(flat=merged, by_steps=raw_by_steps)
++
++
++def _compute_episode_success_diagnostics(runtime, probe_data, goal, goal_xy, dist_grid, structure, seed, episode_probe_limit):
++    if 'qpos' not in probe_data or probe_data.get('qvel') is None:
++        return None
++    qpos = np.asarray(probe_data['qpos'])
++    qvel = np.asarray(probe_data['qvel'])
++    if len(qpos) == 0:
++        return None
++
++    rng = np.random.RandomState(seed + 1777)
++    all_indices = np.arange(len(qpos))
++    if episode_probe_limit is not None and episode_probe_limit > 0 and len(all_indices) > episode_probe_limit:
++        probe_indices = rng.choice(all_indices, size=episode_probe_limit, replace=False)
++    else:
++        probe_indices = all_indices
++
++    region_masks = _region_metric_masks(dist_grid, structure, runtime['env'])
++    hard_mask = region_masks['hard_mask']
++    bottleneck_mask = region_masks['bottleneck_mask']
++    junction_mask = region_masks['junction_mask']
++    horizon = _max_episode_steps(runtime['env'])
++
++    successes = []
++    hard_successes = []
++    bottleneck_successes = []
++    junction_successes = []
++    for idx in probe_indices:
++        start_cell = tuple(probe_data['selected_cells'][int(idx)])
++        if not np.isfinite(dist_grid[start_cell]):
++            continue
++        try:
++            rollout = _rollout_from_state(runtime, qpos[idx], qvel[idx], goal, goal_xy, max_steps=horizon)
++        except Exception:
++            continue
++        success = bool(rollout['success'])
++        successes.append(success)
++        if hard_mask[start_cell]:
++            hard_successes.append(success)
++        if bottleneck_mask[start_cell]:
++            bottleneck_successes.append(success)
++        if junction_mask[start_cell]:
++            junction_successes.append(success)
++
++    def _frac(vals):
++        if len(vals) == 0:
++            return np.nan
++        return float(np.mean(np.asarray(vals, dtype=np.float64)))
++
++    if not successes:
++        return None
++    return dict(
++        episode_probe_count=int(len(successes)),
++        episode_rollout_steps=int(horizon),
++        episode_success_frac=_frac(successes),
++        hard_episode_probe_count=int(len(hard_successes)),
++        hard_episode_success_frac=_frac(hard_successes),
++        bottleneck_episode_probe_count=int(len(bottleneck_successes)),
++        bottleneck_episode_success_frac=_frac(bottleneck_successes),
++        junction_episode_probe_count=int(len(junction_successes)),
++        junction_episode_success_frac=_frac(junction_successes),
++    )
++
++
++def _compute_junction_decision_diagnostics(runtime, probe_data, goal, goal_xy, dist_grid, structure, seed, junction_probe_limit, junction_decision_steps):
++    if 'qpos' not in probe_data or probe_data.get('qvel') is None:
++        return None
++    qpos = np.asarray(probe_data['qpos'])
++    qvel = np.asarray(probe_data['qvel'])
++    if len(qpos) == 0:
++        return None
++
++    junction_mask = _region_metric_masks(dist_grid, structure, runtime['env'])['junction_mask']
++    candidate_indices = [
++        int(i)
++        for i, cell in enumerate(probe_data['selected_cells'])
++        if junction_mask[tuple(cell)] and np.isfinite(dist_grid[tuple(cell)])
++    ]
++    if not candidate_indices:
++        return None
++
++    rng = np.random.RandomState(seed + 2333)
++    if junction_probe_limit is not None and junction_probe_limit > 0 and len(candidate_indices) > junction_probe_limit:
++        candidate_indices = list(rng.choice(candidate_indices, size=junction_probe_limit, replace=False))
++
++    correct = []
++    improved = []
++    for idx in candidate_indices:
++        start_cell = tuple(probe_data['selected_cells'][int(idx)])
++        valid_successors = _shortest_path_successors(runtime['env'], start_cell, dist_grid)
++        if not valid_successors:
++            continue
++        try:
++            rollout = _rollout_from_state(
++                runtime,
++                qpos[idx],
++                qvel[idx],
++                goal,
++                goal_xy,
++                max_steps=max(1, int(junction_decision_steps)),
++            )
++        except Exception:
++            continue
++
++        end_cell = start_cell
++        for cell in rollout['visited_cells'][1:]:
++            if cell != start_cell:
++                end_cell = cell
++                break
++        correct.append(float(end_cell in valid_successors))
++        if 0 <= end_cell[0] < dist_grid.shape[0] and 0 <= end_cell[1] < dist_grid.shape[1] and np.isfinite(dist_grid[end_cell]):
++            improved.append(float(dist_grid[end_cell] < dist_grid[start_cell]))
++
++    if not correct:
++        return None
++    return dict(
++        junction_probe_count=int(len(correct)),
++        junction_decision_steps=int(max(1, int(junction_decision_steps))),
++        junction_correct_branch_frac=float(np.mean(np.asarray(correct, dtype=np.float64))),
++        junction_improve_frac=(
++            np.nan if not improved else float(np.mean(np.asarray(improved, dtype=np.float64)))
++        ),
++    )
++
++
++def _compute_reset_eval_diagnostics(
++    runtime,
++    task_id,
++    dist_grid,
++    structure,
++    seed,
++    reset_eval_episodes,
++    junction_decision_steps,
++):
++    if reset_eval_episodes is None or int(reset_eval_episodes) <= 0:
++        return None
++    env = runtime['env']
++    if not hasattr(env.unwrapped, 'get_xy') or not hasattr(env.unwrapped, 'xy_to_ij'):
++        return None
++
++    region_masks = _region_metric_masks(dist_grid, structure, env)
++    hard_mask = region_masks['hard_mask']
++    bottleneck_mask = region_masks['bottleneck_mask']
++    junction_mask = region_masks['junction_mask']
++    horizon = _max_episode_steps(env)
++
++    successes = []
++    hard_successes = []
++    bottleneck_successes = []
++    junction_successes = []
++    junction_correct = []
++    junction_improve = []
++
++    for episode_idx in range(int(reset_eval_episodes)):
++        try:
++            rollout = _rollout_from_reset(runtime, task_id, episode_idx, seed, max_steps=horizon)
++        except Exception:
++            continue
++
++        start_cell = rollout['start_cell']
++        if not (0 <= start_cell[0] < dist_grid.shape[0] and 0 <= start_cell[1] < dist_grid.shape[1]):
++            continue
++        if not np.isfinite(dist_grid[start_cell]):
++            continue
++
++        success = bool(rollout['success'])
++        successes.append(success)
++        if hard_mask[start_cell]:
++            hard_successes.append(success)
++        if bottleneck_mask[start_cell]:
++            bottleneck_successes.append(success)
++        if junction_mask[start_cell]:
++            junction_successes.append(success)
++            valid_successors = _shortest_path_successors(env, start_cell, dist_grid)
++            if valid_successors:
++                end_cell = start_cell
++                for cell in rollout['visited_cells'][1 : 1 + max(1, int(junction_decision_steps))]:
++                    if cell != start_cell:
++                        end_cell = cell
++                        break
++                junction_correct.append(float(end_cell in valid_successors))
++                if (
++                    0 <= end_cell[0] < dist_grid.shape[0]
++                    and 0 <= end_cell[1] < dist_grid.shape[1]
++                    and np.isfinite(dist_grid[end_cell])
++                ):
++                    junction_improve.append(float(dist_grid[end_cell] < dist_grid[start_cell]))
++
++    def _frac(vals):
++        if len(vals) == 0:
++            return np.nan
++        return float(np.mean(np.asarray(vals, dtype=np.float64)))
++
++    if not successes:
++        return None
++    return dict(
++        reset_eval_episode_count=int(len(successes)),
++        reset_eval_episode_steps=int(horizon),
++        reset_eval_success_frac=_frac(successes),
++        reset_eval_hard_episode_count=int(len(hard_successes)),
++        reset_eval_hard_success_frac=_frac(hard_successes),
++        reset_eval_bottleneck_episode_count=int(len(bottleneck_successes)),
++        reset_eval_bottleneck_success_frac=_frac(bottleneck_successes),
++        reset_eval_junction_episode_count=int(len(junction_successes)),
++        reset_eval_junction_success_frac=_frac(junction_successes),
++        reset_eval_junction_decision_steps=int(max(1, int(junction_decision_steps))),
++        reset_eval_junction_correct_branch_frac=_frac(junction_correct),
++        reset_eval_junction_improve_frac=_frac(junction_improve),
++    )
++
++
++def _plot_overview(results, output_path):
++    try:
++        import matplotlib.pyplot as plt
++    except Exception as exc:
++        print(f'Skipping figure generation because matplotlib is unavailable: {exc}')
++        return
++
++    max_cols = max(2 + len(result['iterations']) for result in results)
++    num_rows = 2 * len(results)
++    fig, axes = plt.subplots(
++        num_rows,
++        max_cols,
++        figsize=(3.9 * max_cols, 2.8 * num_rows),
++        squeeze=False,
++        constrained_layout=True,
++    )
++
++    all_grids = [grid for result in results for grid in result['value_grids'].values()]
++    delta_grids = [
++        delta
++        for result in results
++        for delta in result.get('delta_grids', {}).values()
++        if delta is not None and np.isfinite(delta).any()
++    ]
++    vmin = min(float(np.nanmin(grid)) for grid in all_grids if np.isfinite(grid).any())
++    vmax = max(float(np.nanmax(grid)) for grid in all_grids if np.isfinite(grid).any())
++    delta_abs = max(float(np.nanmax(np.abs(delta))) for delta in delta_grids) if delta_grids else 1.0
++
++    def _style_axis(ax):
++        ax.set_xticks([])
++        ax.set_yticks([])
++
++    def _plot_goal(ax, result):
++        goal_ij = result['goal_ij']
++        ax.scatter(goal_ij[1], goal_ij[0], marker='*', s=120, c='red', edgecolors='white', linewidths=0.7)
++
++    def _show(ax, grid, *, cmap, vmin=None, vmax=None):
++        return ax.imshow(np.ma.masked_invalid(grid), origin='lower', cmap=cmap, vmin=vmin, vmax=vmax)
++
++    for row, result in enumerate(results):
++        top_row = 2 * row
++        bottom_row = top_row + 1
++
++        ax = axes[top_row][0]
++        dist_im = _show(ax, -result['dist_grid'], cmap='magma')
++        _plot_goal(ax, result)
++        ax.set_title('Graph Dist')
++        ax.set_ylabel(f'{result["label"]}\nstep={result["step"]}')
++        _style_axis(ax)
++
++        ax = axes[top_row][1]
++        base_grid = np.where(np.asarray(result['maze_map']) == 0, 0.0, np.nan)
++        _show(ax, base_grid, cmap='Greys', vmin=0.0, vmax=1.0)
++        structure = result['structure']
++        dead_end_ys, dead_end_xs = np.where(structure['dead_end_grid'] > 0)
++        art_ys, art_xs = np.where(structure['articulation_grid'] > 0)
++        tin_ys, tin_xs = np.where(structure['teleport_in_grid'] > 0)
++        tout_ys, tout_xs = np.where(structure['teleport_out_grid'] > 0)
++        if len(dead_end_xs):
++            ax.scatter(dead_end_xs, dead_end_ys, marker='x', s=32, c='white', linewidths=1.0)
++        if len(art_xs):
++            ax.scatter(art_xs, art_ys, marker='o', s=40, facecolors='none', edgecolors='orange', linewidths=1.2)
++        if len(tin_xs):
++            ax.scatter(tin_xs, tin_ys, marker='s', s=42, facecolors='none', edgecolors='cyan', linewidths=1.2)
++        if len(tout_xs):
++            ax.scatter(tout_xs, tout_ys, marker='D', s=34, facecolors='none', edgecolors='lime', linewidths=1.2)
++        _plot_goal(ax, result)
++        ax.set_title('Structure')
++        _style_axis(ax)
++
++        ax = axes[bottom_row][0]
++        count_im = _show(ax, result['count_grid'], cmap='cividis')
++        ax.set_title('Probe Count')
++        _style_axis(ax)
++
++        ax = axes[bottom_row][1]
++        ax.axis('off')
++        structure_lines = ['orange=o bottleneck', 'white=x dead end', 'hard = farthest reachable third']
++        if np.any(result['structure']['teleport_in_grid'] > 0):
++            structure_lines.append('cyan=s teleport in')
++        if np.any(result['structure']['teleport_out_grid'] > 0):
++            structure_lines.append('lime=D teleport out')
++        policy_metrics_bundle = result.get('policy_metrics')
++        if policy_metrics_bundle is not None:
++            by_steps = policy_metrics_bundle.get('by_steps', {})
++            display_step = max(by_steps) if by_steps else None
++            policy_metrics = by_steps.get(display_step) if display_step is not None else None
++        else:
++            policy_metrics = None
++        if policy_metrics is not None:
++            structure_lines += [
++                '',
++                f'pol{display_step} d={policy_metrics["policy_improve_mean"]:.2f} succ={policy_metrics["policy_goal_reached_frac"]:.2f}',
++                f'hard d={policy_metrics["hard_policy_improve_mean"]:.2f} succ={policy_metrics["hard_policy_goal_reached_frac"]:.2f}',
++                f'bneck d={policy_metrics["bottleneck_policy_improve_mean"]:.2f} succ={policy_metrics["bottleneck_policy_goal_reached_frac"]:.2f}',
++            ]
++        episode_metrics = result.get('episode_metrics')
++        if episode_metrics is not None:
++            structure_lines += [
++                '',
++                f'ep succ={episode_metrics["episode_success_frac"]:.2f}',
++                f'ep hard={episode_metrics["hard_episode_success_frac"]:.2f}',
++                f'ep bneck={episode_metrics["bottleneck_episode_success_frac"]:.2f}',
++            ]
++        junction_metrics = result.get('junction_metrics')
++        if junction_metrics is not None:
++            structure_lines += [
++                '',
++                f'junc corr={junction_metrics["junction_correct_branch_frac"]:.2f}',
++                f'junc imp={junction_metrics["junction_improve_frac"]:.2f}',
++            ]
++        reset_eval_metrics = result.get('reset_eval_metrics')
++        if reset_eval_metrics is not None:
++            structure_lines += [
++                '',
++                f'eval succ={reset_eval_metrics["reset_eval_success_frac"]:.2f}',
++                f'eval hard={reset_eval_metrics["reset_eval_hard_success_frac"]:.2f}',
++                f'eval bneck={reset_eval_metrics["reset_eval_bottleneck_success_frac"]:.2f}',
++                f'eval junc={reset_eval_metrics["reset_eval_junction_success_frac"]:.2f}',
++                f'eval jc={reset_eval_metrics["reset_eval_junction_correct_branch_frac"]:.2f}',
++            ]
++        ax.text(0.03, 0.95, '\n'.join(structure_lines), va='top', ha='left', fontsize=9)
++
++        for idx in range(max_cols - 2):
++            top_ax = axes[top_row][idx + 2]
++            bottom_ax = axes[bottom_row][idx + 2]
++            if idx >= len(result['iterations']):
++                top_ax.axis('off')
++                bottom_ax.axis('off')
++                continue
++            k = result['iterations'][idx]
++            value_grid = result['value_grids'][k]
++            im = _show(top_ax, value_grid, cmap='viridis', vmin=vmin, vmax=vmax)
++            _plot_goal(top_ax, result)
++            metric = result['metrics'][k]
++            title = 'MLP' if k is None else f'k={k}'
++            top_ax.set_title(
++                f'{title}\n'
++                f'r={metric["graph_corr"]:.3f} rho={metric["graph_spearman"]:.3f}\n'
++                f'hard={metric["hard_graph_corr"]:.3f} bneck={metric["bottleneck_graph_corr"]:.3f}'
++            )
++            _style_axis(top_ax)
++
++            delta_grid = result['delta_grids'].get(k)
++            if delta_grid is None:
++                bottom_ax.axis('off')
++            else:
++                delta_im = _show(bottom_ax, delta_grid, cmap='coolwarm', vmin=-delta_abs, vmax=delta_abs)
++                _plot_goal(bottom_ax, result)
++                bottom_ax.set_title(f'Delta k={k}\n|dV|={float(np.nanmean(np.abs(delta_grid))):.2f}')
++                _style_axis(bottom_ax)
++
++    fig.colorbar(im, ax=axes[:, 2:].ravel().tolist(), shrink=0.8, label='V(s, g)')
++    if delta_grids:
++        fig.colorbar(delta_im, ax=axes[1::2, 2:].ravel().tolist(), shrink=0.7, label='Delta V(s, g)')
++    fig.colorbar(dist_im, ax=[axes[r][0] for r in range(0, num_rows, 2)], shrink=0.7, label='-graph distance')
++    fig.colorbar(count_im, ax=[axes[r][0] for r in range(1, num_rows, 2)], shrink=0.7, label='probe count')
++    fig.savefig(output_path, dpi=200)
++    plt.close(fig)
++
++
++def main():
++    parser = argparse.ArgumentParser(
++        description='Probe HIQL value geometry over maze cells, recurrent iterations, and checkpoints.'
++    )
++    parser.add_argument(
++        '--run_dir',
++        action='append',
++        required=True,
++        help='Run directory containing flags.json and params_*.pkl. Repeat for multiple runs.',
++    )
++    parser.add_argument(
++        '--epochs',
++        type=str,
++        default='',
++        help='Comma/colon/space-separated checkpoint steps to evaluate for each run. Empty = latest only.',
++    )
++    parser.add_argument('--task_id', type=int, default=None, help='Single task id used to define the fixed goal.')
++    parser.add_argument(
++        '--task_ids',
++        type=str,
++        default='',
++        help='Optional comma/colon/space-separated task ids. If unset, uses --task_id when provided, else all env tasks.',
++    )
++    parser.add_argument(
++        '--dataset_split',
++        choices=['train', 'val'],
++        default='train',
++        help='Dataset split used for dataset-backed geometry probes.',
++    )
++    parser.add_argument(
++        '--probe_mode',
++        choices=['auto', 'dataset', 'exact'],
++        default='auto',
++        help='Probe state source. exact is intended for non-stacked pointmaze runs.',
++    )
++    parser.add_argument(
++        '--exact_pointmaze',
++        action='store_true',
++        help='Allow exact free-cell probes for pointmaze in auto mode. Otherwise auto uses dataset probes.',
++    )
++    parser.add_argument(
++        '--iters',
++        type=str,
++        default='',
++        help='Optional iteration subset for recurrent values, e.g. "1,2,4". Empty = all trained iterations.',
++    )
++    parser.add_argument('--batch_size', type=int, default=4096, help='Batch size for value evaluation.')
++    parser.add_argument(
++        '--max_states_per_cell',
++        type=int,
++        default=64,
++        help='Dataset mode only: cap the number of states averaged per maze cell.',
++    )
++    parser.add_argument(
++        '--policy_rollout_steps',
++        type=str,
++        default='10',
++        help='Comma/colon/space-separated deterministic policy rollout horizons, e.g. "25,50". Use 0 or empty to disable.',
++    )
++    parser.add_argument(
++        '--policy_probe_limit',
++        type=int,
++        default=256,
++        help='Maximum number of probe states used for actor rollout diagnostics.',
++    )
++    parser.add_argument(
++        '--episode_probe_limit',
++        type=int,
++        default=64,
++        help='Maximum number of probe states used for full-episode success diagnostics.',
++    )
++    parser.add_argument(
++        '--junction_probe_limit',
++        type=int,
++        default=128,
++        help='Maximum number of probe states used for junction-decision diagnostics.',
++    )
++    parser.add_argument(
++        '--junction_decision_steps',
++        type=int,
++        default=5,
++        help='Number of steps allowed when evaluating the first branch choice at a junction.',
++    )
++    parser.add_argument(
++        '--reset_eval_episodes',
++        type=int,
++        default=50,
++        help='Number of real eval-style reset episodes used for reset-conditioned success and junction diagnostics.',
++    )
++    parser.add_argument('--seed', type=int, default=0, help='Seed for probe subsampling and deterministic goal reset.')
++    parser.add_argument(
++        '--output_dir',
++        type=str,
++        default='exp/value_geometry',
++        help='Directory for npz dumps, summary JSON, and overview figures.',
++    )
++    args = parser.parse_args()
++
++    requested_epochs = _parse_int_list(args.epochs)
++    requested_iters = _parse_int_list(args.iters)
++    requested_policy_rollout_steps = _parse_int_list(args.policy_rollout_steps)
++    os.makedirs(args.output_dir, exist_ok=True)
++
++    results = []
++    summary_rows = []
++    canonical_env_name = None
++    task_overview_results = defaultdict(list)
++
++    for run_dir in args.run_dir:
++        label = os.path.basename(os.path.normpath(run_dir))
++        epochs = requested_epochs
++        if not epochs:
++            epochs = [None]
++
++        for epoch in epochs:
++            checkpoint_path, resolved_run_dir, step = _resolve_checkpoint(run_dir, epoch)
++            runtime = _build_runtime(resolved_run_dir, checkpoint_path)
++
++            if canonical_env_name is None:
++                canonical_env_name = runtime['env_name']
++            elif canonical_env_name != runtime['env_name']:
++                raise ValueError(
++                    f'All runs must use the same env_name. Saw {canonical_env_name!r} and {runtime["env_name"]!r}.'
++                )
++
++            task_ids = _parse_task_ids(args.task_id, args.task_ids, runtime['env'])
++            iterations = _value_iterations(runtime['config'], requested_iters)
++            probe_mode = _select_probe_mode(args, runtime)
++            if probe_mode == 'exact':
++                probe_data = _exact_pointmaze_probes(runtime)
++            else:
++                probe_data = _dataset_probes(runtime, args.dataset_split, args.max_states_per_cell, args.seed)
++
++            task_infos = getattr(runtime['env'].unwrapped, 'task_infos', None)
++
++            for task_id in task_ids:
++                goal, goal_xy = _get_goal(runtime['env'], task_id, args.seed)
++                goal_ij = tuple(map(int, runtime['env'].unwrapped.xy_to_ij(goal_xy)))
++                values_by_iter = _batched_value_eval(
++                    runtime['agent'],
++                    probe_data['observations'],
++                    goal,
++                    iterations,
++                    batch_size=args.batch_size,
++                )
++                dist_grid = _shortest_path_grid(runtime['env'], goal_ij)
++                structure = _structural_overlay(runtime['env'])
++                value_grids = {}
++                delta_grids = {}
++                metrics = {}
++                task_name = None
++                if task_infos is not None and 1 <= task_id <= len(task_infos):
++                    task_name = task_infos[task_id - 1].get('task_name')
++                dump_dict = {
++                    'maze_map': np.asarray(runtime['env'].unwrapped.maze_map),
++                    'goal_xy': goal_xy.astype(np.float32),
++                    'goal_ij': np.asarray(goal_ij, dtype=np.int32),
++                    'count_grid': np.asarray(probe_data['count_grid'], dtype=np.float32),
++                    'distance_grid': dist_grid.astype(np.float32),
++                    'articulation_grid': structure['articulation_grid'].astype(np.float32),
++                    'dead_end_grid': structure['dead_end_grid'].astype(np.float32),
++                    'teleport_in_grid': structure['teleport_in_grid'].astype(np.float32),
++                    'teleport_out_grid': structure['teleport_out_grid'].astype(np.float32),
++                    'step': np.asarray([step], dtype=np.int32),
++                    'task_id': np.asarray([task_id], dtype=np.int32),
++                }
++                policy_metrics = _compute_policy_diagnostics_multi(
++                    runtime,
++                    probe_data,
++                    goal,
++                    goal_xy,
++                    dist_grid,
++                    structure,
++                    args.seed,
++                    requested_policy_rollout_steps,
++                    args.policy_probe_limit,
++                )
++                if policy_metrics is not None:
++                    for key, value in policy_metrics['flat'].items():
++                        if key == 'policy_rollout_steps_list':
++                            dump_dict[key] = np.asarray(value, dtype=np.int32)
++                        else:
++                            dump_dict[key] = np.asarray([value], dtype=np.float32)
++                episode_metrics = _compute_episode_success_diagnostics(
++                    runtime,
++                    probe_data,
++                    goal,
++                    goal_xy,
++                    dist_grid,
++                    structure,
++                    args.seed,
++                    args.episode_probe_limit,
++                )
++                if episode_metrics is not None:
++                    for key, value in episode_metrics.items():
++                        dump_dict[key] = np.asarray([value], dtype=np.float32)
++                junction_metrics = _compute_junction_decision_diagnostics(
++                    runtime,
++                    probe_data,
++                    goal,
++                    goal_xy,
++                    dist_grid,
++                    structure,
++                    args.seed,
++                    args.junction_probe_limit,
++                    args.junction_decision_steps,
++                )
++                if junction_metrics is not None:
++                    for key, value in junction_metrics.items():
++                        dump_dict[key] = np.asarray([value], dtype=np.float32)
++                reset_eval_metrics = _compute_reset_eval_diagnostics(
++                    runtime,
++                    task_id,
++                    dist_grid,
++                    structure,
++                    args.seed,
++                    args.reset_eval_episodes,
++                    args.junction_decision_steps,
++                )
++                if reset_eval_metrics is not None:
++                    for key, value in reset_eval_metrics.items():
++                        dump_dict[key] = np.asarray([value], dtype=np.float32)
++
++                prev_value_grid = None
++                for k in iterations:
++                    value_grid = _aggregate_to_grid(runtime['env'], values_by_iter[k], probe_data)
++                    value_grids[k] = value_grid
++                    delta_grid = None if prev_value_grid is None else (value_grid - prev_value_grid)
++                    delta_grids[k] = delta_grid
++                    metrics[k] = _summarize_grid(value_grid, dist_grid, structure, runtime['env'])
++                    key = 'value_mlp' if k is None else f'value_step_{int(k)}'
++                    dump_dict[key] = value_grid.astype(np.float32)
++                    if delta_grid is not None:
++                        dump_dict[f'delta_step_{int(k)}'] = delta_grid.astype(np.float32)
++                    dump_dict[f'hard_mask_{"mlp" if k is None else int(k)}'] = metrics[k]['hard_mask'].astype(np.float32)
++                    dump_dict[f'bottleneck_mask_{"mlp" if k is None else int(k)}'] = metrics[k][
++                        'bottleneck_mask'
++                    ].astype(np.float32)
++                    summary_rows.append(
++                        dict(
++                            label=label,
++                            run_dir=resolved_run_dir,
++                            env_name=runtime['env_name'],
++                            step=int(step),
++                            task_id=int(task_id),
++                            task_name=task_name,
++                            probe_mode=probe_mode,
++                            dataset_split=args.dataset_split,
++                            iteration=('mlp' if k is None else int(k)),
++                            graph_corr=metrics[k]['graph_corr'],
++                            graph_spearman=metrics[k]['graph_spearman'],
++                            hard_threshold=metrics[k]['hard_threshold'],
++                            hard_count=metrics[k]['hard_count'],
++                            hard_graph_corr=metrics[k]['hard_graph_corr'],
++                            hard_graph_spearman=metrics[k]['hard_graph_spearman'],
++                            bottleneck_count=metrics[k]['bottleneck_count'],
++                            bottleneck_graph_corr=metrics[k]['bottleneck_graph_corr'],
++                            bottleneck_graph_spearman=metrics[k]['bottleneck_graph_spearman'],
++                            value_mean=metrics[k]['value_mean'],
++                            value_std=metrics[k]['value_std'],
++                            delta_mean_abs=(None if delta_grid is None else float(np.nanmean(np.abs(delta_grid)))),
++                            **({} if policy_metrics is None else policy_metrics['flat']),
++                            **({} if episode_metrics is None else episode_metrics),
++                            **({} if junction_metrics is None else junction_metrics),
++                            **({} if reset_eval_metrics is None else reset_eval_metrics),
++                        )
++                    )
++                    prev_value_grid = value_grid
++
++                out_prefix = f'{_slugify(label)}_step_{step:09d}_task_{int(task_id):02d}'
++                np.savez_compressed(os.path.join(args.output_dir, f'{out_prefix}.npz'), **dump_dict)
++                result = dict(
++                    label=label,
++                    step=int(step),
++                    checkpoint_path=checkpoint_path,
++                    iterations=iterations,
++                    value_grids=value_grids,
++                    delta_grids=delta_grids,
++                    metrics=metrics,
++                    goal_xy=goal_xy,
++                    goal_ij=goal_ij,
++                    probe_mode=probe_mode,
++                    task_id=int(task_id),
++                    task_name=task_name,
++                    dist_grid=dist_grid,
++                    count_grid=np.asarray(probe_data['count_grid'], dtype=np.float32),
++                    structure=structure,
++                    maze_map=np.asarray(runtime['env'].unwrapped.maze_map),
++                    policy_metrics=policy_metrics,
++                    episode_metrics=episode_metrics,
++                    junction_metrics=junction_metrics,
++                    reset_eval_metrics=reset_eval_metrics,
++                )
++                results.append(result)
++                task_overview_results[int(task_id)].append(result)
++
++    summary_path = os.path.join(args.output_dir, 'summary.json')
++    with open(summary_path, 'w') as f:
++        json.dump(summary_rows, f, indent=2)
++
++    for task_id, task_results in sorted(task_overview_results.items()):
++        overview_path = os.path.join(args.output_dir, f'overview_task_{int(task_id):02d}.png')
++        _plot_overview(task_results, overview_path)
++
++    print(f'Wrote {len(results)} probe dumps to {args.output_dir}')
++    print(f'Summary: {summary_path}')
++
++
++if __name__ == '__main__':
++    main()
 diff --git a/impls/main.py b/impls/main.py
 index 3660e03..7610084 100644
 --- a/impls/main.py
@@ -3097,7 +4661,7 @@ index 9c421dd..3da1eab 100644
  
      return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..06fd691 100644
+index 4ee2b26..0de82b6 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
 @@ -6,6 +6,8 @@ import flax.linen as nn
@@ -3109,7 +4673,7 @@ index 4ee2b26..06fd691 100644
  
  def default_init(scale=1.0):
      """Default kernel initializer."""
-@@ -60,6 +62,498 @@ class MLP(nn.Module):
+@@ -60,6 +62,314 @@ class MLP(nn.Module):
          return x
  
  
@@ -3118,7 +4682,7 @@ index 4ee2b26..06fd691 100644
 +    layer_norm: bool = True
 +    layerscale_init: float = 1e-2
 +    use_film: bool = False
-+    activations: Any = nn.silu
++    activations: Any = nn.gelu
 +
 +    @nn.compact
 +    def __call__(self, h, step_embed=None):
@@ -3149,7 +4713,7 @@ index 4ee2b26..06fd691 100644
 +    layer_norm: bool = True
 +    layerscale_init: float = 1e-2
 +    use_film: bool = False
-+    activations: Any = nn.silu
++    activations: Any = nn.gelu
 +
 +    @nn.compact
 +    def __call__(self, x):
@@ -3174,48 +4738,12 @@ index 4ee2b26..06fd691 100644
 +        return nn.Dense(self.out_dim)(h)
 +
 +
-+class ResidualDenseBackbone(nn.Module):
-+    hidden_dim: int
-+    out_dim: int
-+    num_dense_layers: int
-+    residual_span: int = 4
-+    activations: Any = nn.silu
-+    use_residual: bool = True
-+
-+    @nn.compact
-+    def __call__(self, x):
-+        num_dense_layers = int(self.num_dense_layers)
-+        residual_span = int(self.residual_span)
-+        if num_dense_layers <= 0:
-+            raise ValueError(f'num_dense_layers must be positive. Got {num_dense_layers}.')
-+        if residual_span <= 0:
-+            raise ValueError(f'residual_span must be positive. Got {residual_span}.')
-+
-+        h = nn.Dense(self.hidden_dim, name='input_proj')(x)
-+        branch = h
-+        residual = h
-+
-+        for layer_index in range(num_dense_layers):
-+            branch = nn.Dense(self.hidden_dim, name=f'resid_dense_{layer_index + 1}')(branch)
-+            branch = nn.LayerNorm(name=f'resid_ln_{layer_index + 1}')(branch)
-+            branch = self.activations(branch)
-+
-+            is_span_end = (layer_index + 1) % residual_span == 0
-+            is_last_layer = layer_index + 1 == num_dense_layers
-+            if is_span_end or is_last_layer:
-+                h = residual + branch if self.use_residual else branch
-+                residual = h
-+                branch = h
-+
-+        return nn.Dense(self.out_dim, name='output_proj')(h)
-+
-+
 +class PreNormResidualDenseBlock(nn.Module):
 +    hidden_dim: int
 +    num_layers: int = 4
 +    use_inner_layer_norm: bool = True
 +    norm_mode: str = 'pre_block'
-+    activations: Any = nn.silu
++    activations: Any = nn.gelu
 +
 +    @nn.compact
 +    def __call__(self, h):
@@ -3246,7 +4774,7 @@ index 4ee2b26..06fd691 100644
 +    block_num_layers: int = 4
 +    use_inner_layer_norm: bool = True
 +    norm_mode: str = 'pre_block'
-+    activations: Any = nn.silu
++    activations: Any = nn.gelu
 +
 +    @nn.compact
 +    def __call__(self, x):
@@ -3284,7 +4812,7 @@ index 4ee2b26..06fd691 100644
 +    use_act: bool = False
 +    act_epsilon: float = 0.01
 +    act_min_iters: int = 1
-+    activations: Any = nn.silu
++    activations: Any = nn.gelu
 +
 +    @nn.compact
 +    def __call__(self, x, num_iters=None, return_aux=False, context=None):
@@ -3457,158 +4985,10 @@ index 4ee2b26..06fd691 100644
 +        return outputs
 +
 +
-+class PartiallyTiedBackbone(nn.Module):
-+    """Partially-tied recurrent backbone.
-+
-+    Structure: split total unroll steps into `num_groups` groups, each group has its own MLP block
-+    (untied across groups) but the block is reused for `iters_per_group` iterations within the group.
-+
-+    Total iterations = num_groups * iters_per_group.
-+    """
-+
-+    hidden_dim: int
-+    out_dim: int
-+    num_groups: int
-+    iters_per_group: int
-+    max_iters: int = 16
-+    layer_norm: bool = True
-+    tied_layer_norm: bool = True
-+    per_group_film: bool = False
-+    use_sinusoidal_step_encoding: bool = False
-+    cycle_step_params: bool = True
-+    block_schedule: str = 'grouped'  # 'grouped' (default) | 'stack'
-+    layerscale_init: float = 1e-2
-+    activations: Any = nn.silu
-+
-+    @nn.compact
-+    def __call__(self, x, num_iters=None):
-+        num_groups = int(self.num_groups)
-+        iters_per_group = int(self.iters_per_group)
-+        if num_groups <= 0 or iters_per_group <= 0:
-+            raise ValueError(f'num_groups and iters_per_group must be positive. Got num_groups={num_groups} iters_per_group={iters_per_group}')
-+
-+        total_iters = num_groups * iters_per_group
-+        iters = total_iters if num_iters is None else int(num_iters)
-+        if self.block_schedule not in ('grouped', 'stack'):
-+            raise ValueError(f"Unsupported block_schedule={self.block_schedule!r}. Use 'grouped' or 'stack'.")
-+
-+        # For 'grouped', step-dependent parameters are indexed by unroll step k (0..total_iters-1),
-+        # so we need total_iters <= max_iters.
-+        #
-+        # For 'stack', this backbone represents a stack of `num_groups` blocks iterated for
-+        # `iters_per_group` outer steps (Universal Transformer style). Step-dependent parameters are
-+        # indexed by outer step t (0..iters_per_group-1), so we need iters_per_group <= max_iters.
-+        if self.block_schedule == 'grouped':
-+            if total_iters > self.max_iters:
-+                raise ValueError(f'total_iters={total_iters} exceeds max_iters={self.max_iters} for block_schedule=grouped')
-+            max_allowed_iters = self.max_iters
-+        else:  # 'stack'
-+            if iters_per_group > self.max_iters:
-+                raise ValueError(
-+                    f'iters_per_group={iters_per_group} exceeds max_iters={self.max_iters} for block_schedule=stack'
-+                )
-+            # In stack mode, total unroll steps can exceed max_iters because step params are per outer step.
-+            max_allowed_iters = num_groups * self.max_iters
-+
-+        # Allow optional test-time scaling beyond training steps. 'cycle_step_params' ensures we do not
-+        # introduce new learned per-step parameters beyond training.
-+        if iters > max_allowed_iters:
-+            raise ValueError(f'num_iters={iters} exceeds supported maximum {max_allowed_iters} for block_schedule={self.block_schedule}')
-+
-+        h = nn.Dense(self.hidden_dim)(x)
-+
-+        # Step embeddings: discrete lookup table OR continuous sinusoidal encoding.
-+        if not self.use_sinusoidal_step_encoding:
-+            step_embed = self.param(
-+                'step_embed',
-+                nn.initializers.normal(stddev=0.02),
-+                (self.max_iters, self.hidden_dim),
-+            )
-+        else:
-+            step_embed = None
-+
-+        alpha = self.param('alpha', nn.initializers.constant(self.layerscale_init), (self.max_iters,))
-+
-+        # FiLM conditioning: either shared across groups or per-group (untied per group).
-+        if self.per_group_film:
-+            film_fc1_step = [
-+                nn.Dense(self.hidden_dim, use_bias=False, name=f"g{g}_film_fc1_step") for g in range(int(self.num_groups))
-+            ]
-+            film_fc1_h = [nn.Dense(self.hidden_dim, name=f"g{g}_film_fc1_h") for g in range(int(self.num_groups))]
-+            film_fc2 = [nn.Dense(2 * self.hidden_dim, name=f"g{g}_film_fc2") for g in range(int(self.num_groups))]
-+            if step_embed is not None:
-+                step_contributions = [film_fc1_step[g](step_embed) for g in range(int(self.num_groups))]
-+            else:
-+                step_contributions = None
-+        else:
-+            film_fc1_step = nn.Dense(self.hidden_dim, use_bias=False)
-+            film_fc1_h = nn.Dense(self.hidden_dim)
-+            film_fc2 = nn.Dense(2 * self.hidden_dim)
-+            step_contributions = film_fc1_step(step_embed) if step_embed is not None else None  # (max_iters, hidden_dim)
-+
-+        # Group-specific (partially untied) MLP blocks.
-+        group_fc1 = [nn.Dense(self.hidden_dim, name=f'group{g}_fc1') for g in range(int(self.num_groups))]
-+        group_fc2 = [nn.Dense(self.hidden_dim, name=f'group{g}_fc2') for g in range(int(self.num_groups))]
-+
-+        ln = None
-+        lns = None
-+        if self.layer_norm:
-+            if self.tied_layer_norm:
-+                ln = nn.LayerNorm(name='ln')
-+            else:
-+                lns = [nn.LayerNorm(name=f'LayerNorm_{k}') for k in range(int(self.max_iters))]
-+
-+        for k in range(iters):
-+            h1 = h
-+            if self.layer_norm:
-+                if ln is not None:
-+                    h1 = ln(h1)
-+                else:
-+                    if self.block_schedule == 'grouped':
-+                        step_idx = (k % total_iters) if self.cycle_step_params else k
-+                    else:
-+                        # Stack mode: t = outer iteration index.
-+                        t = k // num_groups
-+                        step_idx = (t % iters_per_group) if self.cycle_step_params else t
-+                    h1 = lns[step_idx](h1)
-+
-+            if self.block_schedule == 'grouped':
-+                # "Chunked" schedule: apply group g for iters_per_group consecutive steps, then move to g+1.
-+                g = (k // iters_per_group) % num_groups
-+                k_param = (k % total_iters) if self.cycle_step_params else k
-+                step_for_encoding = k  # keep legacy behavior (per-step encoding)
-+            else:
-+                # Universal Transformer schedule: apply the stack of blocks in order, then repeat the stack.
-+                g = k % num_groups
-+                t = k // num_groups
-+                k_param = (t % iters_per_group) if self.cycle_step_params else t
-+                step_for_encoding = t  # step encoding matches outer iteration
-+
-+            if self.use_sinusoidal_step_encoding:
-+                step_emb_k = sinusoidal_step_encoding(step_for_encoding, self.max_iters, self.hidden_dim)
-+                step_contrib = film_fc1_step[g](step_emb_k) if self.per_group_film else film_fc1_step(step_emb_k)
-+            else:
-+                step_contrib = step_contributions[g][k_param] if self.per_group_film else step_contributions[k_param]
-+
-+            if self.per_group_film:
-+                fc1_out = step_contrib + film_fc1_h[g](h1)
-+                film = film_fc2[g](self.activations(fc1_out))
-+            else:
-+                fc1_out = step_contrib + film_fc1_h(h1)
-+                film = film_fc2(self.activations(fc1_out))
-+            gamma, beta = jnp.split(film, 2, axis=-1)
-+            h_film = (1.0 + gamma) * h1 + beta
-+
-+            u = group_fc2[g](self.activations(group_fc1[g](h_film)))
-+            h = h + alpha[k_param] * u
-+
-+        return nn.Dense(self.out_dim)(h)
-+
-+
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -164,6 +658,7 @@ class GCActor(nn.Module):
+@@ -164,6 +474,7 @@ class GCActor(nn.Module):
      const_std: bool = True
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -3616,7 +4996,7 @@ index 4ee2b26..06fd691 100644
  
      def setup(self):
          self.actor_net = MLP(self.hidden_dims, activate_final=True)
-@@ -230,6 +725,7 @@ class GCDiscreteActor(nn.Module):
+@@ -230,6 +541,7 @@ class GCDiscreteActor(nn.Module):
      action_dim: int
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -3624,7 +5004,7 @@ index 4ee2b26..06fd691 100644
  
      def setup(self):
          self.actor_net = MLP(self.hidden_dims, activate_final=True)
-@@ -282,14 +778,22 @@ class GCValue(nn.Module):
+@@ -282,14 +594,22 @@ class GCValue(nn.Module):
      layer_norm: bool = True
      ensemble: bool = True
      gc_encoder: nn.Module = None
@@ -3652,7 +5032,7 @@ index 4ee2b26..06fd691 100644
  
      def __call__(self, observations, goals=None, actions=None):
          """Return the value/critic function.
-@@ -314,6 +818,69 @@ class GCValue(nn.Module):
+@@ -314,6 +634,69 @@ class GCValue(nn.Module):
          return v
  
  
@@ -3722,7 +5102,7 @@ index 4ee2b26..06fd691 100644
  class GCDiscreteCritic(GCValue):
      """Goal-conditioned critic for discrete actions."""
  
-@@ -347,16 +914,79 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +730,79 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
@@ -3807,7 +5187,7 @@ index 4ee2b26..06fd691 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +994,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +810,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -3815,7 +5195,7 @@ index 4ee2b26..06fd691 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,16 +1006,38 @@ class GCBilinearValue(nn.Module):
+@@ -375,16 +822,38 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
@@ -3856,7 +5236,7 @@ index 4ee2b26..06fd691 100644
          else:
              return v
  
-@@ -394,9 +1047,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+@@ -394,9 +863,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
  
      action_dim: int = None
  
@@ -3868,7 +5248,7 @@ index 4ee2b26..06fd691 100644
  
  
  class GCMRNValue(nn.Module):
-@@ -416,9 +1069,50 @@ class GCMRNValue(nn.Module):
+@@ -416,9 +885,50 @@ class GCMRNValue(nn.Module):
      latent_dim: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -3920,7 +5300,7 @@ index 4ee2b26..06fd691 100644
  
      def __call__(self, observations, goals, is_phi=False, info=False):
          """Return the MRN value function.
-@@ -436,8 +1130,12 @@ class GCMRNValue(nn.Module):
+@@ -436,8 +946,12 @@ class GCMRNValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)
@@ -3935,7 +5315,7 @@ index 4ee2b26..06fd691 100644
  
          sym_s = phi_s[..., : self.latent_dim // 2]
          sym_g = phi_g[..., : self.latent_dim // 2]
-@@ -471,9 +1169,50 @@ class GCIQEValue(nn.Module):
+@@ -471,9 +985,50 @@ class GCIQEValue(nn.Module):
      dim_per_component: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -3987,7 +5367,7 @@ index 4ee2b26..06fd691 100644
          self.alpha = Param()
  
      def __call__(self, observations, goals, is_phi=False, info=False):
-@@ -493,8 +1232,12 @@ class GCIQEValue(nn.Module):
+@@ -493,8 +1048,12 @@ class GCIQEValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)

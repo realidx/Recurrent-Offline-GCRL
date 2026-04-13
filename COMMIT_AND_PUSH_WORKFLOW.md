@@ -105,7 +105,7 @@ git add patches/ogbench_impls.patch
 git add <outer repo files you actually want to commit>
 
 git commit -m "Describe the full change"
-git push origin phase-4
+git push
 ```
 
 

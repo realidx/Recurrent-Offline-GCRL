@@ -1,0 +1,199 @@
+# Algorithm Hyperparameters Reference
+
+This file summarizes non-model hyperparameters only.
+
+Included:
+
+- optimization / RL knobs such as `discount`, `tau`, `expectile`, `alpha`
+- goal-sampling probabilities such as `actor_p_*` and `value_p_*`
+- algorithm behavior flags such as `gc_negative`, `value_geom_sample`, `actor_geom_sample`
+
+Excluded:
+
+- architecture and model-shape knobs such as `KTRAIN`, recurrent depth, hidden dims, backbone choice, and layer counts
+
+Source policy:
+
+- `CRL` and `HIQL` antmaze task rows are derived from OGBench third-party benchmark entries in [third_party/ogbench/impls/hyperparameters.sh](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/hyperparameters.sh), plus the corresponding agent defaults in [third_party/ogbench/impls/agents/crl.py](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/agents/crl.py) and [third_party/ogbench/impls/agents/hiql.py](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/agents/hiql.py).
+- `CGIVL` / `CGCIVL` values below are taken from the paper appendix in [references/CGCIVL.pdf](/Users/bruce/Recurrent-Offline-RL/references/CGCIVL.pdf), the authors' README example in [third_party/CGCIVL/readme.md](/Users/bruce/Recurrent-Offline-RL/third_party/CGCIVL/readme.md), and the authors' agent defaults in [third_party/CGCIVL/impls/agents/cgivl.py](/Users/bruce/Recurrent-Offline-RL/third_party/CGCIVL/impls/agents/cgivl.py). Where the paper gives only task-family rules rather than per-task commands, those rows are marked as default-backed or inferred from the published rule.
+- `SAW` is not part of the OGBench third-party benchmark table in this repo. Its values below are local worktree defaults from [slurm/train_saw_array.slurm](/Users/bruce/Recurrent-Offline-RL/slurm/train_saw_array.slurm) and [third_party/ogbench/impls/agents/saw.py](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/agents/saw.py).
+
+## CRL
+
+Shared non-model defaults from [crl.py](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/agents/crl.py#L468):
+
+- `lr=3e-4`
+- `batch_size=1024`
+- `actor_loss=ddpgbc`
+- `const_std=True`
+- `value_p_curgoal=0.0`
+- `value_p_trajgoal=1.0`
+- `value_p_randomgoal=0.0`
+- `value_geom_sample=True`
+- `actor_geom_sample=False`
+- `gc_negative=False`
+- `p_aug=0.0`
+
+Effective antmaze locomotion hyperparameters:
+
+| Task | alpha | discount | actor_p_curgoal | actor_p_trajgoal | actor_p_randomgoal | value_p_curgoal | value_p_trajgoal | value_p_randomgoal |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `antmaze-medium-navigate-v0` | `0.1` | `0.99` | `0.0` | `1.0` | `0.0` | `0.0` | `1.0` | `0.0` |
+| `antmaze-large-navigate-v0` | `0.1` | `0.99` | `0.0` | `1.0` | `0.0` | `0.0` | `1.0` | `0.0` |
+| `antmaze-giant-navigate-v0` | `0.1` | `0.995` | `0.0` | `1.0` | `0.0` | `0.0` | `1.0` | `0.0` |
+| `antmaze-teleport-navigate-v0` | `0.1` | `0.99` | `0.0` | `1.0` | `0.0` | `0.0` | `1.0` | `0.0` |
+| `antmaze-medium-stitch-v0` | `0.1` | `0.99` | `0.0` | `0.5` | `0.5` | `0.0` | `1.0` | `0.0` |
+| `antmaze-large-stitch-v0` | `0.1` | `0.99` | `0.0` | `0.5` | `0.5` | `0.0` | `1.0` | `0.0` |
+| `antmaze-giant-stitch-v0` | `0.1` | `0.995` | `0.0` | `0.5` | `0.5` | `0.0` | `1.0` | `0.0` |
+| `antmaze-teleport-stitch-v0` | `0.1` | `0.99` | `0.0` | `0.5` | `0.5` | `0.0` | `1.0` | `0.0` |
+
+Pattern from OGBench:
+
+- `navigate`: actor goal mix is `1.0 / 0.0`
+- `stitch`: actor goal mix is `0.5 / 0.5`
+- `giant`: `discount=0.995`
+- other listed antmaze locomotion tasks: `discount=0.99`
+
+## CGIVL / CGCIVL
+
+Published shared non-model settings for `CGIVL` / `CGCIVL`:
+
+- `lr=3e-4`
+- `batch_size=1024`
+- `tau=0.005`
+- `expectile=0.7`
+- `value_p_curgoal=0.2`
+- `value_p_trajgoal=0.5`
+- `value_p_randomgoal=0.3`
+- `gd_p_curgoal=0.0`
+- `gd_p_trajgoal=0.8`
+- `gd_p_randomgoal=0.2`
+- `value_geom_sample=True`
+- `gd_geom_sample=True`
+- `actor_p_curgoal=0.0`
+- `gc_negative=True`
+- `p_aug=0.0`
+- `neg_eps=0.01`
+
+Published task-family sampling rules from Appendix C.3:
+
+- `navigate` tasks use actor-sampling `alpha=0.9`, which maps most naturally to `actor_p_trajgoal=0.9`, `actor_p_randomgoal=0.1`
+- `stitch` tasks use actor-sampling `alpha=0.5`, which maps to `actor_p_trajgoal=0.5`, `actor_p_randomgoal=0.5`
+- quasimetric distillation uses `alpha_d=0.8`, matching `gd_p_trajgoal=0.8`, `gd_p_randomgoal=0.2`
+
+Published task-specific training-step overrides:
+
+| Task | train_steps | actor_p_trajgoal | actor_p_randomgoal | gd_p_trajgoal | gd_p_randomgoal | Source status |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `pointmaze-medium-navigate-v0` | `1000000` | `0.9` | `0.1` | `0.8` | `0.2` | appendix rule |
+| `pointmaze-large-navigate-v0` | `1000000` | `0.9` | `0.1` | `0.8` | `0.2` | appendix rule |
+| `pointmaze-giant-navigate-v0` | `1000000` | `0.9` | `0.1` | `0.8` | `0.2` | appendix rule |
+| `pointmaze-medium-stitch-v0` | `1000000` | `0.5` | `0.5` | `0.8` | `0.2` | appendix rule |
+| `pointmaze-large-stitch-v0` | `1000000` | `0.5` | `0.5` | `0.8` | `0.2` | appendix rule |
+| `pointmaze-giant-stitch-v0` | `1000000` | `0.5` | `0.5` | `0.8` | `0.2` | appendix rule |
+| `antmaze-medium-navigate-v0` | `1000000` | `0.9` | `0.1` | `0.8` | `0.2` | appendix rule |
+| `antmaze-large-navigate-v0` | `1000000` | `0.9` | `0.1` | `0.8` | `0.2` | appendix rule |
+| `antmaze-giant-navigate-v0` | `1000000` | `0.9` | `0.1` | `0.8` | `0.2` | appendix rule |
+| `antmaze-medium-stitch-v0` | `1000000` | `0.5` | `0.5` | `0.8` | `0.2` | appendix rule |
+| `antmaze-large-stitch-v0` | `1000000` | `0.5` | `0.5` | `0.8` | `0.2` | appendix rule |
+| `antmaze-giant-stitch-v0` | `2000000` | `0.5` | `0.5` | `0.8` | `0.2` | appendix explicit override |
+| `humanoidmaze-medium-navigate-v0` | `1000000` | `0.9` | `0.1` | `0.8` | `0.2` | appendix rule |
+| `humanoidmaze-large-navigate-v0` | `1000000` | `0.9` | `0.1` | `0.8` | `0.2` | appendix rule |
+| `humanoidmaze-giant-navigate-v0` | `3000000` | `0.9` | `0.1` | `0.8` | `0.2` | appendix explicit override |
+| `humanoidmaze-medium-stitch-v0` | `1000000` | `0.5` | `0.5` | `0.8` | `0.2` | appendix rule |
+| `humanoidmaze-large-stitch-v0` | `1000000` | `0.5` | `0.5` | `0.8` | `0.2` | appendix rule |
+| `humanoidmaze-giant-stitch-v0` | `3000000` | `0.5` | `0.5` | `0.8` | `0.2` | appendix explicit override |
+
+State manipulation tasks reported in the paper do not get separate appendix sampling overrides. The safest reference is therefore the published shared settings plus the agent defaults:
+
+| Task | train_steps | actor_p_trajgoal | actor_p_randomgoal | gd_p_trajgoal | gd_p_randomgoal | Source status |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `cube-single-play-v0` | `1000000` | `1.0` | `0.0` | `0.8` | `0.2` | default-backed |
+| `cube-double-play-v0` | `1000000` | `1.0` | `0.0` | `0.8` | `0.2` | default-backed |
+| `cube-triple-play-v0` | `1000000` | `1.0` | `0.0` | `0.8` | `0.2` | default-backed |
+| `scene-play-v0` | `1000000` | `1.0` | `0.0` | `0.8` | `0.2` | default-backed |
+| `puzzle-4x4-play-v0` | `1000000` | `1.0` | `0.0` | `0.8` | `0.2` | default-backed |
+| `puzzle-4x5-play-v0` | `1000000` | `1.0` | `0.0` | `0.8` | `0.2` | default-backed |
+
+Important caveats:
+
+- the paper appendix gives a task-family rule for actor sampling and explicit training-step overrides, but it does not publish a complete per-task command grid for `CGIVL`
+- the authors' README provides one exact command for [pointmaze-large-stitch-v0](/Users/bruce/Recurrent-Offline-RL/third_party/CGCIVL/readme.md#L29): `discount=0.995`, `low_alpha=10.0`, `actor_p_trajgoal=0.5`, `actor_p_randomgoal=0.5`, `goaldistance_latent_dim=512`, `neg_eps=0.01`, `init_goal_rep=False`
+- that same README command also passes `--agent.alpha=0.003`, but `alpha` is not materially used by the current `cgivl.py` loss path in either the authors' code or the local port, so it is not treated here as a meaningful task hyperparameter
+- unlike `HIQL`, there is no published `CGIVL` discount table in the repo; the only exact non-default discount visible locally is the README example above
+- `low_alpha=3.0` and `high_alpha=3.0` are agent defaults, but no appendix table maps those temperatures across every task
+
+## HIQL
+
+Shared non-model defaults from [hiql.py](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/agents/hiql.py#L468):
+
+- `lr=3e-4`
+- `batch_size=1024`
+- `tau=0.005`
+- `expectile=0.7`
+- `subgoal_steps=25`
+- `rep_dim=10`
+- `value_p_curgoal=0.2`
+- `value_p_trajgoal=0.5`
+- `value_p_randomgoal=0.3`
+- `value_geom_sample=True`
+- `actor_p_curgoal=0.0`
+- `actor_geom_sample=False`
+- `gc_negative=True`
+- `p_aug=0.0`
+
+Effective antmaze locomotion hyperparameters:
+
+| Task | low_alpha | high_alpha | discount | actor_p_curgoal | actor_p_trajgoal | actor_p_randomgoal | value_p_curgoal | value_p_trajgoal | value_p_randomgoal |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `antmaze-medium-navigate-v0` | `3.0` | `3.0` | `0.99` | `0.0` | `1.0` | `0.0` | `0.2` | `0.5` | `0.3` |
+| `antmaze-large-navigate-v0` | `3.0` | `3.0` | `0.99` | `0.0` | `1.0` | `0.0` | `0.2` | `0.5` | `0.3` |
+| `antmaze-giant-navigate-v0` | `3.0` | `3.0` | `0.995` | `0.0` | `1.0` | `0.0` | `0.2` | `0.5` | `0.3` |
+| `antmaze-teleport-navigate-v0` | `3.0` | `3.0` | `0.99` | `0.0` | `1.0` | `0.0` | `0.2` | `0.5` | `0.3` |
+| `antmaze-medium-stitch-v0` | `3.0` | `3.0` | `0.99` | `0.0` | `0.5` | `0.5` | `0.2` | `0.5` | `0.3` |
+| `antmaze-large-stitch-v0` | `3.0` | `3.0` | `0.99` | `0.0` | `0.5` | `0.5` | `0.2` | `0.5` | `0.3` |
+| `antmaze-giant-stitch-v0` | `3.0` | `3.0` | `0.995` | `0.0` | `0.5` | `0.5` | `0.2` | `0.5` | `0.3` |
+| `antmaze-teleport-stitch-v0` | `3.0` | `3.0` | `0.99` | `0.0` | `0.5` | `0.5` | `0.2` | `0.5` | `0.3` |
+
+Pattern from OGBench:
+
+- `navigate`: actor goal mix is `1.0 / 0.0`
+- `stitch`: actor goal mix is `0.5 / 0.5`
+- `giant`: `discount=0.995`
+- other listed antmaze locomotion tasks: `discount=0.99`
+
+## SAW
+
+`SAW` does not appear in the OGBench third-party benchmark table in [third_party/ogbench/impls/hyperparameters.sh](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/hyperparameters.sh), so there is no repo-provided task-specific benchmark grid analogous to `CRL` or `HIQL`.
+
+Current local non-model defaults used by [slurm/train_saw_array.slurm](/Users/bruce/Recurrent-Offline-RL/slurm/train_saw_array.slurm#L46) and [saw.py](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/agents/saw.py#L509):
+
+| Hyperparameter | Value |
+| --- | --- |
+| `lr` | `3e-4` |
+| `batch_size` | `1024` |
+| `discount` | `0.99` |
+| `tau` | `0.005` |
+| `expectile` | `0.7` |
+| `low_alpha` | `3.0` |
+| `awr_alpha` | `3.0` |
+| `kl_alpha` | `3.0` |
+| `subgoal_steps` | `25` |
+| `rep_dim` | `10` |
+| `share_goal_rep` | `False` |
+| `gc_negative` | `True` |
+| `value_geom_sample` | `True` |
+| `actor_geom_sample` | `False` |
+| `actor_geom_discount` | `0.99` |
+| `value_p_curgoal` | `0.2` |
+| `value_p_trajgoal` | `0.5` |
+| `value_p_randomgoal` | `0.3` |
+| `actor_p_curgoal` | `0.0` |
+| `actor_p_trajgoal` | `1.0` |
+| `actor_p_randomgoal` | `0.0` |
+| `p_aug` | `0.0` |
+
+Practical note:
+
+- if you run `SAW` through [slurm/train_saw_array.slurm](/Users/bruce/Recurrent-Offline-RL/slurm/train_saw_array.slurm) without overrides, these are the effective algorithm hyperparameters regardless of antmaze task
+- if you want task-specific `SAW` settings analogous to OGBench `CRL` / `HIQL`, they need to be defined explicitly by local run commands or a new task table
