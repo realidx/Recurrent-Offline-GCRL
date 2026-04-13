@@ -1505,10 +1505,10 @@ index 0000000..16660f1
 +    return config
 diff --git a/impls/analyze_hiql_value_geometry.py b/impls/analyze_hiql_value_geometry.py
 new file mode 100644
-index 0000000..18c2b3b
+index 0000000..60716d2
 --- /dev/null
 +++ b/impls/analyze_hiql_value_geometry.py
-@@ -0,0 +1,1558 @@
+@@ -0,0 +1,1736 @@
 +import argparse
 +import glob
 +import json
@@ -2596,6 +2596,150 @@ index 0000000..18c2b3b
 +    )
 +
 +
++def _compute_actor_advantage_diagnostics(runtime, seed, num_batches, batch_size):
++    if num_batches is None or int(num_batches) <= 0 or batch_size is None or int(batch_size) <= 0:
++        return None
++
++    dataset_wrapper = runtime['train_dataset']
++    raw_dataset = getattr(dataset_wrapper, 'dataset', None)
++    if raw_dataset is None:
++        return None
++
++    rng = np.random.RandomState(seed + 3557)
++    if hasattr(raw_dataset, 'valid_idxs'):
++        candidate_idxs = np.asarray(raw_dataset.valid_idxs)
++    else:
++        candidate_idxs = np.arange(raw_dataset.size)
++    if len(candidate_idxs) == 0:
++        return None
++
++    maze_map = np.asarray(runtime['env'].unwrapped.maze_map)
++    structure = _structural_overlay(runtime['env'])
++    bottleneck_mask = structure['articulation_grid'] > 0
++    junction_mask = structure['junction_grid'] > 0
++
++    def _append_region(dst, values, flags):
++        if flags is None:
++            return
++        mask = np.asarray(flags, dtype=bool)
++        if mask.shape[0] != values.shape[0]:
++            return
++        if np.any(mask):
++            dst.append(values[mask])
++
++    low_adv_parts = []
++    high_adv_parts = []
++    low_weight_parts = []
++    high_weight_parts = []
++    low_bneck_adv_parts = []
++    high_bneck_adv_parts = []
++    low_junc_adv_parts = []
++    high_junc_adv_parts = []
++    low_bneck_weight_parts = []
++    high_bneck_weight_parts = []
++    low_junc_weight_parts = []
++    high_junc_weight_parts = []
++
++    def _cells_from_idxs(idxs):
++        qpos = raw_dataset.get('qpos', None)
++        if qpos is None:
++            return None
++        qpos = np.asarray(qpos)
++        flags_bneck = []
++        flags_junc = []
++        for idx in idxs:
++            xy = np.asarray(qpos[int(idx), :2], dtype=np.float32)
++            cell = tuple(map(int, runtime['env'].unwrapped.xy_to_ij(xy)))
++            valid = (
++                0 <= cell[0] < maze_map.shape[0]
++                and 0 <= cell[1] < maze_map.shape[1]
++                and maze_map[cell] == 0
++            )
++            flags_bneck.append(bool(valid and bottleneck_mask[cell]))
++            flags_junc.append(bool(valid and junction_mask[cell]))
++        return np.asarray(flags_bneck, dtype=bool), np.asarray(flags_junc, dtype=bool)
++
++    for _ in range(int(num_batches)):
++        replace = len(candidate_idxs) < int(batch_size)
++        idxs = rng.choice(candidate_idxs, size=int(batch_size), replace=replace)
++        batch = _sample_dataset(dataset_wrapper, int(batch_size), idxs=idxs, evaluation=True, config=runtime['config'])
++        if 'low_actor_goals' not in batch or 'high_actor_goals' not in batch or 'high_actor_targets' not in batch:
++            return None
++
++        low_v1, low_v2 = runtime['agent'].network.select('value')(batch['observations'], batch['low_actor_goals'])
++        low_nv1, low_nv2 = runtime['agent'].network.select('value')(batch['next_observations'], batch['low_actor_goals'])
++        high_v1, high_v2 = runtime['agent'].network.select('value')(batch['observations'], batch['high_actor_goals'])
++        high_nv1, high_nv2 = runtime['agent'].network.select('value')(batch['high_actor_targets'], batch['high_actor_goals'])
++
++        low_adv = (np.asarray(low_nv1) + np.asarray(low_nv2) - np.asarray(low_v1) - np.asarray(low_v2)) / 2.0
++        high_adv = (np.asarray(high_nv1) + np.asarray(high_nv2) - np.asarray(high_v1) - np.asarray(high_v2)) / 2.0
++        low_adv = np.asarray(low_adv, dtype=np.float64).reshape(-1)
++        high_adv = np.asarray(high_adv, dtype=np.float64).reshape(-1)
++        low_weight = np.minimum(np.exp(low_adv * float(runtime['config']['low_alpha'])), 100.0)
++        high_weight = np.minimum(np.exp(high_adv * float(runtime['config']['high_alpha'])), 100.0)
++
++        low_adv_parts.append(low_adv)
++        high_adv_parts.append(high_adv)
++        low_weight_parts.append(low_weight)
++        high_weight_parts.append(high_weight)
++
++        flags = _cells_from_idxs(idxs)
++        if flags is not None:
++            bneck_flags, junc_flags = flags
++            _append_region(low_bneck_adv_parts, low_adv, bneck_flags)
++            _append_region(high_bneck_adv_parts, high_adv, bneck_flags)
++            _append_region(low_junc_adv_parts, low_adv, junc_flags)
++            _append_region(high_junc_adv_parts, high_adv, junc_flags)
++            _append_region(low_bneck_weight_parts, low_weight, bneck_flags)
++            _append_region(high_bneck_weight_parts, high_weight, bneck_flags)
++            _append_region(low_junc_weight_parts, low_weight, junc_flags)
++            _append_region(high_junc_weight_parts, high_weight, junc_flags)
++
++    def _merge(parts):
++        if not parts:
++            return None
++        merged = np.concatenate([np.asarray(x, dtype=np.float64).reshape(-1) for x in parts], axis=0)
++        merged = merged[np.isfinite(merged)]
++        if len(merged) == 0:
++            return None
++        return merged
++
++    def _summarize(prefix, adv_values, weight_values):
++        adv_values = _merge(adv_values)
++        weight_values = _merge(weight_values)
++        if adv_values is None:
++            return {}
++        out = {
++            f'{prefix}_count': int(len(adv_values)),
++            f'{prefix}_adv_mean': float(np.mean(adv_values)),
++            f'{prefix}_adv_std': float(np.std(adv_values)),
++            f'{prefix}_adv_pos_frac': float(np.mean(adv_values > 0)),
++            f'{prefix}_adv_p50': float(np.percentile(adv_values, 50)),
++            f'{prefix}_adv_p90': float(np.percentile(adv_values, 90)),
++        }
++        if weight_values is not None:
++            out.update(
++                {
++                    f'{prefix}_weight_mean': float(np.mean(weight_values)),
++                    f'{prefix}_weight_p90': float(np.percentile(weight_values, 90)),
++                }
++            )
++        return out
++
++    merged = {}
++    merged.update(_summarize('low_train', low_adv_parts, low_weight_parts))
++    merged.update(_summarize('high_train', high_adv_parts, high_weight_parts))
++    merged.update(_summarize('low_train_bottleneck', low_bneck_adv_parts, low_bneck_weight_parts))
++    merged.update(_summarize('high_train_bottleneck', high_bneck_adv_parts, high_bneck_weight_parts))
++    merged.update(_summarize('low_train_junction', low_junc_adv_parts, low_junc_weight_parts))
++    merged.update(_summarize('high_train_junction', high_junc_adv_parts, high_junc_weight_parts))
++    if not merged:
++        return None
++    merged['train_adv_num_batches'] = int(num_batches)
++    merged['train_adv_batch_size'] = int(batch_size)
++    return merged
++
++
 +def _plot_overview(results, output_path):
 +    try:
 +        import matplotlib.pyplot as plt
@@ -2717,6 +2861,17 @@ index 0000000..18c2b3b
 +                f'eval junc={reset_eval_metrics["reset_eval_junction_success_frac"]:.2f}',
 +                f'eval jc={reset_eval_metrics["reset_eval_junction_correct_branch_frac"]:.2f}',
 +            ]
++        train_adv_metrics = result.get('train_adv_metrics')
++        if train_adv_metrics is not None:
++            structure_lines += [
++                '',
++                f'lowA={train_adv_metrics["low_train_adv_mean"]:.2f} pos={train_adv_metrics["low_train_adv_pos_frac"]:.2f} w={train_adv_metrics["low_train_weight_mean"]:.2f}',
++                f'highA={train_adv_metrics["high_train_adv_mean"]:.2f} pos={train_adv_metrics["high_train_adv_pos_frac"]:.2f} w={train_adv_metrics["high_train_weight_mean"]:.2f}',
++            ]
++            if 'low_train_bottleneck_adv_mean' in train_adv_metrics:
++                structure_lines += [
++                    f'lowB={train_adv_metrics["low_train_bottleneck_adv_mean"]:.2f} highB={train_adv_metrics.get("high_train_bottleneck_adv_mean", np.nan):.2f}'
++                ]
 +        ax.text(0.03, 0.95, '\n'.join(structure_lines), va='top', ha='left', fontsize=9)
 +
 +        for idx in range(max_cols - 2):
@@ -2846,6 +3001,18 @@ index 0000000..18c2b3b
 +        default=50,
 +        help='Number of real eval-style reset episodes used for reset-conditioned success and junction diagnostics.',
 +    )
++    parser.add_argument(
++        '--train_adv_batches',
++        type=int,
++        default=8,
++        help='Number of sampled training batches used for low/high actor-advantage diagnostics. Use 0 to disable.',
++    )
++    parser.add_argument(
++        '--train_adv_batch_size',
++        type=int,
++        default=1024,
++        help='Batch size used for each sampled training batch in actor-advantage diagnostics.',
++    )
 +    parser.add_argument('--seed', type=int, default=0, help='Seed for probe subsampling and deterministic goal reset.')
 +    parser.add_argument(
 +        '--output_dir',
@@ -2885,6 +3052,12 @@ index 0000000..18c2b3b
 +            task_ids = _parse_task_ids(args.task_id, args.task_ids, runtime['env'])
 +            iterations = _value_iterations(runtime['config'], requested_iters)
 +            probe_mode = _select_probe_mode(args, runtime)
++            train_adv_metrics = _compute_actor_advantage_diagnostics(
++                runtime,
++                args.seed,
++                args.train_adv_batches,
++                args.train_adv_batch_size,
++            )
 +            if probe_mode == 'exact':
 +                probe_data = _exact_pointmaze_probes(runtime)
 +            else:
@@ -2923,6 +3096,9 @@ index 0000000..18c2b3b
 +                    'step': np.asarray([step], dtype=np.int32),
 +                    'task_id': np.asarray([task_id], dtype=np.int32),
 +                }
++                if train_adv_metrics is not None:
++                    for key, value in train_adv_metrics.items():
++                        dump_dict[key] = np.asarray([value], dtype=np.float32)
 +                policy_metrics = _compute_policy_diagnostics_multi(
 +                    runtime,
 +                    probe_data,
@@ -3022,6 +3198,7 @@ index 0000000..18c2b3b
 +                            **({} if episode_metrics is None else episode_metrics),
 +                            **({} if junction_metrics is None else junction_metrics),
 +                            **({} if reset_eval_metrics is None else reset_eval_metrics),
++                            **({} if train_adv_metrics is None else train_adv_metrics),
 +                        )
 +                    )
 +                    prev_value_grid = value_grid
@@ -3049,6 +3226,7 @@ index 0000000..18c2b3b
 +                    episode_metrics=episode_metrics,
 +                    junction_metrics=junction_metrics,
 +                    reset_eval_metrics=reset_eval_metrics,
++                    train_adv_metrics=train_adv_metrics,
 +                )
 +                results.append(result)
 +                task_overview_results[int(task_id)].append(result)
