@@ -286,6 +286,14 @@ case "${CRITIC_BACKBONE}" in
       echo "Error: CRITIC_RECUR_LN_MODE='${CRITIC_RECUR_LN_MODE}' is invalid. Use pre_loop, per_layer, per_layer_final, or pre_loop_per_layer." >&2
       exit 2
     fi
+    if [[ ! "${CRITIC_RECUR_BLOCK_TYPE:-dense}" =~ ^(dense|swiglu)$ ]]; then
+      echo "Error: CRITIC_RECUR_BLOCK_TYPE='${CRITIC_RECUR_BLOCK_TYPE}' is invalid. Use dense or swiglu." >&2
+      exit 2
+    fi
+    if [[ "${CRITIC_RECUR_BLOCK_TYPE:-dense}" == "swiglu" && "${RECUR_NUM_DENSE_LAYERS}" != "2" ]]; then
+      echo "Error: CRITIC_RECUR_BLOCK_TYPE=swiglu requires RECUR_NUM_DENSE_LAYERS=2." >&2
+      exit 2
+    fi
     if [[ ! "${CRITIC_RECUR_FILM_MODE}" =~ ^(hidden|context|hidden_context)$ ]]; then
       echo "Error: CRITIC_RECUR_FILM_MODE='${CRITIC_RECUR_FILM_MODE}' is invalid. Use hidden, context, or hidden_context." >&2
       exit 2
@@ -293,6 +301,7 @@ case "${CRITIC_BACKBONE}" in
     AGENT_FLAGS+=(
       "--agent.critic_recur_iters=${KTRAIN}"
       "--agent.critic_recur_num_dense_layers=${RECUR_NUM_DENSE_LAYERS}"
+      "--agent.critic_recur_block_type=${CRITIC_RECUR_BLOCK_TYPE:-dense}"
       "--agent.critic_recur_max_iters=${RECUR_MAX_ITERS}"
       "--agent.critic_recur_ln_mode=${CRITIC_RECUR_LN_MODE}"
       "--agent.critic_recur_use_step_info=${RECUR_USE_STEP_INFO}"

@@ -125,6 +125,14 @@ Before launching 3 seeds, use a one-seed smoke test:
 sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=Smoke_CRL_FiLMCtx,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,RECUR_MAX_ITERS=4,RECUR_USE_STEP_INFO=0,CRITIC_RECUR_USE_FILM=1,CRITIC_RECUR_FILM_MODE=hidden_context,ALPHA=0.1,DISCOUNT=0.995,EVAL_ON_CPU=1,WANDB_MODE=online" slurm/train_crl.slurm
 ```
 
+## CRL SwiGLU on `antmaze-medium-stitch-v0`
+
+This command uses the new `recur_tied` inner block variant with `CRITIC_RECUR_BLOCK_TYPE=swiglu`, while keeping the benchmark-aligned CRL task defaults for `antmaze-medium-stitch-v0`: `alpha=0.1`, `discount=0.99`, `actor_p_trajgoal=0.5`, and `actor_p_randomgoal=0.5`.
+
+```bash
+sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-medium-stitch-v0,RUN_GROUP=CRL_AntMediumStitch_SwiGLU,EXP_NAME=sd000_antmaze_medium_stitch_crl_recur_swiglu_k4,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=4,RECUR_USE_STEP_INFO=0,CRITIC_RECUR_USE_FILM=1,CRITIC_RECUR_FILM_MODE=hidden,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_crl.slurm
+```
+
 ## Suggested Comparison Order
 
 1. `CRL`: hidden-only FiLM vs `CRITIC_RECUR_FILM_MODE=hidden_context`
@@ -167,4 +175,3 @@ sbatch --job-name=hiql_geom_eval --partition=gpu-long --gpus=h100-47 --time=05:0
 
 
 sbatch --job-name=hiql_geom_eval --partition=gpu-long --gpus=h100-47 --time=05:00:00 --cpus-per-task=8 --mem=24G --output=logs/phase_4/slurm-%x-%j.out --error=logs/phase_4/slurm-%x-%j.err --wrap='cd "$SLURM_SUBMIT_DIR/third_party/ogbench/impls" && export OGBENCH_DATASET_DIR="$SLURM_SUBMIT_DIR/.ogbench_data" && conda run -n recurrent python analyze_hiql_value_geometry.py --run_dir "$SLURM_SUBMIT_DIR/exp/OGBench/HIQL_AntLargeStitch_Baseline/sd000_antmaze_large_stitch_hiql_mlp_baseline" --epochs 1000000 --task_ids 1,2,3,4,5 --policy_rollout_steps 25 --reset_eval_episodes 50 --train_adv_batches 8 --train_adv_batch_size 1024 --output_dir "$SLURM_SUBMIT_DIR/exp/value_geometry_hiql_baseline_sd000_ckpt1000000"'
-

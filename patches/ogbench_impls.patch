@@ -26,10 +26,10 @@ index 4596fe2..bab8556 100644
  )
 diff --git a/impls/agents/cgivl.py b/impls/agents/cgivl.py
 new file mode 100644
-index 0000000..d4c19cf
+index 0000000..441bfaf
 --- /dev/null
 +++ b/impls/agents/cgivl.py
-@@ -0,0 +1,535 @@
+@@ -0,0 +1,537 @@
 +import copy
 +from functools import partial
 +from typing import Any
@@ -424,6 +424,7 @@ index 0000000..d4c19cf
 +                ensemble=True,
 +                recur_num_iters=int(config.get('value_recur_iters', 4)),
 +                recur_num_dense_layers=int(config.get('value_recur_num_dense_layers', 2)),
++                recur_block_type=str(config.get('value_recur_block_type', 'dense')),
 +                recur_max_iters=int(config.get('value_recur_max_iters', 4)),
 +                recur_ln_mode=str(config.get('value_recur_ln_mode', 'per_layer_final')),
 +                recur_use_step_info=bool(config.get('value_recur_use_step_info', False)),
@@ -520,6 +521,7 @@ index 0000000..d4c19cf
 +            rep_dim=10,
 +            value_recur_iters=4,
 +            value_recur_num_dense_layers=2,
++            value_recur_block_type='dense',
 +            value_recur_max_iters=4,
 +            value_recur_ln_mode='per_layer_final',
 +            value_recur_use_step_info=False,
@@ -566,7 +568,7 @@ index 0000000..d4c19cf
 +    )
 +    return config
 diff --git a/impls/agents/crl.py b/impls/agents/crl.py
-index 53109ab..a8730e5 100644
+index 53109ab..5a481f6 100644
 --- a/impls/agents/crl.py
 +++ b/impls/agents/crl.py
 @@ -22,51 +22,110 @@ class CRLAgent(flax.struct.PyTreeNode):
@@ -721,7 +723,7 @@ index 53109ab..a8730e5 100644
              }
          else:
              raise ValueError(f'Unsupported actor loss: {self.config["actor_loss"]}')
-@@ -231,6 +288,25 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -231,6 +288,26 @@ class CRLAgent(flax.struct.PyTreeNode):
                  state_encoder=encoders.get('critic_state'),
                  goal_encoder=encoders.get('critic_goal'),
                  action_dim=action_dim,
@@ -733,6 +735,7 @@ index 53109ab..a8730e5 100644
 +                        2 * int(config.get('critic_recur_num_blocks', 1)),
 +                    )
 +                ),
++                recur_block_type=str(config.get('critic_recur_block_type', 'dense')),
 +                recur_max_iters=config['critic_recur_max_iters'],
 +                recur_ln_mode=str(config.get('critic_recur_ln_mode', 'per_layer_final')),
 +                recur_use_step_info=bool(config.get('critic_recur_use_step_info', False)),
@@ -747,7 +750,7 @@ index 53109ab..a8730e5 100644
              )
          else:
              critic_def = GCBilinearValue(
-@@ -241,6 +317,25 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -241,6 +318,26 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
                  state_encoder=encoders.get('critic_state'),
                  goal_encoder=encoders.get('critic_goal'),
@@ -759,6 +762,7 @@ index 53109ab..a8730e5 100644
 +                        2 * int(config.get('critic_recur_num_blocks', 1)),
 +                    )
 +                ),
++                recur_block_type=str(config.get('critic_recur_block_type', 'dense')),
 +                recur_max_iters=config['critic_recur_max_iters'],
 +                recur_ln_mode=str(config.get('critic_recur_ln_mode', 'per_layer_final')),
 +                recur_use_step_info=bool(config.get('critic_recur_use_step_info', False)),
@@ -773,7 +777,7 @@ index 53109ab..a8730e5 100644
              )
  
          if config['actor_loss'] == 'awr':
-@@ -253,6 +348,25 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -253,6 +350,26 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
                  state_encoder=encoders.get('value_state'),
                  goal_encoder=encoders.get('value_goal'),
@@ -785,6 +789,7 @@ index 53109ab..a8730e5 100644
 +                        2 * int(config.get('critic_recur_num_blocks', 1)),
 +                    )
 +                ),
++                recur_block_type=str(config.get('critic_recur_block_type', 'dense')),
 +                recur_max_iters=config['critic_recur_max_iters'],
 +                recur_ln_mode=str(config.get('critic_recur_ln_mode', 'per_layer_final')),
 +                recur_use_step_info=bool(config.get('critic_recur_use_step_info', False)),
@@ -799,7 +804,7 @@ index 53109ab..a8730e5 100644
              )
  
          if config['discrete']:
-@@ -282,7 +396,15 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -282,7 +399,15 @@ class CRLAgent(flax.struct.PyTreeNode):
          network_args = {k: v[1] for k, v in network_info.items()}
  
          network_def = ModuleDict(networks)
@@ -816,7 +821,7 @@ index 53109ab..a8730e5 100644
          network_params = network_def.init(init_rng, **network_args)['params']
          network = TrainState.create(network_def, network_params, tx=network_tx)
  
-@@ -295,6 +417,8 @@ def get_config():
+@@ -295,6 +420,8 @@ def get_config():
              # Agent hyperparameters.
              agent_name='crl',  # Agent name.
              lr=3e-4,  # Learning rate.
@@ -825,7 +830,7 @@ index 53109ab..a8730e5 100644
              batch_size=1024,  # Batch size.
              actor_hidden_dims=(512, 512, 512),  # Actor network hidden dimensions.
              value_hidden_dims=(512, 512, 512),  # Value network hidden dimensions.
-@@ -306,6 +430,24 @@ def get_config():
+@@ -306,6 +433,25 @@ def get_config():
              const_std=True,  # Whether to use constant standard deviation for the actor.
              discrete=False,  # Whether the action space is discrete.
              encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
@@ -833,6 +838,7 @@ index 53109ab..a8730e5 100644
 +            critic_backbone='mlp',  # 'mlp' | 'recur_tied'
 +            critic_recur_iters=4,  # Tied iterations K_train (used if critic_backbone='recur_tied').
 +            critic_recur_num_dense_layers=2,  # Number of Dense layers inside each tied recurrent residual update.
++            critic_recur_block_type='dense',  # 'dense' | 'swiglu' recurrent update cell.
 +            critic_recur_num_blocks=1,  # Number of 2-layer MLP pairs inside each tied recurrent residual update.
 +            critic_eval_num_iters=ml_collections.config_dict.placeholder(int),  # Optional K_test override for evaluation-only (tied-only test-time compute knob).
 +            critic_recur_max_iters=16,  # Max step embedding table size.
@@ -850,7 +856,7 @@ index 53109ab..a8730e5 100644
              # Dataset hyperparameters.
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
-@@ -319,6 +461,9 @@ def get_config():
+@@ -319,6 +465,9 @@ def get_config():
              gc_negative=False,  # Unused (defined for compatibility with GCDataset).
              p_aug=0.0,  # Probability of applying image augmentation.
              frame_stack=ml_collections.config_dict.placeholder(int),  # Number of frames to stack.
@@ -861,7 +867,7 @@ index 53109ab..a8730e5 100644
      )
      return config
 diff --git a/impls/agents/hiql.py b/impls/agents/hiql.py
-index 63e5dee..444e6e5 100644
+index 63e5dee..e9f0a6e 100644
 --- a/impls/agents/hiql.py
 +++ b/impls/agents/hiql.py
 @@ -8,7 +8,7 @@ import ml_collections
@@ -916,7 +922,7 @@ index 63e5dee..444e6e5 100644
  
      def low_actor_loss(self, batch, grad_params):
          """Compute the low-level actor loss."""
-@@ -259,18 +280,39 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -259,18 +280,40 @@ class HIQLAgent(flax.struct.PyTreeNode):
              high_actor_encoder_def = None
  
          # Define value and actor networks.
@@ -949,6 +955,7 @@ index 63e5dee..444e6e5 100644
 +                ensemble=True,
 +                recur_num_iters=int(config.get('value_recur_iters', 4)),
 +                recur_num_dense_layers=int(config.get('value_recur_num_dense_layers', 2)),
++                recur_block_type=str(config.get('value_recur_block_type', 'dense')),
 +                recur_max_iters=int(config.get('value_recur_max_iters', 4)),
 +                recur_ln_mode=str(config.get('value_recur_ln_mode', 'per_layer_final')),
 +                recur_use_step_info=bool(config.get('value_recur_use_step_info', False)),
@@ -968,7 +975,7 @@ index 63e5dee..444e6e5 100644
  
          if config['discrete']:
              low_actor_def = GCDiscreteActor(
-@@ -306,7 +348,15 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -306,7 +349,15 @@ class HIQLAgent(flax.struct.PyTreeNode):
          network_args = {k: v[1] for k, v in network_info.items()}
  
          network_def = ModuleDict(networks)
@@ -985,7 +992,7 @@ index 63e5dee..444e6e5 100644
          network_params = network_def.init(init_rng, **network_args)['params']
          network = TrainState.create(network_def, network_params, tx=network_tx)
  
-@@ -322,9 +372,12 @@ def get_config():
+@@ -322,9 +373,12 @@ def get_config():
              # Agent hyperparameters.
              agent_name='hiql',  # Agent name.
              lr=3e-4,  # Learning rate.
@@ -998,12 +1005,13 @@ index 63e5dee..444e6e5 100644
              layer_norm=True,  # Whether to use layer normalization.
              discount=0.99,  # Discount factor.
              tau=0.005,  # Target network update rate.
-@@ -333,6 +386,20 @@ def get_config():
+@@ -333,6 +387,21 @@ def get_config():
              high_alpha=3.0,  # High-level AWR temperature.
              subgoal_steps=25,  # Subgoal steps.
              rep_dim=10,  # Goal representation dimension.
 +            value_recur_iters=4,  # Tied iterations for value_backbone='recur_tied'.
 +            value_recur_num_dense_layers=2,  # Dense layers inside each recurrent value update.
++            value_recur_block_type='dense',  # 'dense' | 'swiglu' recurrent update cell.
 +            value_recur_max_iters=4,  # Max supported recurrent iterations for HIQL value.
 +            value_recur_ln_mode='per_layer_final',  # 'pre_loop' | 'per_layer' | 'per_layer_final' | 'pre_loop_per_layer' recurrent value LayerNorm placement.
 +            value_recur_use_step_info=False,  # Inject step information into the recurrent HIQL value.
@@ -1020,10 +1028,10 @@ index 63e5dee..444e6e5 100644
              const_std=True,  # Whether to use constant standard deviation for the actors.
              discrete=False,  # Whether the action space is discrete.
 diff --git a/impls/agents/qrl.py b/impls/agents/qrl.py
-index 79852cb..77388b5 100644
+index 79852cb..95466b6 100644
 --- a/impls/agents/qrl.py
 +++ b/impls/agents/qrl.py
-@@ -234,6 +234,22 @@ class QRLAgent(flax.struct.PyTreeNode):
+@@ -234,6 +234,23 @@ class QRLAgent(flax.struct.PyTreeNode):
                  latent_dim=config['latent_dim'],
                  layer_norm=config['layer_norm'],
                  encoder=encoders.get('value'),
@@ -1035,6 +1043,7 @@ index 79852cb..77388b5 100644
 +                        2 * int(config.get('critic_recur_num_blocks', 1)),
 +                    )
 +                ),
++                recur_block_type=str(config.get('critic_recur_block_type', 'dense')),
 +                recur_max_iters=config['critic_recur_max_iters'],
 +                recur_ln_mode=str(config.get('critic_recur_ln_mode', 'per_layer_final')),
 +                recur_use_step_info=bool(config.get('critic_recur_use_step_info', False)),
@@ -1046,7 +1055,7 @@ index 79852cb..77388b5 100644
              )
          elif config['quasimetric_type'] == 'iqe':
              value_def = GCIQEValue(
-@@ -242,6 +258,22 @@ class QRLAgent(flax.struct.PyTreeNode):
+@@ -242,6 +259,23 @@ class QRLAgent(flax.struct.PyTreeNode):
                  dim_per_component=8,
                  layer_norm=config['layer_norm'],
                  encoder=encoders.get('value'),
@@ -1058,6 +1067,7 @@ index 79852cb..77388b5 100644
 +                        2 * int(config.get('critic_recur_num_blocks', 1)),
 +                    )
 +                ),
++                recur_block_type=str(config.get('critic_recur_block_type', 'dense')),
 +                recur_max_iters=config['critic_recur_max_iters'],
 +                recur_ln_mode=str(config.get('critic_recur_ln_mode', 'per_layer_final')),
 +                recur_use_step_info=bool(config.get('critic_recur_use_step_info', False)),
@@ -1069,7 +1079,7 @@ index 79852cb..77388b5 100644
              )
          else:
              raise ValueError(f'Unsupported quasimetric type: {config["quasimetric_type"]}')
-@@ -310,6 +342,19 @@ def get_config():
+@@ -310,6 +344,20 @@ def get_config():
              const_std=True,  # Whether to use constant standard deviation for the actor.
              discrete=False,  # Whether the action space is discrete.
              encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
@@ -1077,6 +1087,7 @@ index 79852cb..77388b5 100644
 +            critic_backbone='mlp',  # 'mlp' | 'recur_tied'
 +            critic_recur_iters=4,  # Tied iterations K_train (used if critic_backbone='recur_tied').
 +            critic_recur_num_dense_layers=2,  # Number of Dense layers inside each tied recurrent residual update.
++            critic_recur_block_type='dense',  # 'dense' | 'swiglu' recurrent update cell.
 +            critic_recur_num_blocks=1,  # Number of 2-layer MLP pairs inside each tied recurrent residual update.
 +            critic_recur_max_iters=16,  # Max step embedding table size.
 +            critic_layerscale_init=1e-2,  # LayerScale init for recur_tied.
@@ -1091,10 +1102,10 @@ index 79852cb..77388b5 100644
              value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
 diff --git a/impls/agents/saw.py b/impls/agents/saw.py
 new file mode 100644
-index 0000000..16660f1
+index 0000000..62b3e25
 --- /dev/null
 +++ b/impls/agents/saw.py
-@@ -0,0 +1,408 @@
+@@ -0,0 +1,410 @@
 +import copy
 +from typing import Any
 +
@@ -1376,6 +1387,7 @@ index 0000000..16660f1
 +                ensemble=True,
 +                recur_num_iters=int(config.get('value_recur_iters', 4)),
 +                recur_num_dense_layers=int(config.get('value_recur_num_dense_layers', 2)),
++                recur_block_type=str(config.get('value_recur_block_type', 'dense')),
 +                recur_max_iters=int(config.get('value_recur_max_iters', 16)),
 +                recur_ln_mode=str(config.get('value_recur_ln_mode', 'per_layer_final')),
 +                recur_use_step_info=bool(config.get('value_recur_use_step_info', False)),
@@ -1463,6 +1475,7 @@ index 0000000..16660f1
 +            value_backbone='mlp',
 +            value_recur_iters=4,
 +            value_recur_num_dense_layers=2,
++            value_recur_block_type='dense',
 +            value_recur_max_iters=16,
 +            value_recur_ln_mode='per_layer_final',  # 'pre_loop' | 'per_layer' | 'per_layer_final' | 'pre_loop_per_layer'
 +            value_recur_use_step_info=False,
@@ -4839,7 +4852,7 @@ index 9c421dd..3da1eab 100644
  
      return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..0de82b6 100644
+index 4ee2b26..77f22e7 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
 @@ -6,6 +6,8 @@ import flax.linen as nn
@@ -4851,7 +4864,7 @@ index 4ee2b26..0de82b6 100644
  
  def default_init(scale=1.0):
      """Default kernel initializer."""
-@@ -60,6 +62,314 @@ class MLP(nn.Module):
+@@ -60,6 +62,345 @@ class MLP(nn.Module):
          return x
  
  
@@ -4935,8 +4948,8 @@ index 4ee2b26..0de82b6 100644
 +
 +        u = nn.LayerNorm(name='pre_ln')(h) if self.norm_mode in ('pre_block', 'pre_block_per_layer') else h
 +        for layer_index in range(num_layers):
-+            u = nn.Dense(self.hidden_dim, name=f'fc_{layer_index + 1}')(u)
 +            is_last_layer = layer_index + 1 == num_layers
++            u = nn.Dense(self.hidden_dim, name=f'fc_{layer_index + 1}')(u)
 +            if not is_last_layer:
 +                if self.use_inner_layer_norm:
 +                    if self.norm_mode in ('per_layer', 'pre_block_per_layer') or layer_index > 0:
@@ -4978,6 +4991,7 @@ index 4ee2b26..0de82b6 100644
 +    out_dim: int
 +    num_iters: int
 +    num_dense_layers: int = 2
++    block_type: str = 'dense'  # one of: dense | swiglu
 +    max_iters: int = 16
 +    layer_norm: bool = True
 +    ln_mode: str = 'per_layer_final'
@@ -4996,8 +5010,16 @@ index 4ee2b26..0de82b6 100644
 +    def __call__(self, x, num_iters=None, return_aux=False, context=None):
 +        iters = self.num_iters if num_iters is None else int(num_iters)
 +        num_dense_layers = int(self.num_dense_layers)
-+        if num_dense_layers <= 0:
-+            raise ValueError(f'num_dense_layers must be positive. Got {num_dense_layers}.')
++        block_type = str(self.block_type)
++        if block_type not in ('dense', 'swiglu'):
++            raise ValueError(f"Unsupported block_type={block_type!r}. Use 'dense' or 'swiglu'.")
++        if block_type == 'dense':
++            if num_dense_layers <= 0:
++                raise ValueError(f'num_dense_layers must be positive. Got {num_dense_layers}.')
++        elif num_dense_layers != 2:
++            raise ValueError(
++                f"block_type='swiglu' uses a fixed 2-layer gated cell, so num_dense_layers must be 2. Got {num_dense_layers}."
++            )
 +        if self.ln_mode not in ('pre_loop', 'per_layer', 'per_layer_final', 'pre_loop_per_layer'):
 +            raise ValueError(
 +                f"Unsupported ln_mode={self.ln_mode!r}. Use 'pre_loop', 'per_layer', 'per_layer_final', or 'pre_loop_per_layer'."
@@ -5051,12 +5073,25 @@ index 4ee2b26..0de82b6 100644
 +        film_fc2 = nn.Dense(2 * self.hidden_dim) if self.use_film else None
 +        act_halting = nn.Dense(1, name='act_halting') if self.use_act else None
 +
-+        tied_layers = [
-+            nn.Dense(self.hidden_dim, name=f'tied_fc{i + 1}') for i in range(num_dense_layers)
-+        ]
++        tied_layers = None
++        swiglu_gate = None
++        swiglu_value = None
++        swiglu_out = None
++        swiglu_pre_ln = None
++        if block_type == 'dense':
++            tied_layers = [
++                nn.Dense(self.hidden_dim, name=f'tied_fc{i + 1}') for i in range(num_dense_layers)
++            ]
++        else:
++            swiglu_gate = nn.Dense(self.hidden_dim, name='swiglu_fc_a')
++            swiglu_value = nn.Dense(self.hidden_dim, name='swiglu_fc_b')
++            swiglu_out = nn.Dense(self.hidden_dim, name='swiglu_fc_o')
++            if self.layer_norm:
++                # The SwiGLU refinement cell is fixed to the pre-norm design in the requested equations.
++                swiglu_pre_ln = nn.LayerNorm(name='swiglu_ln')
 +
 +        tied_layer_norms = None
-+        if self.layer_norm:
++        if self.layer_norm and block_type == 'dense':
 +            if self.ln_mode == 'pre_loop':
 +                tied_layer_norms = [nn.LayerNorm(name='ln')]
 +            elif self.ln_mode == 'pre_loop_per_layer':
@@ -5086,8 +5121,11 @@ index 4ee2b26..0de82b6 100644
 +
 +        for k in range(iters):
 +            h1 = h
-+            if self.layer_norm and self.ln_mode in ('pre_loop', 'pre_loop_per_layer'):
-+                h1 = tied_layer_norms[0](h1)
++            if block_type == 'dense':
++                if self.layer_norm and self.ln_mode in ('pre_loop', 'pre_loop_per_layer'):
++                    h1 = tied_layer_norms[0](h1)
++            elif swiglu_pre_ln is not None:
++                h1 = swiglu_pre_ln(h1)
 +
 +            if self.use_step_info:
 +                if not self.use_sinusoidal_step_encoding:
@@ -5112,20 +5150,26 @@ index 4ee2b26..0de82b6 100644
 +            else:
 +                u = h1 if step_contrib_k is None else h1 + step_contrib_k
 +
-+            for layer_index, layer in enumerate(tied_layers):
-+                u = layer(u)
-+                apply_layer_norm = (
-+                    self.layer_norm
-+                    and self.ln_mode in ('per_layer', 'per_layer_final', 'pre_loop_per_layer')
-+                    and (layer_index < len(tied_layers) - 1 or self.ln_mode == 'per_layer_final')
-+                )
-+                if apply_layer_norm:
-+                    if self.ln_mode == 'pre_loop_per_layer':
-+                        u = tied_layer_norms[layer_index + 1](u)
-+                    else:
-+                        u = tied_layer_norms[layer_index](u)
-+                if layer_index < len(tied_layers) - 1:
-+                    u = self.activations(u)
++            if block_type == 'dense':
++                for layer_index, layer in enumerate(tied_layers):
++                    u = layer(u)
++                    apply_layer_norm = (
++                        self.layer_norm
++                        and self.ln_mode in ('per_layer', 'per_layer_final', 'pre_loop_per_layer')
++                        and (layer_index < len(tied_layers) - 1 or self.ln_mode == 'per_layer_final')
++                    )
++                    if apply_layer_norm:
++                        if self.ln_mode == 'pre_loop_per_layer':
++                            u = tied_layer_norms[layer_index + 1](u)
++                        else:
++                            u = tied_layer_norms[layer_index](u)
++                    if layer_index < len(tied_layers) - 1:
++                        u = self.activations(u)
++            else:
++                a_k = swiglu_gate(u)
++                b_k = swiglu_value(u)
++                g_k = jax.nn.silu(a_k) * b_k
++                u = swiglu_out(g_k)
 +
 +            if self.use_layerscale:
 +                alpha_k = alpha[k]
@@ -5166,7 +5210,7 @@ index 4ee2b26..0de82b6 100644
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -164,6 +474,7 @@ class GCActor(nn.Module):
+@@ -164,6 +505,7 @@ class GCActor(nn.Module):
      const_std: bool = True
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -5174,7 +5218,7 @@ index 4ee2b26..0de82b6 100644
  
      def setup(self):
          self.actor_net = MLP(self.hidden_dims, activate_final=True)
-@@ -230,6 +541,7 @@ class GCDiscreteActor(nn.Module):
+@@ -230,6 +572,7 @@ class GCDiscreteActor(nn.Module):
      action_dim: int
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -5182,7 +5226,7 @@ index 4ee2b26..0de82b6 100644
  
      def setup(self):
          self.actor_net = MLP(self.hidden_dims, activate_final=True)
-@@ -282,14 +594,22 @@ class GCValue(nn.Module):
+@@ -282,14 +625,22 @@ class GCValue(nn.Module):
      layer_norm: bool = True
      ensemble: bool = True
      gc_encoder: nn.Module = None
@@ -5210,7 +5254,7 @@ index 4ee2b26..0de82b6 100644
  
      def __call__(self, observations, goals=None, actions=None):
          """Return the value/critic function.
-@@ -314,6 +634,69 @@ class GCValue(nn.Module):
+@@ -314,6 +665,71 @@ class GCValue(nn.Module):
          return v
  
  
@@ -5223,6 +5267,7 @@ index 4ee2b26..0de82b6 100644
 +    gc_encoder: nn.Module = None
 +    recur_num_iters: int = 4
 +    recur_num_dense_layers: int = 2
++    recur_block_type: str = 'dense'
 +    recur_max_iters: int = 4
 +    recur_ln_mode: str = 'per_layer_final'
 +    recur_use_step_info: bool = False
@@ -5243,6 +5288,7 @@ index 4ee2b26..0de82b6 100644
 +            out_dim=1,
 +            num_iters=int(self.recur_num_iters),
 +            num_dense_layers=int(self.recur_num_dense_layers),
++            block_type=str(self.recur_block_type),
 +            max_iters=int(self.recur_max_iters),
 +            layer_norm=self.layer_norm,
 +            ln_mode=str(self.recur_ln_mode),
@@ -5280,13 +5326,14 @@ index 4ee2b26..0de82b6 100644
  class GCDiscreteCritic(GCValue):
      """Goal-conditioned critic for discrete actions."""
  
-@@ -347,16 +730,79 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +763,82 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
 +    backbone: str = 'mlp'  # 'mlp' | 'recur_tied'
 +    recur_num_iters: int = 4
 +    recur_num_dense_layers: int = 2
++    recur_block_type: str = 'dense'
 +    recur_num_blocks: int = 1
 +    recur_max_iters: int = 16
 +    recur_ln_mode: str = 'per_layer_final'
@@ -5315,6 +5362,7 @@ index 4ee2b26..0de82b6 100644
 +                out_dim=self.latent_dim,
 +                num_iters=int(self.recur_num_iters),
 +                num_dense_layers=int(self.recur_num_dense_layers),
++                block_type=str(self.recur_block_type),
 +                max_iters=int(self.recur_max_iters),
 +                layer_norm=self.layer_norm,
 +                ln_mode=str(self.recur_ln_mode),
@@ -5334,6 +5382,7 @@ index 4ee2b26..0de82b6 100644
 +                out_dim=self.latent_dim,
 +                num_iters=int(self.recur_num_iters),
 +                num_dense_layers=int(self.recur_num_dense_layers),
++                block_type=str(self.recur_block_type),
 +                max_iters=int(self.recur_max_iters),
 +                layer_norm=self.layer_norm,
 +                ln_mode=str(self.recur_ln_mode),
@@ -5365,7 +5414,7 @@ index 4ee2b26..0de82b6 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +810,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +846,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -5373,7 +5422,7 @@ index 4ee2b26..0de82b6 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,16 +822,38 @@ class GCBilinearValue(nn.Module):
+@@ -375,16 +858,38 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
@@ -5414,7 +5463,7 @@ index 4ee2b26..0de82b6 100644
          else:
              return v
  
-@@ -394,9 +863,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+@@ -394,9 +899,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
  
      action_dim: int = None
  
@@ -5426,13 +5475,14 @@ index 4ee2b26..0de82b6 100644
  
  
  class GCMRNValue(nn.Module):
-@@ -416,9 +885,50 @@ class GCMRNValue(nn.Module):
+@@ -416,9 +921,52 @@ class GCMRNValue(nn.Module):
      latent_dim: int
      layer_norm: bool = True
      encoder: nn.Module = None
 +    backbone: str = 'mlp'  # 'mlp' | 'recur_tied'
 +    recur_num_iters: int = 4
 +    recur_num_dense_layers: int = 2
++    recur_block_type: str = 'dense'
 +    recur_max_iters: int = 16
 +    recur_ln_mode: str = 'per_layer_final'
 +    recur_use_step_info: bool = False
@@ -5460,6 +5510,7 @@ index 4ee2b26..0de82b6 100644
 +                out_dim=self.latent_dim,
 +                num_iters=int(self.recur_num_iters),
 +                num_dense_layers=int(self.recur_num_dense_layers),
++                block_type=str(self.recur_block_type),
 +                max_iters=int(self.recur_max_iters),
 +                layer_norm=self.layer_norm,
 +                ln_mode=str(self.recur_ln_mode),
@@ -5478,7 +5529,7 @@ index 4ee2b26..0de82b6 100644
  
      def __call__(self, observations, goals, is_phi=False, info=False):
          """Return the MRN value function.
-@@ -436,8 +946,12 @@ class GCMRNValue(nn.Module):
+@@ -436,8 +984,12 @@ class GCMRNValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)
@@ -5493,13 +5544,14 @@ index 4ee2b26..0de82b6 100644
  
          sym_s = phi_s[..., : self.latent_dim // 2]
          sym_g = phi_g[..., : self.latent_dim // 2]
-@@ -471,9 +985,50 @@ class GCIQEValue(nn.Module):
+@@ -471,9 +1023,52 @@ class GCIQEValue(nn.Module):
      dim_per_component: int
      layer_norm: bool = True
      encoder: nn.Module = None
 +    backbone: str = 'mlp'  # 'mlp' | 'recur_tied'
 +    recur_num_iters: int = 4
 +    recur_num_dense_layers: int = 2
++    recur_block_type: str = 'dense'
 +    recur_max_iters: int = 16
 +    recur_ln_mode: str = 'per_layer_final'
 +    recur_use_step_info: bool = False
@@ -5527,6 +5579,7 @@ index 4ee2b26..0de82b6 100644
 +                out_dim=self.latent_dim,
 +                num_iters=int(self.recur_num_iters),
 +                num_dense_layers=int(self.recur_num_dense_layers),
++                block_type=str(self.recur_block_type),
 +                max_iters=int(self.recur_max_iters),
 +                layer_norm=self.layer_norm,
 +                ln_mode=str(self.recur_ln_mode),
@@ -5545,7 +5598,7 @@ index 4ee2b26..0de82b6 100644
          self.alpha = Param()
  
      def __call__(self, observations, goals, is_phi=False, info=False):
-@@ -493,8 +1048,12 @@ class GCIQEValue(nn.Module):
+@@ -493,8 +1088,12 @@ class GCIQEValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)

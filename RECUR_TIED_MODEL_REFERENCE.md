@@ -31,6 +31,7 @@ Current arguments:
 | `out_dim` | required | Output width |
 | `num_iters` | required | Train-time recurrent steps |
 | `num_dense_layers` | `2` | Number of tied Dense layers inside each recurrent residual update |
+| `block_type` | `'dense'` | Inner recurrent cell: `dense` or `swiglu` |
 | `max_iters` | `16` | Maximum number of supported recurrent steps when per-step parameters are used |
 | `layer_norm` | `True` | Whether LayerNorm is enabled |
 | `ln_mode` | `'per_layer_final'` | One of `pre_loop`, `per_layer`, `per_layer_final`, `pre_loop_per_layer` |
@@ -48,12 +49,13 @@ High-level forward structure:
 
 1. Project inputs to `hidden_dim`.
 2. Run `num_iters` recurrent refinement steps.
-3. Each step applies a tied residual block made of `num_dense_layers` Dense layers.
-4. Optional step information is added either from a learned step table or a sinusoidal encoding.
-5. Optional FiLM modulation is applied before the tied Dense stack.
-6. Optional LayerScale multiplies the residual update by a learned per-step `alpha_k`.
-7. Optional ACT forms a weighted final hidden state.
-8. Final projection maps to `out_dim`.
+3. Each step applies a tied residual block selected by `block_type`.
+4. `dense` keeps the existing tied Dense stack; `swiglu` uses a fixed pre-norm `W_a/W_b/W_o` SwiGLU cell.
+5. Optional step information is added either from a learned step table or a sinusoidal encoding.
+6. Optional FiLM modulation is applied before the inner recurrent cell.
+7. Optional LayerScale multiplies the residual update by a learned per-step `alpha_k`.
+8. Optional ACT forms a weighted final hidden state.
+9. Final projection maps to `out_dim`.
 
 ## Simplified Surface
 
@@ -87,6 +89,29 @@ There is no extra context-FiLM switch anymore.
 LayerNorm is always the tied/shared version when it is enabled. The remaining control is only placement via `ln_mode`.
 
 LayerScale now always uses non-shared per-step `alpha_k` when enabled. The parameter shape is always `(max_iters,)`.
+
+## Block Types
+
+`recur_tied` now supports two inner block variants:
+
+- `block_type='dense'`: the original tied Dense stack controlled by `num_dense_layers` and `ln_mode`
+- `block_type='swiglu'`: a fixed pre-norm recurrent cell
+
+```text
+z_k = LN(h_{k-1})
+z~_k = (1 + gamma(c, e_k)) ⊙ z_k + beta(c, e_k)
+a_k = W_a z~_k
+b_k = W_b z~_k
+g_k = SiLU(a_k) ⊙ b_k
+Δ_k = W_o g_k
+h_k = h_{k-1} + alpha_k Δ_k
+```
+
+Notes:
+
+- `swiglu` keeps the outer recurrent shell, FiLM, LayerScale, and ACT logic unchanged.
+- `swiglu` uses a fixed 2-layer gated cell, so `num_dense_layers` must stay at `2`.
+- `swiglu` uses pre-norm semantics internally even if the old `ln_mode` default remains `per_layer_final`.
 
 ## Iteration Bound
 
