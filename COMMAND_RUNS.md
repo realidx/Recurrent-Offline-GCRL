@@ -10,7 +10,7 @@ Launcher sources:
 
 The new launcher env vars exposed for this ablation are:
 
-- `RECUR_USE_FILM_CONTEXT`, `RECUR_USE_STEP_INFO` for `CRL` / `QRL`
+- `CRITIC_RECUR_USE_FILM`, `CRITIC_RECUR_FILM_MODE`, `RECUR_USE_STEP_INFO` for `CRL` / `QRL`
 - `VALUE_RECUR_USE_FILM_CONTEXT`, `VALUE_RECUR_USE_STEP_INFO` for `HIQL`
 - `VALUE_RECUR_USE_FILM_CONTEXT`, `VALUE_RECUR_USE_STEP_INFO`, `ACTOR_RECUR_USE_FILM_CONTEXT`, `ACTOR_RECUR_USE_STEP_INFO`, `LOW_ACTOR_RECUR_USE_FILM_CONTEXT`, `LOW_ACTOR_RECUR_USE_STEP_INFO` for `SAW`
 
@@ -21,19 +21,19 @@ These `CRL` commands are aligned to the OGBench third-party benchmark entry in [
 Baseline recurrent critic, hidden-only FiLM:
 
 ```bash
-sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=CRL_AntGiantNavigate_FiLM_Ablation,EXP_NAME=Baseline,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,RECUR_MAX_ITERS=8,RECUR_USE_STEP_INFO=0,RECUR_USE_FILM_CONTEXT=0,ALPHA=0.1,DISCOUNT=0.995,ACTOR_P_TRAJGOAL=1.0,ACTOR_P_RANDOMGOAL=0.0,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_crl.slurm
+sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=CRL_AntGiantNavigate_FiLM_Ablation,EXP_NAME=Baseline,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,RECUR_MAX_ITERS=8,RECUR_USE_STEP_INFO=0,CRITIC_RECUR_USE_FILM=1,CRITIC_RECUR_FILM_MODE=hidden,ALPHA=0.1,DISCOUNT=0.995,ACTOR_P_TRAJGOAL=1.0,ACTOR_P_RANDOMGOAL=0.0,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_crl.slurm
 ```
 
 Hybrid hidden + context FiLM critic:
 
 ```bash
-sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=CRL_AntGiantNavigate_FiLM_Ablation,EXP_NAME=FiLMCtx,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,RECUR_MAX_ITERS=8,RECUR_USE_STEP_INFO=0,RECUR_USE_FILM_CONTEXT=1,ALPHA=0.1,DISCOUNT=0.995,ACTOR_P_TRAJGOAL=1.0,ACTOR_P_RANDOMGOAL=0.0,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_crl.slurm
+sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=CRL_AntGiantNavigate_FiLM_Ablation,EXP_NAME=FiLMCtx,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,RECUR_MAX_ITERS=8,RECUR_USE_STEP_INFO=0,CRITIC_RECUR_USE_FILM=1,CRITIC_RECUR_FILM_MODE=hidden_context,ALPHA=0.1,DISCOUNT=0.995,ACTOR_P_TRAJGOAL=1.0,ACTOR_P_RANDOMGOAL=0.0,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_crl.slurm
 ```
 
 Hybrid hidden + context + step FiLM critic:
 
 ```bash
-sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=CRL_AntGiantNavigate_FiLM_Ablation,EXP_NAME=FiLMCtxStep,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,RECUR_MAX_ITERS=8,RECUR_USE_STEP_INFO=1,RECUR_USE_FILM_CONTEXT=1,ALPHA=0.1,DISCOUNT=0.995,ACTOR_P_TRAJGOAL=1.0,ACTOR_P_RANDOMGOAL=0.0,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_crl.slurm
+sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=CRL_AntGiantNavigate_FiLM_Ablation,EXP_NAME=FiLMCtxStep,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,RECUR_MAX_ITERS=8,RECUR_USE_STEP_INFO=1,CRITIC_RECUR_USE_FILM=1,CRITIC_RECUR_FILM_MODE=hidden_context,ALPHA=0.1,DISCOUNT=0.995,ACTOR_P_TRAJGOAL=1.0,ACTOR_P_RANDOMGOAL=0.0,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_crl.slurm
 ```
 
 ## HIQL on `antmaze-large-stitch-v0`
@@ -57,7 +57,8 @@ sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROU
 `hidden_context`, no step:
 
 ```bash
-sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=HIQL_AntLargeStitch_FiLM_Ablation,EXP_NAME=HiddenContext_NoStep,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=4,VALUE_RECUR_NUM_DENSE_LAYERS=3,VALUE_RECUR_MAX_ITERS=4,VALUE_RECUR_LN_MODE=pre_loop_per_payer,VALUE_RECUR_USE_STEP_INFO=0,VALUE_RECUR_USE_FILM_CONTEXT=1,VALUE_RECUR_FILM_MODE=hidden_context,DISCOUNT=0.99,LOW_ALPHA=3.0,HIGH_ALPHA=3.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,EVAL_ON_CPU=1,WANDB_MODE=online" slurm/train_hiql.slurm
+sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=HIQL_AntLargeStitch_FiLM_Ablation,EXP_NAME=HiddenContext_NoStep,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=4,VALUE_RECUR_NUM_DENSE_LAYERS=3,VALUE_RECUR_MAX_ITERS=4,VALUE_RECUR_LN_MODE=pre_loop_per_layer,VALUE_RECUR_USE_STEP_INFO=0,VALUE_RECUR_FILM_MODE=hidden_context,DISCOUNT=0.99,LOW_ALPHA=3.0,HIGH_ALPHA=3.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,EVAL_ON_CPU=1,WANDB_MODE=online" slurm/train_hiql.slurm
+
 ```
 
 `context`, with step:
@@ -121,13 +122,13 @@ sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROU
 Before launching 3 seeds, use a one-seed smoke test:
 
 ```bash
-sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=Smoke_CRL_FiLMCtx,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,RECUR_MAX_ITERS=4,RECUR_USE_STEP_INFO=0,RECUR_USE_FILM_CONTEXT=1,ALPHA=0.1,DISCOUNT=0.995,EVAL_ON_CPU=1,WANDB_MODE=online" slurm/train_crl_generic_array.slurm
+sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=Smoke_CRL_FiLMCtx,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,RECUR_MAX_ITERS=4,RECUR_USE_STEP_INFO=0,CRITIC_RECUR_USE_FILM=1,CRITIC_RECUR_FILM_MODE=hidden_context,ALPHA=0.1,DISCOUNT=0.995,EVAL_ON_CPU=1,WANDB_MODE=online" slurm/train_crl.slurm
 ```
 
 ## Suggested Comparison Order
 
-1. `CRL`: baseline vs `RECUR_USE_FILM_CONTEXT=1`
-2. `CRL`: `RECUR_USE_FILM_CONTEXT=1` vs `RECUR_USE_FILM_CONTEXT=1, RECUR_USE_STEP_INFO=1`
+1. `CRL`: hidden-only FiLM vs `CRITIC_RECUR_FILM_MODE=hidden_context`
+2. `CRL`: `CRITIC_RECUR_FILM_MODE=hidden_context` without step info vs with `RECUR_USE_STEP_INFO=1`
 3. `HIQL`: baseline vs `VALUE_RECUR_USE_FILM_CONTEXT=1`
 
 
@@ -166,5 +167,4 @@ sbatch --job-name=hiql_geom_eval --partition=gpu-long --gpus=h100-47 --time=05:0
 
 
 sbatch --job-name=hiql_geom_eval --partition=gpu-long --gpus=h100-47 --time=05:00:00 --cpus-per-task=8 --mem=24G --output=logs/phase_4/slurm-%x-%j.out --error=logs/phase_4/slurm-%x-%j.err --wrap='cd "$SLURM_SUBMIT_DIR/third_party/ogbench/impls" && export OGBENCH_DATASET_DIR="$SLURM_SUBMIT_DIR/.ogbench_data" && conda run -n recurrent python analyze_hiql_value_geometry.py --run_dir "$SLURM_SUBMIT_DIR/exp/OGBench/HIQL_AntLargeStitch_Baseline/sd000_antmaze_large_stitch_hiql_mlp_baseline" --epochs 1000000 --task_ids 1,2,3,4,5 --policy_rollout_steps 25 --reset_eval_episodes 50 --train_adv_batches 8 --train_adv_batch_size 1024 --output_dir "$SLURM_SUBMIT_DIR/exp/value_geometry_hiql_baseline_sd000_ckpt1000000"'
-
 
