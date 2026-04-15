@@ -26,10 +26,10 @@ index 4596fe2..bab8556 100644
  )
 diff --git a/impls/agents/cgivl.py b/impls/agents/cgivl.py
 new file mode 100644
-index 0000000..d4c19cf
+index 0000000..441bfaf
 --- /dev/null
 +++ b/impls/agents/cgivl.py
-@@ -0,0 +1,535 @@
+@@ -0,0 +1,537 @@
 +import copy
 +from functools import partial
 +from typing import Any
@@ -424,6 +424,7 @@ index 0000000..d4c19cf
 +                ensemble=True,
 +                recur_num_iters=int(config.get('value_recur_iters', 4)),
 +                recur_num_dense_layers=int(config.get('value_recur_num_dense_layers', 2)),
++                recur_block_type=str(config.get('value_recur_block_type', 'dense')),
 +                recur_max_iters=int(config.get('value_recur_max_iters', 4)),
 +                recur_ln_mode=str(config.get('value_recur_ln_mode', 'per_layer_final')),
 +                recur_use_step_info=bool(config.get('value_recur_use_step_info', False)),
@@ -520,6 +521,7 @@ index 0000000..d4c19cf
 +            rep_dim=10,
 +            value_recur_iters=4,
 +            value_recur_num_dense_layers=2,
++            value_recur_block_type='dense',
 +            value_recur_max_iters=4,
 +            value_recur_ln_mode='per_layer_final',
 +            value_recur_use_step_info=False,
@@ -566,7 +568,7 @@ index 0000000..d4c19cf
 +    )
 +    return config
 diff --git a/impls/agents/crl.py b/impls/agents/crl.py
-index 53109ab..a8730e5 100644
+index 53109ab..5a481f6 100644
 --- a/impls/agents/crl.py
 +++ b/impls/agents/crl.py
 @@ -22,51 +22,110 @@ class CRLAgent(flax.struct.PyTreeNode):
@@ -721,7 +723,7 @@ index 53109ab..a8730e5 100644
              }
          else:
              raise ValueError(f'Unsupported actor loss: {self.config["actor_loss"]}')
-@@ -231,6 +288,25 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -231,6 +288,26 @@ class CRLAgent(flax.struct.PyTreeNode):
                  state_encoder=encoders.get('critic_state'),
                  goal_encoder=encoders.get('critic_goal'),
                  action_dim=action_dim,
@@ -733,6 +735,7 @@ index 53109ab..a8730e5 100644
 +                        2 * int(config.get('critic_recur_num_blocks', 1)),
 +                    )
 +                ),
++                recur_block_type=str(config.get('critic_recur_block_type', 'dense')),
 +                recur_max_iters=config['critic_recur_max_iters'],
 +                recur_ln_mode=str(config.get('critic_recur_ln_mode', 'per_layer_final')),
 +                recur_use_step_info=bool(config.get('critic_recur_use_step_info', False)),
@@ -747,7 +750,7 @@ index 53109ab..a8730e5 100644
              )
          else:
              critic_def = GCBilinearValue(
-@@ -241,6 +317,25 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -241,6 +318,26 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
                  state_encoder=encoders.get('critic_state'),
                  goal_encoder=encoders.get('critic_goal'),
@@ -759,6 +762,7 @@ index 53109ab..a8730e5 100644
 +                        2 * int(config.get('critic_recur_num_blocks', 1)),
 +                    )
 +                ),
++                recur_block_type=str(config.get('critic_recur_block_type', 'dense')),
 +                recur_max_iters=config['critic_recur_max_iters'],
 +                recur_ln_mode=str(config.get('critic_recur_ln_mode', 'per_layer_final')),
 +                recur_use_step_info=bool(config.get('critic_recur_use_step_info', False)),
@@ -773,7 +777,7 @@ index 53109ab..a8730e5 100644
              )
  
          if config['actor_loss'] == 'awr':
-@@ -253,6 +348,25 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -253,6 +350,26 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
                  state_encoder=encoders.get('value_state'),
                  goal_encoder=encoders.get('value_goal'),
@@ -785,6 +789,7 @@ index 53109ab..a8730e5 100644
 +                        2 * int(config.get('critic_recur_num_blocks', 1)),
 +                    )
 +                ),
++                recur_block_type=str(config.get('critic_recur_block_type', 'dense')),
 +                recur_max_iters=config['critic_recur_max_iters'],
 +                recur_ln_mode=str(config.get('critic_recur_ln_mode', 'per_layer_final')),
 +                recur_use_step_info=bool(config.get('critic_recur_use_step_info', False)),
@@ -799,7 +804,7 @@ index 53109ab..a8730e5 100644
              )
  
          if config['discrete']:
-@@ -282,7 +396,15 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -282,7 +399,15 @@ class CRLAgent(flax.struct.PyTreeNode):
          network_args = {k: v[1] for k, v in network_info.items()}
  
          network_def = ModuleDict(networks)
@@ -816,7 +821,7 @@ index 53109ab..a8730e5 100644
          network_params = network_def.init(init_rng, **network_args)['params']
          network = TrainState.create(network_def, network_params, tx=network_tx)
  
-@@ -295,6 +417,8 @@ def get_config():
+@@ -295,6 +420,8 @@ def get_config():
              # Agent hyperparameters.
              agent_name='crl',  # Agent name.
              lr=3e-4,  # Learning rate.
@@ -825,7 +830,7 @@ index 53109ab..a8730e5 100644
              batch_size=1024,  # Batch size.
              actor_hidden_dims=(512, 512, 512),  # Actor network hidden dimensions.
              value_hidden_dims=(512, 512, 512),  # Value network hidden dimensions.
-@@ -306,6 +430,24 @@ def get_config():
+@@ -306,6 +433,25 @@ def get_config():
              const_std=True,  # Whether to use constant standard deviation for the actor.
              discrete=False,  # Whether the action space is discrete.
              encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
@@ -833,6 +838,7 @@ index 53109ab..a8730e5 100644
 +            critic_backbone='mlp',  # 'mlp' | 'recur_tied'
 +            critic_recur_iters=4,  # Tied iterations K_train (used if critic_backbone='recur_tied').
 +            critic_recur_num_dense_layers=2,  # Number of Dense layers inside each tied recurrent residual update.
++            critic_recur_block_type='dense',  # 'dense' | 'swiglu' recurrent update cell.
 +            critic_recur_num_blocks=1,  # Number of 2-layer MLP pairs inside each tied recurrent residual update.
 +            critic_eval_num_iters=ml_collections.config_dict.placeholder(int),  # Optional K_test override for evaluation-only (tied-only test-time compute knob).
 +            critic_recur_max_iters=16,  # Max step embedding table size.
@@ -850,7 +856,7 @@ index 53109ab..a8730e5 100644
              # Dataset hyperparameters.
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
-@@ -319,6 +461,9 @@ def get_config():
+@@ -319,6 +465,9 @@ def get_config():
              gc_negative=False,  # Unused (defined for compatibility with GCDataset).
              p_aug=0.0,  # Probability of applying image augmentation.
              frame_stack=ml_collections.config_dict.placeholder(int),  # Number of frames to stack.
@@ -861,7 +867,7 @@ index 53109ab..a8730e5 100644
      )
      return config
 diff --git a/impls/agents/hiql.py b/impls/agents/hiql.py
-index 63e5dee..444e6e5 100644
+index 63e5dee..e9f0a6e 100644
 --- a/impls/agents/hiql.py
 +++ b/impls/agents/hiql.py
 @@ -8,7 +8,7 @@ import ml_collections
@@ -916,7 +922,7 @@ index 63e5dee..444e6e5 100644
  
      def low_actor_loss(self, batch, grad_params):
          """Compute the low-level actor loss."""
-@@ -259,18 +280,39 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -259,18 +280,40 @@ class HIQLAgent(flax.struct.PyTreeNode):
              high_actor_encoder_def = None
  
          # Define value and actor networks.
@@ -949,6 +955,7 @@ index 63e5dee..444e6e5 100644
 +                ensemble=True,
 +                recur_num_iters=int(config.get('value_recur_iters', 4)),
 +                recur_num_dense_layers=int(config.get('value_recur_num_dense_layers', 2)),
++                recur_block_type=str(config.get('value_recur_block_type', 'dense')),
 +                recur_max_iters=int(config.get('value_recur_max_iters', 4)),
 +                recur_ln_mode=str(config.get('value_recur_ln_mode', 'per_layer_final')),
 +                recur_use_step_info=bool(config.get('value_recur_use_step_info', False)),
@@ -968,7 +975,7 @@ index 63e5dee..444e6e5 100644
  
          if config['discrete']:
              low_actor_def = GCDiscreteActor(
-@@ -306,7 +348,15 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -306,7 +349,15 @@ class HIQLAgent(flax.struct.PyTreeNode):
          network_args = {k: v[1] for k, v in network_info.items()}
  
          network_def = ModuleDict(networks)
@@ -985,7 +992,7 @@ index 63e5dee..444e6e5 100644
          network_params = network_def.init(init_rng, **network_args)['params']
          network = TrainState.create(network_def, network_params, tx=network_tx)
  
-@@ -322,9 +372,12 @@ def get_config():
+@@ -322,9 +373,12 @@ def get_config():
              # Agent hyperparameters.
              agent_name='hiql',  # Agent name.
              lr=3e-4,  # Learning rate.
@@ -998,12 +1005,13 @@ index 63e5dee..444e6e5 100644
              layer_norm=True,  # Whether to use layer normalization.
              discount=0.99,  # Discount factor.
              tau=0.005,  # Target network update rate.
-@@ -333,6 +386,20 @@ def get_config():
+@@ -333,6 +387,21 @@ def get_config():
              high_alpha=3.0,  # High-level AWR temperature.
              subgoal_steps=25,  # Subgoal steps.
              rep_dim=10,  # Goal representation dimension.
 +            value_recur_iters=4,  # Tied iterations for value_backbone='recur_tied'.
 +            value_recur_num_dense_layers=2,  # Dense layers inside each recurrent value update.
++            value_recur_block_type='dense',  # 'dense' | 'swiglu' recurrent update cell.
 +            value_recur_max_iters=4,  # Max supported recurrent iterations for HIQL value.
 +            value_recur_ln_mode='per_layer_final',  # 'pre_loop' | 'per_layer' | 'per_layer_final' | 'pre_loop_per_layer' recurrent value LayerNorm placement.
 +            value_recur_use_step_info=False,  # Inject step information into the recurrent HIQL value.
@@ -1020,10 +1028,10 @@ index 63e5dee..444e6e5 100644
              const_std=True,  # Whether to use constant standard deviation for the actors.
              discrete=False,  # Whether the action space is discrete.
 diff --git a/impls/agents/qrl.py b/impls/agents/qrl.py
-index 79852cb..77388b5 100644
+index 79852cb..95466b6 100644
 --- a/impls/agents/qrl.py
 +++ b/impls/agents/qrl.py
-@@ -234,6 +234,22 @@ class QRLAgent(flax.struct.PyTreeNode):
+@@ -234,6 +234,23 @@ class QRLAgent(flax.struct.PyTreeNode):
                  latent_dim=config['latent_dim'],
                  layer_norm=config['layer_norm'],
                  encoder=encoders.get('value'),
@@ -1035,6 +1043,7 @@ index 79852cb..77388b5 100644
 +                        2 * int(config.get('critic_recur_num_blocks', 1)),
 +                    )
 +                ),
++                recur_block_type=str(config.get('critic_recur_block_type', 'dense')),
 +                recur_max_iters=config['critic_recur_max_iters'],
 +                recur_ln_mode=str(config.get('critic_recur_ln_mode', 'per_layer_final')),
 +                recur_use_step_info=bool(config.get('critic_recur_use_step_info', False)),
@@ -1046,7 +1055,7 @@ index 79852cb..77388b5 100644
              )
          elif config['quasimetric_type'] == 'iqe':
              value_def = GCIQEValue(
-@@ -242,6 +258,22 @@ class QRLAgent(flax.struct.PyTreeNode):
+@@ -242,6 +259,23 @@ class QRLAgent(flax.struct.PyTreeNode):
                  dim_per_component=8,
                  layer_norm=config['layer_norm'],
                  encoder=encoders.get('value'),
@@ -1058,6 +1067,7 @@ index 79852cb..77388b5 100644
 +                        2 * int(config.get('critic_recur_num_blocks', 1)),
 +                    )
 +                ),
++                recur_block_type=str(config.get('critic_recur_block_type', 'dense')),
 +                recur_max_iters=config['critic_recur_max_iters'],
 +                recur_ln_mode=str(config.get('critic_recur_ln_mode', 'per_layer_final')),
 +                recur_use_step_info=bool(config.get('critic_recur_use_step_info', False)),
@@ -1069,7 +1079,7 @@ index 79852cb..77388b5 100644
              )
          else:
              raise ValueError(f'Unsupported quasimetric type: {config["quasimetric_type"]}')
-@@ -310,6 +342,19 @@ def get_config():
+@@ -310,6 +344,20 @@ def get_config():
              const_std=True,  # Whether to use constant standard deviation for the actor.
              discrete=False,  # Whether the action space is discrete.
              encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
@@ -1077,6 +1087,7 @@ index 79852cb..77388b5 100644
 +            critic_backbone='mlp',  # 'mlp' | 'recur_tied'
 +            critic_recur_iters=4,  # Tied iterations K_train (used if critic_backbone='recur_tied').
 +            critic_recur_num_dense_layers=2,  # Number of Dense layers inside each tied recurrent residual update.
++            critic_recur_block_type='dense',  # 'dense' | 'swiglu' recurrent update cell.
 +            critic_recur_num_blocks=1,  # Number of 2-layer MLP pairs inside each tied recurrent residual update.
 +            critic_recur_max_iters=16,  # Max step embedding table size.
 +            critic_layerscale_init=1e-2,  # LayerScale init for recur_tied.
@@ -1091,10 +1102,10 @@ index 79852cb..77388b5 100644
              value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
 diff --git a/impls/agents/saw.py b/impls/agents/saw.py
 new file mode 100644
-index 0000000..16660f1
+index 0000000..62b3e25
 --- /dev/null
 +++ b/impls/agents/saw.py
-@@ -0,0 +1,408 @@
+@@ -0,0 +1,410 @@
 +import copy
 +from typing import Any
 +
@@ -1376,6 +1387,7 @@ index 0000000..16660f1
 +                ensemble=True,
 +                recur_num_iters=int(config.get('value_recur_iters', 4)),
 +                recur_num_dense_layers=int(config.get('value_recur_num_dense_layers', 2)),
++                recur_block_type=str(config.get('value_recur_block_type', 'dense')),
 +                recur_max_iters=int(config.get('value_recur_max_iters', 16)),
 +                recur_ln_mode=str(config.get('value_recur_ln_mode', 'per_layer_final')),
 +                recur_use_step_info=bool(config.get('value_recur_use_step_info', False)),
@@ -1463,6 +1475,7 @@ index 0000000..16660f1
 +            value_backbone='mlp',
 +            value_recur_iters=4,
 +            value_recur_num_dense_layers=2,
++            value_recur_block_type='dense',
 +            value_recur_max_iters=16,
 +            value_recur_ln_mode='per_layer_final',  # 'pre_loop' | 'per_layer' | 'per_layer_final' | 'pre_loop_per_layer'
 +            value_recur_use_step_info=False,
@@ -3246,7 +3259,7 @@ index 0000000..60716d2
 +if __name__ == '__main__':
 +    main()
 diff --git a/impls/main.py b/impls/main.py
-index 3660e03..7610084 100644
+index 3660e03..2cb4554 100644
 --- a/impls/main.py
 +++ b/impls/main.py
 @@ -1,17 +1,27 @@
@@ -3532,7 +3545,7 @@ index 3660e03..7610084 100644
      setup_wandb(project='OGBench', group=FLAGS.run_group, name=exp_name)
  
      FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, FLAGS.run_group, exp_name)
-@@ -53,108 +287,648 @@ def main(_):
+@@ -53,108 +287,1074 @@ def main(_):
      with open(os.path.join(FLAGS.save_dir, 'flags.json'), 'w') as f:
          json.dump(flag_dict, f)
  
@@ -3655,6 +3668,7 @@ index 3660e03..7610084 100644
 +    device_summary = _device_summary()
 +    value_module_name = 'value' if _extract_module_params(agent.network.params, 'value') is not None else None
 +    actor_module_names = _actor_module_names()
++    has_goal_rep_module = _extract_module_params(agent.network.params, 'goal_rep') is not None
 +
 +    static_metadata = {
 +        'meta/task': FLAGS.env_name,
@@ -3690,6 +3704,340 @@ index 3660e03..7610084 100644
 +        'params/critic_count': _count_params(_extract_module_params(agent.network.params, 'critic')),
 +        'params/target_value_count': _count_params(_extract_module_params(agent.network.params, 'target_value')),
 +    }
++    maze_env = getattr(env, 'unwrapped', env)
++    maze_distance_cache = {}
++    source_labels = {
++        0: 'current',
++        1: 'traj',
++        2: 'random',
++    }
++
++    def _reduced_scores(raw_scores, module_name: str):
++        arr = np.asarray(raw_scores)
++        arr = np.squeeze(arr)
++        if arr.ndim == 0:
++            return arr.reshape(1)
++        if arr.ndim == 1:
++            return arr
++        if arr.ndim == 2:
++            axis = 0 if arr.shape[0] <= arr.shape[1] else 1
++            if module_name == 'critic':
++                return np.min(arr, axis=axis)
++            return np.mean(arr, axis=axis)
++        return arr.reshape(arr.shape[0], -1).mean(axis=-1)
++
++    def _negative_goal_batch(batch, goal_key='value_goals'):
++        negative_goals = batch.get('value_random_goals')
++        if negative_goals is not None:
++            return negative_goals
++        goals = batch.get(goal_key)
++        if goals is None:
++            return None
++        return jax.tree_util.tree_map(lambda arr: np.roll(np.asarray(arr), shift=1, axis=0), goals)
++
++    def _goal_bucket_masks(batch, prefix='value'):
++        source = batch.get(f'{prefix}_goal_source')
++        horizon = batch.get(f'{prefix}_goal_horizon')
++        if source is None or horizon is None:
++            return {}
++        source = np.asarray(source)
++        horizon = np.asarray(horizon)
++        return {
++            'current': source == 0,
++            'traj': source == 1,
++            'traj_short': (source == 1) & (horizon >= 1) & (horizon <= 5),
++            'traj_medium': (source == 1) & (horizon >= 6) & (horizon <= 20),
++            'traj_long': (source == 1) & (horizon >= 21),
++            'random': source == 2,
++        }
++
++    def _extract_xy_batch(observations):
++        if not hasattr(maze_env, 'xy_to_ij'):
++            return None
++        try:
++            arr = np.asarray(observations)
++        except Exception:
++            return None
++        if arr.ndim != 2 or arr.shape[-1] < 2:
++            return None
++        if np.issubdtype(arr.dtype, np.integer) and arr.dtype.itemsize == 1:
++            return None
++        return arr[:, :2].astype(np.float32)
++
++    def _maze_dist_map(goal_ij):
++        key = tuple(int(x) for x in goal_ij)
++        if key in maze_distance_cache:
++            return maze_distance_cache[key]
++        maze_map = np.asarray(getattr(maze_env, 'maze_map'))
++        dist_map = np.full_like(maze_map, fill_value=-1, dtype=np.int32)
++        if (
++            key[0] < 0
++            or key[0] >= maze_map.shape[0]
++            or key[1] < 0
++            or key[1] >= maze_map.shape[1]
++            or maze_map[key[0], key[1]] != 0
++        ):
++            maze_distance_cache[key] = dist_map
++            return dist_map
++        queue = [key]
++        dist_map[key[0], key[1]] = 0
++        head = 0
++        while head < len(queue):
++            i, j = queue[head]
++            head += 1
++            next_dist = dist_map[i, j] + 1
++            for di, dj in [(-1, 0), (0, -1), (1, 0), (0, 1)]:
++                ni, nj = i + di, j + dj
++                if (
++                    0 <= ni < maze_map.shape[0]
++                    and 0 <= nj < maze_map.shape[1]
++                    and maze_map[ni, nj] == 0
++                    and dist_map[ni, nj] < 0
++                ):
++                    dist_map[ni, nj] = next_dist
++                    queue.append((ni, nj))
++        maze_distance_cache[key] = dist_map
++        return dist_map
++
++    def _maze_distance_metadata(batch, goal_key='value_goals'):
++        if not hasattr(maze_env, 'xy_to_ij') or not hasattr(maze_env, 'maze_map'):
++            return None
++        obs_xy = _extract_xy_batch(batch.get('observations'))
++        goal_xy = _extract_xy_batch(batch.get(goal_key))
++        if obs_xy is None or goal_xy is None or obs_xy.shape != goal_xy.shape:
++            return None
++        euclidean = np.linalg.norm(goal_xy - obs_xy, axis=-1)
++        path_len = np.full(obs_xy.shape[0], -1, dtype=np.int32)
++        for idx, (start_xy, target_xy) in enumerate(zip(obs_xy, goal_xy)):
++            try:
++                start_ij = maze_env.xy_to_ij(start_xy)
++                goal_ij = maze_env.xy_to_ij(target_xy)
++            except Exception:
++                continue
++            dist_map = _maze_dist_map(goal_ij)
++            si, sj = int(start_ij[0]), int(start_ij[1])
++            if 0 <= si < dist_map.shape[0] and 0 <= sj < dist_map.shape[1]:
++                path_len[idx] = int(dist_map[si, sj])
++        return {
++            'euclidean': euclidean,
++            'path_len': path_len,
++        }
++
++    def _pearson_corr(a, b):
++        a = np.asarray(a, dtype=np.float64)
++        b = np.asarray(b, dtype=np.float64)
++        if len(a) < 2:
++            return np.nan
++        a = a - a.mean()
++        b = b - b.mean()
++        denom = np.sqrt(np.sum(a**2) * np.sum(b**2))
++        if denom <= 0:
++            return np.nan
++        return float(np.sum(a * b) / denom)
++
++    def _rankdata_average_ties(x):
++        x = np.asarray(x, dtype=np.float64)
++        order = np.argsort(x, kind='mergesort')
++        ranks = np.empty(len(x), dtype=np.float64)
++        i = 0
++        while i < len(x):
++            j = i + 1
++            while j < len(x) and x[order[j]] == x[order[i]]:
++                j += 1
++            avg_rank = 0.5 * (i + j - 1)
++            ranks[order[i:j]] = avg_rank
++            i = j
++        return ranks
++
++    def _spearman_corr(a, b):
++        a = np.asarray(a, dtype=np.float64)
++        b = np.asarray(b, dtype=np.float64)
++        if len(a) < 2:
++            return np.nan
++        return _pearson_corr(_rankdata_average_ties(a), _rankdata_average_ties(b))
++
++    def _log_path_geometry_metrics(metrics, prefix, scores, batch, goal_prefix='value'):
++        maze_meta = _maze_distance_metadata(batch, goal_key=f'{goal_prefix}_goals')
++        if maze_meta is None:
++            return
++        path_len = np.asarray(maze_meta['path_len'])
++        scores = np.asarray(scores)
++        finite_mask = path_len >= 0
++        if np.sum(finite_mask) < 2:
++            return
++        finite_scores = scores[finite_mask]
++        finite_path = path_len[finite_mask].astype(np.float64)
++        neg_path = -finite_path
++        metrics[f'{prefix}/count'] = int(np.sum(finite_mask))
++        metrics[f'{prefix}/graph_corr'] = _pearson_corr(finite_scores, neg_path)
++        metrics[f'{prefix}/graph_spearman'] = _spearman_corr(finite_scores, neg_path)
++        if len(finite_path) < 3:
++            return
++        hard_threshold = float(np.quantile(finite_path, 2.0 / 3.0))
++        hard_mask = finite_path >= hard_threshold
++        metrics[f'{prefix}/hard_threshold'] = hard_threshold
++        metrics[f'{prefix}/hard_count'] = int(np.sum(hard_mask))
++        if np.sum(hard_mask) < 2:
++            return
++        hard_scores = finite_scores[hard_mask]
++        hard_neg_path = -finite_path[hard_mask]
++        metrics[f'{prefix}/hard_graph_corr'] = _pearson_corr(hard_scores, hard_neg_path)
++        metrics[f'{prefix}/hard_graph_spearman'] = _spearman_corr(hard_scores, hard_neg_path)
++
++    def _log_signal_metrics(metrics, prefix, pos_scores, neg_scores, batch=None, goal_prefix='value'):
++        pos_scores = np.asarray(pos_scores)
++        neg_scores = np.asarray(neg_scores)
++        delta = pos_scores - neg_scores
++        metrics[f'{prefix}/pos_mean'] = float(np.mean(pos_scores))
++        metrics[f'{prefix}/pos_std'] = float(np.std(pos_scores))
++        metrics[f'{prefix}/neg_mean'] = float(np.mean(neg_scores))
++        metrics[f'{prefix}/neg_std'] = float(np.std(neg_scores))
++        metrics[f'{prefix}/margin_mean'] = float(np.mean(delta))
++        metrics[f'{prefix}/margin_std'] = float(np.std(delta))
++        metrics[f'{prefix}/rank_acc'] = float(np.mean(delta > 0))
++        pooled_std = np.sqrt(np.var(pos_scores) + np.var(neg_scores) + 1e-8)
++        metrics[f'{prefix}/separation_z'] = float(np.mean(delta) / pooled_std)
++        if batch is None:
++            return
++        bucket_masks = _goal_bucket_masks(batch, prefix=goal_prefix)
++        if not bucket_masks:
++            return
++        source = batch.get(f'{goal_prefix}_goal_source')
++        horizon = batch.get(f'{goal_prefix}_goal_horizon')
++        if source is not None:
++            source = np.asarray(source)
++            for source_id, source_name in source_labels.items():
++                metrics[f'{prefix}/source_{source_name}_frac'] = float(np.mean(source == source_id))
++        if horizon is not None:
++            horizon = np.asarray(horizon)
++            traj_mask = source == 1 if source is not None else np.zeros_like(horizon, dtype=bool)
++            if np.any(traj_mask):
++                metrics[f'{prefix}/traj_horizon_mean'] = float(np.mean(horizon[traj_mask]))
++                metrics[f'{prefix}/traj_horizon_std'] = float(np.std(horizon[traj_mask]))
++        for bucket_name, mask in bucket_masks.items():
++            mask = np.asarray(mask, dtype=bool)
++            metrics[f'{prefix}/{bucket_name}_frac'] = float(np.mean(mask))
++            if not np.any(mask):
++                continue
++            bucket_delta = delta[mask]
++            metrics[f'{prefix}/{bucket_name}_margin_mean'] = float(np.mean(bucket_delta))
++            metrics[f'{prefix}/{bucket_name}_rank_acc'] = float(np.mean(bucket_delta > 0))
++            metrics[f'{prefix}/{bucket_name}_pos_mean'] = float(np.mean(pos_scores[mask]))
++            metrics[f'{prefix}/{bucket_name}_neg_mean'] = float(np.mean(neg_scores[mask]))
++        maze_meta = _maze_distance_metadata(batch, goal_key=f'{goal_prefix}_goals')
++        if maze_meta is None:
++            return
++        euclidean = np.asarray(maze_meta['euclidean'])
++        path_len = np.asarray(maze_meta['path_len'])
++        finite_path = path_len >= 0
++        metrics[f'{prefix}/maze_xy_distance_mean'] = float(np.mean(euclidean))
++        metrics[f'{prefix}/maze_xy_distance_std'] = float(np.std(euclidean))
++        metrics[f'{prefix}/maze_path_available_frac'] = float(np.mean(finite_path))
++        if np.any(finite_path):
++            metrics[f'{prefix}/maze_path_len_mean'] = float(np.mean(path_len[finite_path]))
++            metrics[f'{prefix}/maze_path_len_std'] = float(np.std(path_len[finite_path]))
++        maze_masks = {
++            'maze_xy_short': euclidean <= 4.0,
++            'maze_xy_medium': (euclidean > 4.0) & (euclidean <= 12.0),
++            'maze_xy_long': euclidean > 12.0,
++            'maze_path_short': finite_path & (path_len <= 3),
++            'maze_path_medium': finite_path & (path_len >= 4) & (path_len <= 8),
++            'maze_path_long': finite_path & (path_len >= 9),
++        }
++        for bucket_name, mask in maze_masks.items():
++            metrics[f'{prefix}/{bucket_name}_frac'] = float(np.mean(mask))
++            if not np.any(mask):
++                continue
++            bucket_delta = delta[mask]
++            metrics[f'{prefix}/{bucket_name}_margin_mean'] = float(np.mean(bucket_delta))
++            metrics[f'{prefix}/{bucket_name}_rank_acc'] = float(np.mean(bucket_delta > 0))
++
++    def _score_value_batch(eval_agent, observations, goals, module_name='value'):
++        values = eval_agent.network.select(module_name)(observations, goals)
++        return _reduced_scores(values, 'value')
++
++    def _score_critic_batch(eval_agent, observations, goals, actions):
++        critic_eval_num_iters = config.get('critic_eval_num_iters', None)
++        values = eval_agent.network.select('critic')(
++            observations,
++            goals,
++            actions,
++            num_iters=critic_eval_num_iters,
++        )
++        return _reduced_scores(values, 'critic')
++
++    def _add_compute_metrics(metrics, step: int, total_time: float):
++        samples_seen = int(step) * int(config['batch_size'])
++        total_count = int(static_param_metrics.get('params/total_count', 0) or 0)
++        critic_count = int(static_param_metrics.get('params/critic_count', 0) or 0)
++        value_count = int(static_param_metrics.get('params/value_count', 0) or 0)
++        metrics['time/hours_elapsed'] = float(total_time / 3600.0)
++        metrics['time/samples_per_second'] = float(
++            metrics.get('time/sps', samples_seen / max(total_time, 1e-8))
++        )
++        metrics['compute/total_param_updates'] = float(total_count * int(step))
++        metrics['compute/critic_param_updates'] = float(critic_count * int(step))
++        metrics['compute/value_param_updates'] = float(value_count * int(step))
++        metrics['compute/total_param_samples'] = float(total_count * samples_seen)
++        metrics['compute/critic_param_samples'] = float(critic_count * samples_seen)
++        metrics['compute/value_param_samples'] = float(value_count * samples_seen)
++
++    def _maybe_log_actor_quality(metrics, eval_agent, eval_batch):
++        try:
++            if not config.get('discrete', False) and 'actor' in actor_module_names and 'actions' in eval_batch:
++                actor_goals = eval_batch.get('actor_goals', eval_batch.get('value_goals'))
++                if actor_goals is not None:
++                    dist = eval_agent.network.select('actor')(eval_batch['observations'], actor_goals)
++                    actor_actions = np.asarray(dist.mode())
++                    behavior_actions = np.asarray(eval_batch['actions'])
++                    diff = actor_actions - behavior_actions
++                    metrics['evaluation/actor_behavior_mse'] = float(np.mean(diff**2))
++                    metrics['evaluation/actor_behavior_l2'] = float(np.mean(np.linalg.norm(diff, axis=-1)))
++                    metrics['evaluation/actor_behavior_log_prob'] = float(np.mean(np.asarray(dist.log_prob(eval_batch['actions']))))
++                    if _extract_module_params(eval_agent.network.params, 'critic') is not None:
++                        q_actor = _score_critic_batch(eval_agent, eval_batch['observations'], actor_goals, actor_actions)
++                        q_behavior = _score_critic_batch(eval_agent, eval_batch['observations'], actor_goals, behavior_actions)
++                        q_delta = q_actor - q_behavior
++                        metrics['evaluation/actor_critic/q_actor_mean'] = float(np.mean(q_actor))
++                        metrics['evaluation/actor_critic/q_behavior_mean'] = float(np.mean(q_behavior))
++                        metrics['evaluation/actor_critic/q_delta_mean'] = float(np.mean(q_delta))
++                        metrics['evaluation/actor_critic/prefer_actor_frac'] = float(np.mean(q_delta > 0))
++        except Exception:
++            pass
++
++        try:
++            if not config.get('discrete', False) and has_goal_rep_module and 'low_actor' in actor_module_names and 'low_actor_goals' in eval_batch:
++                goal_reps = eval_agent.network.select('goal_rep')(
++                    jnp.concatenate([eval_batch['observations'], eval_batch['low_actor_goals']], axis=-1)
++                )
++                dist = eval_agent.network.select('low_actor')(eval_batch['observations'], goal_reps, goal_encoded=True)
++                mode = np.asarray(dist.mode())
++                behavior_actions = np.asarray(eval_batch['actions'])
++                diff = mode - behavior_actions
++                metrics['evaluation/low_actor_behavior_mse'] = float(np.mean(diff**2))
++                metrics['evaluation/low_actor_behavior_l2'] = float(np.mean(np.linalg.norm(diff, axis=-1)))
++                metrics['evaluation/low_actor_behavior_log_prob'] = float(np.mean(np.asarray(dist.log_prob(eval_batch['actions']))))
++        except Exception:
++            pass
++
++        try:
++            if has_goal_rep_module and 'high_actor' in actor_module_names and 'high_actor_goals' in eval_batch and 'high_actor_targets' in eval_batch:
++                dist = eval_agent.network.select('high_actor')(eval_batch['observations'], eval_batch['high_actor_goals'])
++                target = eval_agent.network.select('goal_rep')(
++                    jnp.concatenate([eval_batch['observations'], eval_batch['high_actor_targets']], axis=-1)
++                )
++                mode = np.asarray(dist.mode())
++                target = np.asarray(target)
++                diff = mode - target
++                cosine = np.sum(mode * target, axis=-1) / (
++                    np.linalg.norm(mode, axis=-1) * np.linalg.norm(target, axis=-1) + 1e-8
++                )
++                metrics['evaluation/high_actor_target_mse'] = float(np.mean(diff**2))
++                metrics['evaluation/high_actor_target_l2'] = float(np.mean(np.linalg.norm(diff, axis=-1)))
++                metrics['evaluation/high_actor_target_cosine'] = float(np.mean(cosine))
++                metrics['evaluation/high_actor_target_log_prob'] = float(np.mean(np.asarray(dist.log_prob(target))))
++        except Exception:
++            pass
 +
 +    modules = getattr(getattr(agent.network, 'model_def', None), 'modules', {})
 +    has_value = hasattr(modules, 'keys') and 'value' in modules
@@ -3750,6 +4098,7 @@ index 3660e03..7610084 100644
 +        probe_goals = probe_batch.get('value_goals', probe_batch.get('goals'))
 +        if probe_goals is None:
 +            return
++        probe_negative_goals = _negative_goal_batch(probe_batch, goal_key='value_goals')
 +        total_iters = int(config.get('value_recur_iters', 1))
 +        value_steps = []
 +        hidden_norm_steps = []
@@ -3766,6 +4115,29 @@ index 3660e03..7610084 100644
 +            hidden_norm_steps.append(None if hidden_norm is None else np.asarray(hidden_norm))
 +            eval_metrics[f'evaluation/refine/value_step_{k}_mean'] = float(values_k.mean())
 +            eval_metrics[f'evaluation/refine/value_step_{k}_std'] = float(values_k.std())
++            if probe_negative_goals is not None:
++                neg_values_k = np.asarray(
++                    eval_agent.network.select('value')(
++                        probe_batch['observations'],
++                        probe_negative_goals,
++                        num_iters=k,
++                    )
++                )
++                _log_signal_metrics(
++                    eval_metrics,
++                    f'evaluation/refine/step_{k}_signal',
++                    _reduced_scores(values_k, 'value'),
++                    _reduced_scores(neg_values_k, 'value'),
++                    batch=probe_batch,
++                    goal_prefix='value',
++                )
++            _log_path_geometry_metrics(
++                eval_metrics,
++                f'evaluation/refine/step_{k}_geometry',
++                _reduced_scores(values_k, 'value'),
++                probe_batch,
++                goal_prefix='value',
++            )
 +            if hidden_norm is not None:
 +                eval_metrics[f'evaluation/refine/hidden_norm_step_{k}_mean'] = float(np.asarray(hidden_norm).mean())
 +            if k > 1:
@@ -3909,6 +4281,25 @@ index 3660e03..7610084 100644
 +            eval_metrics['evaluation/Q_mean'] = float(q_vals.mean())
 +            eval_metrics['evaluation/Q_std'] = float(q_vals.std())
 +            eval_metrics['evaluation/Q_abs_max'] = float(np.abs(q_vals).max())
++            negative_goals = _negative_goal_batch(eval_batch, goal_key='value_goals')
++            if negative_goals is not None:
++                q_neg = _score_critic_batch(eval_agent, eval_batch['observations'], negative_goals, eval_batch['actions'])
++                q_pos = _reduced_scores(q_vals, 'critic')
++                _log_signal_metrics(
++                    eval_metrics,
++                    'evaluation/critic_signal',
++                    q_pos,
++                    q_neg,
++                    batch=eval_batch,
++                    goal_prefix='value',
++                )
++                _log_path_geometry_metrics(
++                    eval_metrics,
++                    'evaluation/critic_geometry',
++                    q_pos,
++                    eval_batch,
++                    goal_prefix='value',
++                )
 +        elif has_value:
 +            v_vals = eval_agent.network.select('value')(
 +                eval_batch['observations'],
@@ -3918,6 +4309,25 @@ index 3660e03..7610084 100644
 +            eval_metrics['evaluation/value_mean'] = float(v_vals.mean())
 +            eval_metrics['evaluation/value_std'] = float(v_vals.std())
 +            eval_metrics['evaluation/value_abs_max'] = float(np.abs(v_vals).max())
++            negative_goals = _negative_goal_batch(eval_batch, goal_key='value_goals')
++            if negative_goals is not None:
++                v_neg = _score_value_batch(eval_agent, eval_batch['observations'], negative_goals)
++                v_pos = _reduced_scores(v_vals, 'value')
++                _log_signal_metrics(
++                    eval_metrics,
++                    'evaluation/value_signal',
++                    v_pos,
++                    v_neg,
++                    batch=eval_batch,
++                    goal_prefix='value',
++                )
++                _log_path_geometry_metrics(
++                    eval_metrics,
++                    'evaluation/value_geometry',
++                    v_pos,
++                    eval_batch,
++                    goal_prefix='value',
++                )
 +
 +        # ---------------------------------------------------------------------
 +        # Extra eval diagnostics (helps debug instability / overfitting).
@@ -3971,6 +4381,7 @@ index 3660e03..7610084 100644
 +        except Exception:
 +            pass
 +
++        _maybe_log_actor_quality(eval_metrics, eval_agent, eval_batch)
 +        _maybe_log_recurrent_refinement(eval_metrics, eval_agent, step=step)
 +
 +        summary_values = {
@@ -3996,6 +4407,7 @@ index 3660e03..7610084 100644
 +        eval_metrics['time/eval_time'] = time.time() - eval_start
 +        eval_metrics['time/total_time'] = time.time() - first_time
 +        eval_metrics['time/train_wall_clock'] = eval_metrics['time/total_time']
++        _add_compute_metrics(eval_metrics, step=step, total_time=eval_metrics['time/total_time'])
 +        wandb.log(eval_metrics, step=step)
 +        eval_logger.log(eval_metrics, step=step)
  
@@ -4125,12 +4537,39 @@ index 3660e03..7610084 100644
 +            train_metrics['time/train_wall_clock'] = train_metrics['time/total_time']
 +            last_time = log_now
 +            last_log_step = i
++            _add_compute_metrics(train_metrics, step=i, total_time=train_metrics['time/total_time'])
 +
 +            # Parameter magnitude stats (drift detection).
 +            critic_params = _extract_module_params(agent.network.params, 'critic')
 +            critic_abs_mean, _ = _abs_param_stats(critic_params)
 +            if critic_abs_mean is not None:
 +                train_metrics['params/critic_abs_mean'] = critic_abs_mean
++
++            if 'value_goal_source' in batch:
++                source = np.asarray(batch['value_goal_source'])
++                horizon = np.asarray(batch.get('value_goal_horizon', np.full_like(source, -1)))
++                for source_id, source_name in source_labels.items():
++                    train_metrics[f'batch/value_goal_source_{source_name}_frac'] = float(np.mean(source == source_id))
++                traj_mask = source == 1
++                if np.any(traj_mask):
++                    train_metrics['batch/value_goal_horizon_mean'] = float(np.mean(horizon[traj_mask]))
++                    train_metrics['batch/value_goal_horizon_std'] = float(np.std(horizon[traj_mask]))
++                maze_meta = _maze_distance_metadata(batch, goal_key='value_goals')
++                if maze_meta is not None:
++                    euclidean = np.asarray(maze_meta['euclidean'])
++                    path_len = np.asarray(maze_meta['path_len'])
++                    finite_path = path_len >= 0
++                    train_metrics['batch/value_goal_maze_xy_distance_mean'] = float(np.mean(euclidean))
++                    train_metrics['batch/value_goal_maze_xy_distance_std'] = float(np.std(euclidean))
++                    train_metrics['batch/value_goal_maze_path_available_frac'] = float(np.mean(finite_path))
++                    if np.any(finite_path):
++                        train_metrics['batch/value_goal_maze_path_len_mean'] = float(np.mean(path_len[finite_path]))
++                        train_metrics['batch/value_goal_maze_path_len_std'] = float(np.std(path_len[finite_path]))
++                        train_metrics['batch/value_goal_maze_path_short_frac'] = float(np.mean(path_len[finite_path] <= 3))
++                        train_metrics['batch/value_goal_maze_path_medium_frac'] = float(
++                            np.mean((path_len[finite_path] >= 4) & (path_len[finite_path] <= 8))
++                        )
++                        train_metrics['batch/value_goal_maze_path_long_frac'] = float(np.mean(path_len[finite_path] >= 9))
 +
 +            # Policy vs behavior action divergence (offline RL sanity).
 +            if not config.get('discrete'):
@@ -4244,22 +4683,152 @@ index 3660e03..7610084 100644
      eval_logger.close()
  
 diff --git a/impls/utils/datasets.py b/impls/utils/datasets.py
-index 59b32a6..4e8543b 100644
+index 59b32a6..72751fc 100644
 --- a/impls/utils/datasets.py
 +++ b/impls/utils/datasets.py
-@@ -249,7 +249,7 @@ class GCDataset:
+@@ -218,27 +218,32 @@ class GCDataset:
+             idxs = self.dataset.get_random_idxs(batch_size)
+ 
+         batch = self.dataset.sample(batch_size, idxs)
++        batch['idxs'] = np.asarray(idxs, dtype=np.int32)
+         if self.config['frame_stack'] is not None:
+             batch['observations'] = self.get_observations(idxs)
+             batch['next_observations'] = self.get_observations(idxs + 1)
+ 
+-        value_goal_idxs = self.sample_goals(
++        value_goal_idxs, value_goal_meta = self.sample_goals(
+             idxs,
+             self.config['value_p_curgoal'],
+             self.config['value_p_trajgoal'],
+             self.config['value_p_randomgoal'],
+             self.config['value_geom_sample'],
++            return_metadata=True,
+         )
+-        actor_goal_idxs = self.sample_goals(
++        actor_goal_idxs, actor_goal_meta = self.sample_goals(
+             idxs,
+             self.config['actor_p_curgoal'],
+             self.config['actor_p_trajgoal'],
+             self.config['actor_p_randomgoal'],
+             self.config['actor_geom_sample'],
++            return_metadata=True,
+         )
+ 
+         batch['value_goals'] = self.get_observations(value_goal_idxs)
+         batch['actor_goals'] = self.get_observations(actor_goal_idxs)
++        batch.update(self._goal_metadata('value', value_goal_idxs, value_goal_meta))
++        batch.update(self._goal_metadata('actor', actor_goal_idxs, actor_goal_meta))
+         successes = (idxs == value_goal_idxs).astype(float)
+         batch['masks'] = 1.0 - successes
+         batch['rewards'] = successes - (1.0 if self.config['gc_negative'] else 0.0)
+@@ -249,7 +254,7 @@ class GCDataset:
  
          return batch
  
 -    def sample_goals(self, idxs, p_curgoal, p_trajgoal, p_randomgoal, geom_sample):
-+    def sample_goals(self, idxs, p_curgoal, p_trajgoal, p_randomgoal, geom_sample, min_d=0):
++    def sample_goals(self, idxs, p_curgoal, p_trajgoal, p_randomgoal, geom_sample, min_d=0, return_metadata=False):
          """Sample goals for the given indices."""
          batch_size = len(idxs)
  
-@@ -398,3 +398,116 @@ class HGCDataset(GCDataset):
-                 )
+@@ -270,15 +275,32 @@ class GCDataset:
+             ).astype(int)
+         if p_curgoal == 1.0:
+             goal_idxs = idxs
++            goal_source = np.zeros(batch_size, dtype=np.int32)
+         else:
+-            goal_idxs = np.where(
+-                np.random.rand(batch_size) < p_trajgoal / (1.0 - p_curgoal), traj_goal_idxs, random_goal_idxs
+-            )
++            choose_traj = np.random.rand(batch_size) < p_trajgoal / (1.0 - p_curgoal)
++            goal_idxs = np.where(choose_traj, traj_goal_idxs, random_goal_idxs)
++            goal_source = np.where(choose_traj, 1, 2).astype(np.int32)
  
-         return batch
+             # Goals at the current state.
+-            goal_idxs = np.where(np.random.rand(batch_size) < p_curgoal, idxs, goal_idxs)
++            choose_current = np.random.rand(batch_size) < p_curgoal
++            goal_idxs = np.where(choose_current, idxs, goal_idxs)
++            goal_source = np.where(choose_current, 0, goal_source).astype(np.int32)
++
++        if not return_metadata:
++            return goal_idxs
+ 
+-        return goal_idxs
++        metadata = dict(
++            source=goal_source,
++            horizon=np.where(goal_source == 2, -1, np.maximum(goal_idxs - idxs, 0)).astype(np.int32),
++        )
++        return goal_idxs, metadata
++
++    def _goal_metadata(self, prefix, goal_idxs, metadata):
++        return {
++            f'{prefix}_goal_idxs': np.asarray(goal_idxs, dtype=np.int32),
++            f'{prefix}_goal_source': np.asarray(metadata['source'], dtype=np.int32),
++            f'{prefix}_goal_horizon': np.asarray(metadata['horizon'], dtype=np.int32),
++        }
+ 
+     def augment(self, batch, keys):
+         """Apply image augmentation to the given keys."""
+@@ -334,19 +356,22 @@ class HGCDataset(GCDataset):
+             idxs = self.dataset.get_random_idxs(batch_size)
+ 
+         batch = self.dataset.sample(batch_size, idxs)
++        batch['idxs'] = np.asarray(idxs, dtype=np.int32)
+         if self.config['frame_stack'] is not None:
+             batch['observations'] = self.get_observations(idxs)
+             batch['next_observations'] = self.get_observations(idxs + 1)
+ 
+         # Sample value goals.
+-        value_goal_idxs = self.sample_goals(
++        value_goal_idxs, value_goal_meta = self.sample_goals(
+             idxs,
+             self.config['value_p_curgoal'],
+             self.config['value_p_trajgoal'],
+             self.config['value_p_randomgoal'],
+             self.config['value_geom_sample'],
++            return_metadata=True,
+         )
+         batch['value_goals'] = self.get_observations(value_goal_idxs)
++        batch.update(self._goal_metadata('value', value_goal_idxs, value_goal_meta))
+ 
+         successes = (idxs == value_goal_idxs).astype(float)
+         batch['masks'] = 1.0 - successes
+@@ -356,6 +381,8 @@ class HGCDataset(GCDataset):
+         final_state_idxs = self.terminal_locs[np.searchsorted(self.terminal_locs, idxs)]
+         low_goal_idxs = np.minimum(idxs + self.config['subgoal_steps'], final_state_idxs)
+         batch['low_actor_goals'] = self.get_observations(low_goal_idxs)
++        batch['low_actor_goal_idxs'] = np.asarray(low_goal_idxs, dtype=np.int32)
++        batch['low_actor_goal_horizon'] = np.asarray(np.maximum(low_goal_idxs - idxs, 0), dtype=np.int32)
+ 
+         # Sample high-level actor goals and set prediction targets.
+         # High-level future goals.
+@@ -382,6 +409,134 @@ class HGCDataset(GCDataset):
+ 
+         batch['high_actor_goals'] = self.get_observations(high_goal_idxs)
+         batch['high_actor_targets'] = self.get_observations(high_target_idxs)
++        batch['high_actor_goal_idxs'] = np.asarray(high_goal_idxs, dtype=np.int32)
++        batch['high_actor_target_idxs'] = np.asarray(high_target_idxs, dtype=np.int32)
++        batch['high_actor_goal_source'] = np.where(pick_random, 2, 1).astype(np.int32)
++        batch['high_actor_goal_horizon'] = np.where(
++            pick_random,
++            -1,
++            np.maximum(high_goal_idxs - idxs, 0),
++        ).astype(np.int32)
++
++        if self.config['p_aug'] is not None and not evaluation:
++            if np.random.rand() < self.config['p_aug']:
++                self.augment(
++                    batch,
++                    [
++                        'observations',
++                        'next_observations',
++                        'value_goals',
++                        'low_actor_goals',
++                        'high_actor_goals',
++                        'high_actor_targets',
++                    ],
++                )
++
++        return batch
 +
 +
 +@dataclasses.dataclass
@@ -4272,25 +4841,28 @@ index 59b32a6..4e8543b 100644
 +            idxs = self.dataset.get_random_idxs(batch_size)
 +
 +        batch = self.dataset.sample(batch_size, idxs)
++        batch['idxs'] = np.asarray(idxs, dtype=np.int32)
 +        if self.config['frame_stack'] is not None:
 +            batch['observations'] = self.get_observations(idxs)
 +            batch['next_observations'] = self.get_observations(idxs + 1)
 +
-+        value_goal_idxs = self.sample_goals(
++        value_goal_idxs, value_goal_meta = self.sample_goals(
 +            idxs,
 +            self.config['value_p_curgoal'],
 +            self.config['value_p_trajgoal'],
 +            self.config['value_p_randomgoal'],
 +            self.config['value_geom_sample'],
 +            min_d=min_d,
++            return_metadata=True,
 +        )
-+        value_gd_idxs = self.sample_goals(
++        value_gd_idxs, value_gd_meta = self.sample_goals(
 +            idxs,
 +            self.config['gd_p_curgoal'],
 +            self.config['gd_p_trajgoal'],
 +            self.config['gd_p_randomgoal'],
 +            self.config['gd_geom_sample'],
 +            min_d=min_d,
++            return_metadata=True,
 +        )
 +
 +        value_random_idxs = self.dataset.get_random_idxs(batch_size)
@@ -4325,6 +4897,10 @@ index 59b32a6..4e8543b 100644
 +        batch['value_goals'] = self.get_observations(value_goal_idxs)
 +        batch['value_random_goals'] = self.get_observations(value_random_idxs)
 +        batch['low_actor_goals'] = self.get_observations(low_goal_idxs)
++        batch.update(self._goal_metadata('value', value_goal_idxs, value_goal_meta))
++        batch.update(self._goal_metadata('value_gd', value_gd_idxs, value_gd_meta))
++        batch['low_actor_goal_idxs'] = np.asarray(low_goal_idxs, dtype=np.int32)
++        batch['low_actor_goal_horizon'] = np.asarray(np.maximum(low_goal_idxs - idxs, 0), dtype=np.int32)
 +        batch['goals'] = self.get_observations(idxs)
 +        batch['next_goals'] = self.get_observations(idxs + 1)
 +        batch['value_gd_goals'] = self.get_observations(value_gd_idxs)
@@ -4347,20 +4923,23 @@ index 59b32a6..4e8543b 100644
 +        high_target_idxs = np.where(pick_random, high_random_target_idxs, high_traj_target_idxs)
 +        batch['high_actor_goals'] = self.get_observations(high_goal_idxs)
 +        batch['high_actor_targets'] = self.get_observations(high_target_idxs)
++        batch['high_actor_goal_idxs'] = np.asarray(high_goal_idxs, dtype=np.int32)
++        batch['high_actor_target_idxs'] = np.asarray(high_target_idxs, dtype=np.int32)
++        batch['high_actor_goal_source'] = np.where(pick_random, 2, 1).astype(np.int32)
++        batch['high_actor_goal_horizon'] = np.where(
++            pick_random,
++            -1,
++            np.maximum(high_goal_idxs - idxs, 0),
++        ).astype(np.int32)
 +        batch['value_targets'] = self.get_observations(high_traj_target_idxs)
 +        batch['high_actor_targets_observations'] = self.get_observations(high_target_idxs)
-+
-+        if self.config['p_aug'] is not None and not evaluation:
-+            if np.random.rand() < self.config['p_aug']:
-+                self.augment(
-+                    batch,
-+                    [
-+                        'observations',
-+                        'next_observations',
-+                        'value_goals',
-+                        'low_actor_goals',
-+                        'high_actor_goals',
-+                        'high_actor_targets',
+ 
+         if self.config['p_aug'] is not None and not evaluation:
+             if np.random.rand() < self.config['p_aug']:
+@@ -394,6 +549,14 @@ class HGCDataset(GCDataset):
+                         'low_actor_goals',
+                         'high_actor_goals',
+                         'high_actor_targets',
 +                        'high_actor_targets_observations',
 +                        'goals',
 +                        'value_random_goals',
@@ -4369,10 +4948,9 @@ index 59b32a6..4e8543b 100644
 +                        'value_targets',
 +                        'value_gd_goals',
 +                        'gd_random_observations',
-+                    ],
-+                )
-+
-+        return batch
+                     ],
+                 )
+ 
 diff --git a/impls/utils/env_utils.py b/impls/utils/env_utils.py
 index 6b17e11..863dd39 100644
 --- a/impls/utils/env_utils.py
@@ -4839,7 +5417,7 @@ index 9c421dd..3da1eab 100644
  
      return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..0de82b6 100644
+index 4ee2b26..77f22e7 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
 @@ -6,6 +6,8 @@ import flax.linen as nn
@@ -4851,7 +5429,7 @@ index 4ee2b26..0de82b6 100644
  
  def default_init(scale=1.0):
      """Default kernel initializer."""
-@@ -60,6 +62,314 @@ class MLP(nn.Module):
+@@ -60,6 +62,345 @@ class MLP(nn.Module):
          return x
  
  
@@ -4935,8 +5513,8 @@ index 4ee2b26..0de82b6 100644
 +
 +        u = nn.LayerNorm(name='pre_ln')(h) if self.norm_mode in ('pre_block', 'pre_block_per_layer') else h
 +        for layer_index in range(num_layers):
-+            u = nn.Dense(self.hidden_dim, name=f'fc_{layer_index + 1}')(u)
 +            is_last_layer = layer_index + 1 == num_layers
++            u = nn.Dense(self.hidden_dim, name=f'fc_{layer_index + 1}')(u)
 +            if not is_last_layer:
 +                if self.use_inner_layer_norm:
 +                    if self.norm_mode in ('per_layer', 'pre_block_per_layer') or layer_index > 0:
@@ -4978,6 +5556,7 @@ index 4ee2b26..0de82b6 100644
 +    out_dim: int
 +    num_iters: int
 +    num_dense_layers: int = 2
++    block_type: str = 'dense'  # one of: dense | swiglu
 +    max_iters: int = 16
 +    layer_norm: bool = True
 +    ln_mode: str = 'per_layer_final'
@@ -4996,8 +5575,16 @@ index 4ee2b26..0de82b6 100644
 +    def __call__(self, x, num_iters=None, return_aux=False, context=None):
 +        iters = self.num_iters if num_iters is None else int(num_iters)
 +        num_dense_layers = int(self.num_dense_layers)
-+        if num_dense_layers <= 0:
-+            raise ValueError(f'num_dense_layers must be positive. Got {num_dense_layers}.')
++        block_type = str(self.block_type)
++        if block_type not in ('dense', 'swiglu'):
++            raise ValueError(f"Unsupported block_type={block_type!r}. Use 'dense' or 'swiglu'.")
++        if block_type == 'dense':
++            if num_dense_layers <= 0:
++                raise ValueError(f'num_dense_layers must be positive. Got {num_dense_layers}.')
++        elif num_dense_layers != 2:
++            raise ValueError(
++                f"block_type='swiglu' uses a fixed 2-layer gated cell, so num_dense_layers must be 2. Got {num_dense_layers}."
++            )
 +        if self.ln_mode not in ('pre_loop', 'per_layer', 'per_layer_final', 'pre_loop_per_layer'):
 +            raise ValueError(
 +                f"Unsupported ln_mode={self.ln_mode!r}. Use 'pre_loop', 'per_layer', 'per_layer_final', or 'pre_loop_per_layer'."
@@ -5051,12 +5638,25 @@ index 4ee2b26..0de82b6 100644
 +        film_fc2 = nn.Dense(2 * self.hidden_dim) if self.use_film else None
 +        act_halting = nn.Dense(1, name='act_halting') if self.use_act else None
 +
-+        tied_layers = [
-+            nn.Dense(self.hidden_dim, name=f'tied_fc{i + 1}') for i in range(num_dense_layers)
-+        ]
++        tied_layers = None
++        swiglu_gate = None
++        swiglu_value = None
++        swiglu_out = None
++        swiglu_pre_ln = None
++        if block_type == 'dense':
++            tied_layers = [
++                nn.Dense(self.hidden_dim, name=f'tied_fc{i + 1}') for i in range(num_dense_layers)
++            ]
++        else:
++            swiglu_gate = nn.Dense(self.hidden_dim, name='swiglu_fc_a')
++            swiglu_value = nn.Dense(self.hidden_dim, name='swiglu_fc_b')
++            swiglu_out = nn.Dense(self.hidden_dim, name='swiglu_fc_o')
++            if self.layer_norm:
++                # The SwiGLU refinement cell is fixed to the pre-norm design in the requested equations.
++                swiglu_pre_ln = nn.LayerNorm(name='swiglu_ln')
 +
 +        tied_layer_norms = None
-+        if self.layer_norm:
++        if self.layer_norm and block_type == 'dense':
 +            if self.ln_mode == 'pre_loop':
 +                tied_layer_norms = [nn.LayerNorm(name='ln')]
 +            elif self.ln_mode == 'pre_loop_per_layer':
@@ -5086,8 +5686,11 @@ index 4ee2b26..0de82b6 100644
 +
 +        for k in range(iters):
 +            h1 = h
-+            if self.layer_norm and self.ln_mode in ('pre_loop', 'pre_loop_per_layer'):
-+                h1 = tied_layer_norms[0](h1)
++            if block_type == 'dense':
++                if self.layer_norm and self.ln_mode in ('pre_loop', 'pre_loop_per_layer'):
++                    h1 = tied_layer_norms[0](h1)
++            elif swiglu_pre_ln is not None:
++                h1 = swiglu_pre_ln(h1)
 +
 +            if self.use_step_info:
 +                if not self.use_sinusoidal_step_encoding:
@@ -5112,20 +5715,26 @@ index 4ee2b26..0de82b6 100644
 +            else:
 +                u = h1 if step_contrib_k is None else h1 + step_contrib_k
 +
-+            for layer_index, layer in enumerate(tied_layers):
-+                u = layer(u)
-+                apply_layer_norm = (
-+                    self.layer_norm
-+                    and self.ln_mode in ('per_layer', 'per_layer_final', 'pre_loop_per_layer')
-+                    and (layer_index < len(tied_layers) - 1 or self.ln_mode == 'per_layer_final')
-+                )
-+                if apply_layer_norm:
-+                    if self.ln_mode == 'pre_loop_per_layer':
-+                        u = tied_layer_norms[layer_index + 1](u)
-+                    else:
-+                        u = tied_layer_norms[layer_index](u)
-+                if layer_index < len(tied_layers) - 1:
-+                    u = self.activations(u)
++            if block_type == 'dense':
++                for layer_index, layer in enumerate(tied_layers):
++                    u = layer(u)
++                    apply_layer_norm = (
++                        self.layer_norm
++                        and self.ln_mode in ('per_layer', 'per_layer_final', 'pre_loop_per_layer')
++                        and (layer_index < len(tied_layers) - 1 or self.ln_mode == 'per_layer_final')
++                    )
++                    if apply_layer_norm:
++                        if self.ln_mode == 'pre_loop_per_layer':
++                            u = tied_layer_norms[layer_index + 1](u)
++                        else:
++                            u = tied_layer_norms[layer_index](u)
++                    if layer_index < len(tied_layers) - 1:
++                        u = self.activations(u)
++            else:
++                a_k = swiglu_gate(u)
++                b_k = swiglu_value(u)
++                g_k = jax.nn.silu(a_k) * b_k
++                u = swiglu_out(g_k)
 +
 +            if self.use_layerscale:
 +                alpha_k = alpha[k]
@@ -5166,7 +5775,7 @@ index 4ee2b26..0de82b6 100644
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -164,6 +474,7 @@ class GCActor(nn.Module):
+@@ -164,6 +505,7 @@ class GCActor(nn.Module):
      const_std: bool = True
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -5174,7 +5783,7 @@ index 4ee2b26..0de82b6 100644
  
      def setup(self):
          self.actor_net = MLP(self.hidden_dims, activate_final=True)
-@@ -230,6 +541,7 @@ class GCDiscreteActor(nn.Module):
+@@ -230,6 +572,7 @@ class GCDiscreteActor(nn.Module):
      action_dim: int
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -5182,7 +5791,7 @@ index 4ee2b26..0de82b6 100644
  
      def setup(self):
          self.actor_net = MLP(self.hidden_dims, activate_final=True)
-@@ -282,14 +594,22 @@ class GCValue(nn.Module):
+@@ -282,14 +625,22 @@ class GCValue(nn.Module):
      layer_norm: bool = True
      ensemble: bool = True
      gc_encoder: nn.Module = None
@@ -5210,7 +5819,7 @@ index 4ee2b26..0de82b6 100644
  
      def __call__(self, observations, goals=None, actions=None):
          """Return the value/critic function.
-@@ -314,6 +634,69 @@ class GCValue(nn.Module):
+@@ -314,6 +665,71 @@ class GCValue(nn.Module):
          return v
  
  
@@ -5223,6 +5832,7 @@ index 4ee2b26..0de82b6 100644
 +    gc_encoder: nn.Module = None
 +    recur_num_iters: int = 4
 +    recur_num_dense_layers: int = 2
++    recur_block_type: str = 'dense'
 +    recur_max_iters: int = 4
 +    recur_ln_mode: str = 'per_layer_final'
 +    recur_use_step_info: bool = False
@@ -5243,6 +5853,7 @@ index 4ee2b26..0de82b6 100644
 +            out_dim=1,
 +            num_iters=int(self.recur_num_iters),
 +            num_dense_layers=int(self.recur_num_dense_layers),
++            block_type=str(self.recur_block_type),
 +            max_iters=int(self.recur_max_iters),
 +            layer_norm=self.layer_norm,
 +            ln_mode=str(self.recur_ln_mode),
@@ -5280,13 +5891,14 @@ index 4ee2b26..0de82b6 100644
  class GCDiscreteCritic(GCValue):
      """Goal-conditioned critic for discrete actions."""
  
-@@ -347,16 +730,79 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +763,82 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
 +    backbone: str = 'mlp'  # 'mlp' | 'recur_tied'
 +    recur_num_iters: int = 4
 +    recur_num_dense_layers: int = 2
++    recur_block_type: str = 'dense'
 +    recur_num_blocks: int = 1
 +    recur_max_iters: int = 16
 +    recur_ln_mode: str = 'per_layer_final'
@@ -5315,6 +5927,7 @@ index 4ee2b26..0de82b6 100644
 +                out_dim=self.latent_dim,
 +                num_iters=int(self.recur_num_iters),
 +                num_dense_layers=int(self.recur_num_dense_layers),
++                block_type=str(self.recur_block_type),
 +                max_iters=int(self.recur_max_iters),
 +                layer_norm=self.layer_norm,
 +                ln_mode=str(self.recur_ln_mode),
@@ -5334,6 +5947,7 @@ index 4ee2b26..0de82b6 100644
 +                out_dim=self.latent_dim,
 +                num_iters=int(self.recur_num_iters),
 +                num_dense_layers=int(self.recur_num_dense_layers),
++                block_type=str(self.recur_block_type),
 +                max_iters=int(self.recur_max_iters),
 +                layer_norm=self.layer_norm,
 +                ln_mode=str(self.recur_ln_mode),
@@ -5365,7 +5979,7 @@ index 4ee2b26..0de82b6 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +810,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +846,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -5373,7 +5987,7 @@ index 4ee2b26..0de82b6 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,16 +822,38 @@ class GCBilinearValue(nn.Module):
+@@ -375,16 +858,38 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
@@ -5414,7 +6028,7 @@ index 4ee2b26..0de82b6 100644
          else:
              return v
  
-@@ -394,9 +863,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+@@ -394,9 +899,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
  
      action_dim: int = None
  
@@ -5426,13 +6040,14 @@ index 4ee2b26..0de82b6 100644
  
  
  class GCMRNValue(nn.Module):
-@@ -416,9 +885,50 @@ class GCMRNValue(nn.Module):
+@@ -416,9 +921,52 @@ class GCMRNValue(nn.Module):
      latent_dim: int
      layer_norm: bool = True
      encoder: nn.Module = None
 +    backbone: str = 'mlp'  # 'mlp' | 'recur_tied'
 +    recur_num_iters: int = 4
 +    recur_num_dense_layers: int = 2
++    recur_block_type: str = 'dense'
 +    recur_max_iters: int = 16
 +    recur_ln_mode: str = 'per_layer_final'
 +    recur_use_step_info: bool = False
@@ -5460,6 +6075,7 @@ index 4ee2b26..0de82b6 100644
 +                out_dim=self.latent_dim,
 +                num_iters=int(self.recur_num_iters),
 +                num_dense_layers=int(self.recur_num_dense_layers),
++                block_type=str(self.recur_block_type),
 +                max_iters=int(self.recur_max_iters),
 +                layer_norm=self.layer_norm,
 +                ln_mode=str(self.recur_ln_mode),
@@ -5478,7 +6094,7 @@ index 4ee2b26..0de82b6 100644
  
      def __call__(self, observations, goals, is_phi=False, info=False):
          """Return the MRN value function.
-@@ -436,8 +946,12 @@ class GCMRNValue(nn.Module):
+@@ -436,8 +984,12 @@ class GCMRNValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)
@@ -5493,13 +6109,14 @@ index 4ee2b26..0de82b6 100644
  
          sym_s = phi_s[..., : self.latent_dim // 2]
          sym_g = phi_g[..., : self.latent_dim // 2]
-@@ -471,9 +985,50 @@ class GCIQEValue(nn.Module):
+@@ -471,9 +1023,52 @@ class GCIQEValue(nn.Module):
      dim_per_component: int
      layer_norm: bool = True
      encoder: nn.Module = None
 +    backbone: str = 'mlp'  # 'mlp' | 'recur_tied'
 +    recur_num_iters: int = 4
 +    recur_num_dense_layers: int = 2
++    recur_block_type: str = 'dense'
 +    recur_max_iters: int = 16
 +    recur_ln_mode: str = 'per_layer_final'
 +    recur_use_step_info: bool = False
@@ -5527,6 +6144,7 @@ index 4ee2b26..0de82b6 100644
 +                out_dim=self.latent_dim,
 +                num_iters=int(self.recur_num_iters),
 +                num_dense_layers=int(self.recur_num_dense_layers),
++                block_type=str(self.recur_block_type),
 +                max_iters=int(self.recur_max_iters),
 +                layer_norm=self.layer_norm,
 +                ln_mode=str(self.recur_ln_mode),
@@ -5545,7 +6163,7 @@ index 4ee2b26..0de82b6 100644
          self.alpha = Param()
  
      def __call__(self, observations, goals, is_phi=False, info=False):
-@@ -493,8 +1048,12 @@ class GCIQEValue(nn.Module):
+@@ -493,8 +1088,12 @@ class GCIQEValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)

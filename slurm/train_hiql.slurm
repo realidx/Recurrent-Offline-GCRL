@@ -179,6 +179,14 @@ case "${VALUE_BACKBONE}" in
       echo "Error: VALUE_RECUR_LN_MODE='${VALUE_RECUR_LN_MODE}' is invalid. Use pre_loop, per_layer, per_layer_final, or pre_loop_per_layer." >&2
       exit 2
     fi
+    if [[ ! "${VALUE_RECUR_BLOCK_TYPE:-dense}" =~ ^(dense|swiglu)$ ]]; then
+      echo "Error: VALUE_RECUR_BLOCK_TYPE='${VALUE_RECUR_BLOCK_TYPE}' is invalid. Use dense or swiglu." >&2
+      exit 2
+    fi
+    if [[ "${VALUE_RECUR_BLOCK_TYPE:-dense}" == "swiglu" && "${VALUE_RECUR_NUM_DENSE_LAYERS}" != "2" ]]; then
+      echo "Error: VALUE_RECUR_BLOCK_TYPE=swiglu requires VALUE_RECUR_NUM_DENSE_LAYERS=2." >&2
+      exit 2
+    fi
     if [[ ! "${VALUE_RECUR_FILM_MODE}" =~ ^(hidden|context|hidden_context)$ ]]; then
       echo "Error: VALUE_RECUR_FILM_MODE='${VALUE_RECUR_FILM_MODE}' is invalid. Use hidden, context, or hidden_context." >&2
       exit 2
@@ -186,6 +194,7 @@ case "${VALUE_BACKBONE}" in
     AGENT_FLAGS+=(
       "--agent.value_recur_iters=${VALUE_RECUR_ITERS}"
       "--agent.value_recur_num_dense_layers=${VALUE_RECUR_NUM_DENSE_LAYERS}"
+      "--agent.value_recur_block_type=${VALUE_RECUR_BLOCK_TYPE:-dense}"
       "--agent.value_recur_max_iters=${VALUE_RECUR_MAX_ITERS}"
       "--agent.value_recur_ln_mode=${VALUE_RECUR_LN_MODE}"
       "--agent.value_recur_use_step_info=${VALUE_RECUR_USE_STEP_INFO}"
