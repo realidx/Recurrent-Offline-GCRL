@@ -274,6 +274,104 @@ For each claim, ask for the minimum evidence needed:
 
 This should sharply reduce the experimental surface area.
 
+## Logging Note
+
+Use the training logs to support each paper section directly rather than treating them as generic debugging metrics.
+
+### Motivation / Gap
+
+Use:
+
+- `evaluation/return`, `evaluation/success`
+- `params/critic_count`, `params/value_count`, `params/actor_count`
+- `time/hours_elapsed`, `time/samples_per_second`
+- `compute/total_param_updates`, `compute/critic_param_updates`, `compute/value_param_updates`
+- `compute/total_param_samples`, `compute/critic_param_samples`, `compute/value_param_samples`
+
+Purpose:
+
+- show that stronger critics matter on hard tasks
+- compare iterative refinement to deeper or wider MLPs at matched parameter or compute budget
+
+### Observation / Critic Diagnosis
+
+Use:
+
+- `evaluation/critic_signal/*` or `evaluation/value_signal/*`
+- core metrics: positive mean, negative mean, `margin_mean`, `rank_acc`, `separation_z`
+- geometry metrics when available: `evaluation/critic_geometry/*` or `evaluation/value_geometry/*`
+- key geometry metrics: `graph_corr`, `graph_spearman`, `hard_graph_corr`, `hard_graph_spearman`
+- source buckets: `current`, `traj`, `random`
+- horizon buckets: `traj_short`, `traj_medium`, `traj_long`
+- maze-aware buckets when available:
+  - `maze_xy_short`, `maze_xy_medium`, `maze_xy_long`
+  - `maze_path_short`, `maze_path_medium`, `maze_path_long`
+
+Purpose:
+
+- show that the MLP critic becomes diffuse on harder and longer-horizon state-goal pairs
+- show that iterative refinement preserves stronger margins and ranking quality as difficulty increases
+
+### Method / Reproducibility
+
+Record with each run:
+
+- algorithm and backbone choice
+- recurrent block type, hidden width, recurrent iteration count, FiLM mode, step-info setting, ACT, LayerScale
+- matched-parameter or matched-compute setting used for the comparison
+
+Use the parameter, compute, and runtime logs above to make these comparisons explicit.
+
+### Main Results
+
+Use:
+
+- `evaluation/return`, `evaluation/success`
+- the same parameter and compute logs from the Motivation / Gap section
+
+Purpose:
+
+- report the main task outcome
+- keep every main table or figure tied to either matched parameter count or matched compute
+
+### Mechanism
+
+Use:
+
+- `evaluation/refine/step_k_*`
+- `evaluation/refine/step_k_signal/*`
+
+Focus on:
+
+- how value signal quality changes over refinement steps
+- whether margin, ranking, and separation improve with additional recurrent updates
+- whether refinement helps most on long-horizon or maze-distant pairs
+
+### Actor Benefit
+
+Use:
+
+- CRL-style actor diagnostics: `evaluation/actor_critic/*`, `evaluation/actor_behavior_*`
+- HIQL-style actor diagnostics: `evaluation/low_actor_*`, `evaluation/high_actor_*`
+
+Purpose:
+
+- show that critic improvements transfer to actor extraction quality rather than remaining a critic-only effect
+
+### Batch Composition / Sanity Checks
+
+Use:
+
+- `batch/value_goal_source_*_frac`
+- `batch/value_goal_horizon_mean`, `batch/value_goal_horizon_std`
+- `batch/value_goal_maze_xy_distance_*`
+- `batch/value_goal_maze_path_*`
+
+Purpose:
+
+- verify that goal sampling and horizon buckets are stable across runs
+- confirm that comparisons are not explained by batch-composition drift
+
 ## Immediate Next Steps
 
 1. Lock the main paper claim as a critic-architecture paper, not a general bottleneck paper.

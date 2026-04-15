@@ -3259,7 +3259,7 @@ index 0000000..60716d2
 +if __name__ == '__main__':
 +    main()
 diff --git a/impls/main.py b/impls/main.py
-index 3660e03..7610084 100644
+index 3660e03..2cb4554 100644
 --- a/impls/main.py
 +++ b/impls/main.py
 @@ -1,17 +1,27 @@
@@ -3545,7 +3545,7 @@ index 3660e03..7610084 100644
      setup_wandb(project='OGBench', group=FLAGS.run_group, name=exp_name)
  
      FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, FLAGS.run_group, exp_name)
-@@ -53,108 +287,648 @@ def main(_):
+@@ -53,108 +287,1074 @@ def main(_):
      with open(os.path.join(FLAGS.save_dir, 'flags.json'), 'w') as f:
          json.dump(flag_dict, f)
  
@@ -3668,6 +3668,7 @@ index 3660e03..7610084 100644
 +    device_summary = _device_summary()
 +    value_module_name = 'value' if _extract_module_params(agent.network.params, 'value') is not None else None
 +    actor_module_names = _actor_module_names()
++    has_goal_rep_module = _extract_module_params(agent.network.params, 'goal_rep') is not None
 +
 +    static_metadata = {
 +        'meta/task': FLAGS.env_name,
@@ -3703,6 +3704,340 @@ index 3660e03..7610084 100644
 +        'params/critic_count': _count_params(_extract_module_params(agent.network.params, 'critic')),
 +        'params/target_value_count': _count_params(_extract_module_params(agent.network.params, 'target_value')),
 +    }
++    maze_env = getattr(env, 'unwrapped', env)
++    maze_distance_cache = {}
++    source_labels = {
++        0: 'current',
++        1: 'traj',
++        2: 'random',
++    }
++
++    def _reduced_scores(raw_scores, module_name: str):
++        arr = np.asarray(raw_scores)
++        arr = np.squeeze(arr)
++        if arr.ndim == 0:
++            return arr.reshape(1)
++        if arr.ndim == 1:
++            return arr
++        if arr.ndim == 2:
++            axis = 0 if arr.shape[0] <= arr.shape[1] else 1
++            if module_name == 'critic':
++                return np.min(arr, axis=axis)
++            return np.mean(arr, axis=axis)
++        return arr.reshape(arr.shape[0], -1).mean(axis=-1)
++
++    def _negative_goal_batch(batch, goal_key='value_goals'):
++        negative_goals = batch.get('value_random_goals')
++        if negative_goals is not None:
++            return negative_goals
++        goals = batch.get(goal_key)
++        if goals is None:
++            return None
++        return jax.tree_util.tree_map(lambda arr: np.roll(np.asarray(arr), shift=1, axis=0), goals)
++
++    def _goal_bucket_masks(batch, prefix='value'):
++        source = batch.get(f'{prefix}_goal_source')
++        horizon = batch.get(f'{prefix}_goal_horizon')
++        if source is None or horizon is None:
++            return {}
++        source = np.asarray(source)
++        horizon = np.asarray(horizon)
++        return {
++            'current': source == 0,
++            'traj': source == 1,
++            'traj_short': (source == 1) & (horizon >= 1) & (horizon <= 5),
++            'traj_medium': (source == 1) & (horizon >= 6) & (horizon <= 20),
++            'traj_long': (source == 1) & (horizon >= 21),
++            'random': source == 2,
++        }
++
++    def _extract_xy_batch(observations):
++        if not hasattr(maze_env, 'xy_to_ij'):
++            return None
++        try:
++            arr = np.asarray(observations)
++        except Exception:
++            return None
++        if arr.ndim != 2 or arr.shape[-1] < 2:
++            return None
++        if np.issubdtype(arr.dtype, np.integer) and arr.dtype.itemsize == 1:
++            return None
++        return arr[:, :2].astype(np.float32)
++
++    def _maze_dist_map(goal_ij):
++        key = tuple(int(x) for x in goal_ij)
++        if key in maze_distance_cache:
++            return maze_distance_cache[key]
++        maze_map = np.asarray(getattr(maze_env, 'maze_map'))
++        dist_map = np.full_like(maze_map, fill_value=-1, dtype=np.int32)
++        if (
++            key[0] < 0
++            or key[0] >= maze_map.shape[0]
++            or key[1] < 0
++            or key[1] >= maze_map.shape[1]
++            or maze_map[key[0], key[1]] != 0
++        ):
++            maze_distance_cache[key] = dist_map
++            return dist_map
++        queue = [key]
++        dist_map[key[0], key[1]] = 0
++        head = 0
++        while head < len(queue):
++            i, j = queue[head]
++            head += 1
++            next_dist = dist_map[i, j] + 1
++            for di, dj in [(-1, 0), (0, -1), (1, 0), (0, 1)]:
++                ni, nj = i + di, j + dj
++                if (
++                    0 <= ni < maze_map.shape[0]
++                    and 0 <= nj < maze_map.shape[1]
++                    and maze_map[ni, nj] == 0
++                    and dist_map[ni, nj] < 0
++                ):
++                    dist_map[ni, nj] = next_dist
++                    queue.append((ni, nj))
++        maze_distance_cache[key] = dist_map
++        return dist_map
++
++    def _maze_distance_metadata(batch, goal_key='value_goals'):
++        if not hasattr(maze_env, 'xy_to_ij') or not hasattr(maze_env, 'maze_map'):
++            return None
++        obs_xy = _extract_xy_batch(batch.get('observations'))
++        goal_xy = _extract_xy_batch(batch.get(goal_key))
++        if obs_xy is None or goal_xy is None or obs_xy.shape != goal_xy.shape:
++            return None
++        euclidean = np.linalg.norm(goal_xy - obs_xy, axis=-1)
++        path_len = np.full(obs_xy.shape[0], -1, dtype=np.int32)
++        for idx, (start_xy, target_xy) in enumerate(zip(obs_xy, goal_xy)):
++            try:
++                start_ij = maze_env.xy_to_ij(start_xy)
++                goal_ij = maze_env.xy_to_ij(target_xy)
++            except Exception:
++                continue
++            dist_map = _maze_dist_map(goal_ij)
++            si, sj = int(start_ij[0]), int(start_ij[1])
++            if 0 <= si < dist_map.shape[0] and 0 <= sj < dist_map.shape[1]:
++                path_len[idx] = int(dist_map[si, sj])
++        return {
++            'euclidean': euclidean,
++            'path_len': path_len,
++        }
++
++    def _pearson_corr(a, b):
++        a = np.asarray(a, dtype=np.float64)
++        b = np.asarray(b, dtype=np.float64)
++        if len(a) < 2:
++            return np.nan
++        a = a - a.mean()
++        b = b - b.mean()
++        denom = np.sqrt(np.sum(a**2) * np.sum(b**2))
++        if denom <= 0:
++            return np.nan
++        return float(np.sum(a * b) / denom)
++
++    def _rankdata_average_ties(x):
++        x = np.asarray(x, dtype=np.float64)
++        order = np.argsort(x, kind='mergesort')
++        ranks = np.empty(len(x), dtype=np.float64)
++        i = 0
++        while i < len(x):
++            j = i + 1
++            while j < len(x) and x[order[j]] == x[order[i]]:
++                j += 1
++            avg_rank = 0.5 * (i + j - 1)
++            ranks[order[i:j]] = avg_rank
++            i = j
++        return ranks
++
++    def _spearman_corr(a, b):
++        a = np.asarray(a, dtype=np.float64)
++        b = np.asarray(b, dtype=np.float64)
++        if len(a) < 2:
++            return np.nan
++        return _pearson_corr(_rankdata_average_ties(a), _rankdata_average_ties(b))
++
++    def _log_path_geometry_metrics(metrics, prefix, scores, batch, goal_prefix='value'):
++        maze_meta = _maze_distance_metadata(batch, goal_key=f'{goal_prefix}_goals')
++        if maze_meta is None:
++            return
++        path_len = np.asarray(maze_meta['path_len'])
++        scores = np.asarray(scores)
++        finite_mask = path_len >= 0
++        if np.sum(finite_mask) < 2:
++            return
++        finite_scores = scores[finite_mask]
++        finite_path = path_len[finite_mask].astype(np.float64)
++        neg_path = -finite_path
++        metrics[f'{prefix}/count'] = int(np.sum(finite_mask))
++        metrics[f'{prefix}/graph_corr'] = _pearson_corr(finite_scores, neg_path)
++        metrics[f'{prefix}/graph_spearman'] = _spearman_corr(finite_scores, neg_path)
++        if len(finite_path) < 3:
++            return
++        hard_threshold = float(np.quantile(finite_path, 2.0 / 3.0))
++        hard_mask = finite_path >= hard_threshold
++        metrics[f'{prefix}/hard_threshold'] = hard_threshold
++        metrics[f'{prefix}/hard_count'] = int(np.sum(hard_mask))
++        if np.sum(hard_mask) < 2:
++            return
++        hard_scores = finite_scores[hard_mask]
++        hard_neg_path = -finite_path[hard_mask]
++        metrics[f'{prefix}/hard_graph_corr'] = _pearson_corr(hard_scores, hard_neg_path)
++        metrics[f'{prefix}/hard_graph_spearman'] = _spearman_corr(hard_scores, hard_neg_path)
++
++    def _log_signal_metrics(metrics, prefix, pos_scores, neg_scores, batch=None, goal_prefix='value'):
++        pos_scores = np.asarray(pos_scores)
++        neg_scores = np.asarray(neg_scores)
++        delta = pos_scores - neg_scores
++        metrics[f'{prefix}/pos_mean'] = float(np.mean(pos_scores))
++        metrics[f'{prefix}/pos_std'] = float(np.std(pos_scores))
++        metrics[f'{prefix}/neg_mean'] = float(np.mean(neg_scores))
++        metrics[f'{prefix}/neg_std'] = float(np.std(neg_scores))
++        metrics[f'{prefix}/margin_mean'] = float(np.mean(delta))
++        metrics[f'{prefix}/margin_std'] = float(np.std(delta))
++        metrics[f'{prefix}/rank_acc'] = float(np.mean(delta > 0))
++        pooled_std = np.sqrt(np.var(pos_scores) + np.var(neg_scores) + 1e-8)
++        metrics[f'{prefix}/separation_z'] = float(np.mean(delta) / pooled_std)
++        if batch is None:
++            return
++        bucket_masks = _goal_bucket_masks(batch, prefix=goal_prefix)
++        if not bucket_masks:
++            return
++        source = batch.get(f'{goal_prefix}_goal_source')
++        horizon = batch.get(f'{goal_prefix}_goal_horizon')
++        if source is not None:
++            source = np.asarray(source)
++            for source_id, source_name in source_labels.items():
++                metrics[f'{prefix}/source_{source_name}_frac'] = float(np.mean(source == source_id))
++        if horizon is not None:
++            horizon = np.asarray(horizon)
++            traj_mask = source == 1 if source is not None else np.zeros_like(horizon, dtype=bool)
++            if np.any(traj_mask):
++                metrics[f'{prefix}/traj_horizon_mean'] = float(np.mean(horizon[traj_mask]))
++                metrics[f'{prefix}/traj_horizon_std'] = float(np.std(horizon[traj_mask]))
++        for bucket_name, mask in bucket_masks.items():
++            mask = np.asarray(mask, dtype=bool)
++            metrics[f'{prefix}/{bucket_name}_frac'] = float(np.mean(mask))
++            if not np.any(mask):
++                continue
++            bucket_delta = delta[mask]
++            metrics[f'{prefix}/{bucket_name}_margin_mean'] = float(np.mean(bucket_delta))
++            metrics[f'{prefix}/{bucket_name}_rank_acc'] = float(np.mean(bucket_delta > 0))
++            metrics[f'{prefix}/{bucket_name}_pos_mean'] = float(np.mean(pos_scores[mask]))
++            metrics[f'{prefix}/{bucket_name}_neg_mean'] = float(np.mean(neg_scores[mask]))
++        maze_meta = _maze_distance_metadata(batch, goal_key=f'{goal_prefix}_goals')
++        if maze_meta is None:
++            return
++        euclidean = np.asarray(maze_meta['euclidean'])
++        path_len = np.asarray(maze_meta['path_len'])
++        finite_path = path_len >= 0
++        metrics[f'{prefix}/maze_xy_distance_mean'] = float(np.mean(euclidean))
++        metrics[f'{prefix}/maze_xy_distance_std'] = float(np.std(euclidean))
++        metrics[f'{prefix}/maze_path_available_frac'] = float(np.mean(finite_path))
++        if np.any(finite_path):
++            metrics[f'{prefix}/maze_path_len_mean'] = float(np.mean(path_len[finite_path]))
++            metrics[f'{prefix}/maze_path_len_std'] = float(np.std(path_len[finite_path]))
++        maze_masks = {
++            'maze_xy_short': euclidean <= 4.0,
++            'maze_xy_medium': (euclidean > 4.0) & (euclidean <= 12.0),
++            'maze_xy_long': euclidean > 12.0,
++            'maze_path_short': finite_path & (path_len <= 3),
++            'maze_path_medium': finite_path & (path_len >= 4) & (path_len <= 8),
++            'maze_path_long': finite_path & (path_len >= 9),
++        }
++        for bucket_name, mask in maze_masks.items():
++            metrics[f'{prefix}/{bucket_name}_frac'] = float(np.mean(mask))
++            if not np.any(mask):
++                continue
++            bucket_delta = delta[mask]
++            metrics[f'{prefix}/{bucket_name}_margin_mean'] = float(np.mean(bucket_delta))
++            metrics[f'{prefix}/{bucket_name}_rank_acc'] = float(np.mean(bucket_delta > 0))
++
++    def _score_value_batch(eval_agent, observations, goals, module_name='value'):
++        values = eval_agent.network.select(module_name)(observations, goals)
++        return _reduced_scores(values, 'value')
++
++    def _score_critic_batch(eval_agent, observations, goals, actions):
++        critic_eval_num_iters = config.get('critic_eval_num_iters', None)
++        values = eval_agent.network.select('critic')(
++            observations,
++            goals,
++            actions,
++            num_iters=critic_eval_num_iters,
++        )
++        return _reduced_scores(values, 'critic')
++
++    def _add_compute_metrics(metrics, step: int, total_time: float):
++        samples_seen = int(step) * int(config['batch_size'])
++        total_count = int(static_param_metrics.get('params/total_count', 0) or 0)
++        critic_count = int(static_param_metrics.get('params/critic_count', 0) or 0)
++        value_count = int(static_param_metrics.get('params/value_count', 0) or 0)
++        metrics['time/hours_elapsed'] = float(total_time / 3600.0)
++        metrics['time/samples_per_second'] = float(
++            metrics.get('time/sps', samples_seen / max(total_time, 1e-8))
++        )
++        metrics['compute/total_param_updates'] = float(total_count * int(step))
++        metrics['compute/critic_param_updates'] = float(critic_count * int(step))
++        metrics['compute/value_param_updates'] = float(value_count * int(step))
++        metrics['compute/total_param_samples'] = float(total_count * samples_seen)
++        metrics['compute/critic_param_samples'] = float(critic_count * samples_seen)
++        metrics['compute/value_param_samples'] = float(value_count * samples_seen)
++
++    def _maybe_log_actor_quality(metrics, eval_agent, eval_batch):
++        try:
++            if not config.get('discrete', False) and 'actor' in actor_module_names and 'actions' in eval_batch:
++                actor_goals = eval_batch.get('actor_goals', eval_batch.get('value_goals'))
++                if actor_goals is not None:
++                    dist = eval_agent.network.select('actor')(eval_batch['observations'], actor_goals)
++                    actor_actions = np.asarray(dist.mode())
++                    behavior_actions = np.asarray(eval_batch['actions'])
++                    diff = actor_actions - behavior_actions
++                    metrics['evaluation/actor_behavior_mse'] = float(np.mean(diff**2))
++                    metrics['evaluation/actor_behavior_l2'] = float(np.mean(np.linalg.norm(diff, axis=-1)))
++                    metrics['evaluation/actor_behavior_log_prob'] = float(np.mean(np.asarray(dist.log_prob(eval_batch['actions']))))
++                    if _extract_module_params(eval_agent.network.params, 'critic') is not None:
++                        q_actor = _score_critic_batch(eval_agent, eval_batch['observations'], actor_goals, actor_actions)
++                        q_behavior = _score_critic_batch(eval_agent, eval_batch['observations'], actor_goals, behavior_actions)
++                        q_delta = q_actor - q_behavior
++                        metrics['evaluation/actor_critic/q_actor_mean'] = float(np.mean(q_actor))
++                        metrics['evaluation/actor_critic/q_behavior_mean'] = float(np.mean(q_behavior))
++                        metrics['evaluation/actor_critic/q_delta_mean'] = float(np.mean(q_delta))
++                        metrics['evaluation/actor_critic/prefer_actor_frac'] = float(np.mean(q_delta > 0))
++        except Exception:
++            pass
++
++        try:
++            if not config.get('discrete', False) and has_goal_rep_module and 'low_actor' in actor_module_names and 'low_actor_goals' in eval_batch:
++                goal_reps = eval_agent.network.select('goal_rep')(
++                    jnp.concatenate([eval_batch['observations'], eval_batch['low_actor_goals']], axis=-1)
++                )
++                dist = eval_agent.network.select('low_actor')(eval_batch['observations'], goal_reps, goal_encoded=True)
++                mode = np.asarray(dist.mode())
++                behavior_actions = np.asarray(eval_batch['actions'])
++                diff = mode - behavior_actions
++                metrics['evaluation/low_actor_behavior_mse'] = float(np.mean(diff**2))
++                metrics['evaluation/low_actor_behavior_l2'] = float(np.mean(np.linalg.norm(diff, axis=-1)))
++                metrics['evaluation/low_actor_behavior_log_prob'] = float(np.mean(np.asarray(dist.log_prob(eval_batch['actions']))))
++        except Exception:
++            pass
++
++        try:
++            if has_goal_rep_module and 'high_actor' in actor_module_names and 'high_actor_goals' in eval_batch and 'high_actor_targets' in eval_batch:
++                dist = eval_agent.network.select('high_actor')(eval_batch['observations'], eval_batch['high_actor_goals'])
++                target = eval_agent.network.select('goal_rep')(
++                    jnp.concatenate([eval_batch['observations'], eval_batch['high_actor_targets']], axis=-1)
++                )
++                mode = np.asarray(dist.mode())
++                target = np.asarray(target)
++                diff = mode - target
++                cosine = np.sum(mode * target, axis=-1) / (
++                    np.linalg.norm(mode, axis=-1) * np.linalg.norm(target, axis=-1) + 1e-8
++                )
++                metrics['evaluation/high_actor_target_mse'] = float(np.mean(diff**2))
++                metrics['evaluation/high_actor_target_l2'] = float(np.mean(np.linalg.norm(diff, axis=-1)))
++                metrics['evaluation/high_actor_target_cosine'] = float(np.mean(cosine))
++                metrics['evaluation/high_actor_target_log_prob'] = float(np.mean(np.asarray(dist.log_prob(target))))
++        except Exception:
++            pass
 +
 +    modules = getattr(getattr(agent.network, 'model_def', None), 'modules', {})
 +    has_value = hasattr(modules, 'keys') and 'value' in modules
@@ -3763,6 +4098,7 @@ index 3660e03..7610084 100644
 +        probe_goals = probe_batch.get('value_goals', probe_batch.get('goals'))
 +        if probe_goals is None:
 +            return
++        probe_negative_goals = _negative_goal_batch(probe_batch, goal_key='value_goals')
 +        total_iters = int(config.get('value_recur_iters', 1))
 +        value_steps = []
 +        hidden_norm_steps = []
@@ -3779,6 +4115,29 @@ index 3660e03..7610084 100644
 +            hidden_norm_steps.append(None if hidden_norm is None else np.asarray(hidden_norm))
 +            eval_metrics[f'evaluation/refine/value_step_{k}_mean'] = float(values_k.mean())
 +            eval_metrics[f'evaluation/refine/value_step_{k}_std'] = float(values_k.std())
++            if probe_negative_goals is not None:
++                neg_values_k = np.asarray(
++                    eval_agent.network.select('value')(
++                        probe_batch['observations'],
++                        probe_negative_goals,
++                        num_iters=k,
++                    )
++                )
++                _log_signal_metrics(
++                    eval_metrics,
++                    f'evaluation/refine/step_{k}_signal',
++                    _reduced_scores(values_k, 'value'),
++                    _reduced_scores(neg_values_k, 'value'),
++                    batch=probe_batch,
++                    goal_prefix='value',
++                )
++            _log_path_geometry_metrics(
++                eval_metrics,
++                f'evaluation/refine/step_{k}_geometry',
++                _reduced_scores(values_k, 'value'),
++                probe_batch,
++                goal_prefix='value',
++            )
 +            if hidden_norm is not None:
 +                eval_metrics[f'evaluation/refine/hidden_norm_step_{k}_mean'] = float(np.asarray(hidden_norm).mean())
 +            if k > 1:
@@ -3922,6 +4281,25 @@ index 3660e03..7610084 100644
 +            eval_metrics['evaluation/Q_mean'] = float(q_vals.mean())
 +            eval_metrics['evaluation/Q_std'] = float(q_vals.std())
 +            eval_metrics['evaluation/Q_abs_max'] = float(np.abs(q_vals).max())
++            negative_goals = _negative_goal_batch(eval_batch, goal_key='value_goals')
++            if negative_goals is not None:
++                q_neg = _score_critic_batch(eval_agent, eval_batch['observations'], negative_goals, eval_batch['actions'])
++                q_pos = _reduced_scores(q_vals, 'critic')
++                _log_signal_metrics(
++                    eval_metrics,
++                    'evaluation/critic_signal',
++                    q_pos,
++                    q_neg,
++                    batch=eval_batch,
++                    goal_prefix='value',
++                )
++                _log_path_geometry_metrics(
++                    eval_metrics,
++                    'evaluation/critic_geometry',
++                    q_pos,
++                    eval_batch,
++                    goal_prefix='value',
++                )
 +        elif has_value:
 +            v_vals = eval_agent.network.select('value')(
 +                eval_batch['observations'],
@@ -3931,6 +4309,25 @@ index 3660e03..7610084 100644
 +            eval_metrics['evaluation/value_mean'] = float(v_vals.mean())
 +            eval_metrics['evaluation/value_std'] = float(v_vals.std())
 +            eval_metrics['evaluation/value_abs_max'] = float(np.abs(v_vals).max())
++            negative_goals = _negative_goal_batch(eval_batch, goal_key='value_goals')
++            if negative_goals is not None:
++                v_neg = _score_value_batch(eval_agent, eval_batch['observations'], negative_goals)
++                v_pos = _reduced_scores(v_vals, 'value')
++                _log_signal_metrics(
++                    eval_metrics,
++                    'evaluation/value_signal',
++                    v_pos,
++                    v_neg,
++                    batch=eval_batch,
++                    goal_prefix='value',
++                )
++                _log_path_geometry_metrics(
++                    eval_metrics,
++                    'evaluation/value_geometry',
++                    v_pos,
++                    eval_batch,
++                    goal_prefix='value',
++                )
 +
 +        # ---------------------------------------------------------------------
 +        # Extra eval diagnostics (helps debug instability / overfitting).
@@ -3984,6 +4381,7 @@ index 3660e03..7610084 100644
 +        except Exception:
 +            pass
 +
++        _maybe_log_actor_quality(eval_metrics, eval_agent, eval_batch)
 +        _maybe_log_recurrent_refinement(eval_metrics, eval_agent, step=step)
 +
 +        summary_values = {
@@ -4009,6 +4407,7 @@ index 3660e03..7610084 100644
 +        eval_metrics['time/eval_time'] = time.time() - eval_start
 +        eval_metrics['time/total_time'] = time.time() - first_time
 +        eval_metrics['time/train_wall_clock'] = eval_metrics['time/total_time']
++        _add_compute_metrics(eval_metrics, step=step, total_time=eval_metrics['time/total_time'])
 +        wandb.log(eval_metrics, step=step)
 +        eval_logger.log(eval_metrics, step=step)
  
@@ -4138,12 +4537,39 @@ index 3660e03..7610084 100644
 +            train_metrics['time/train_wall_clock'] = train_metrics['time/total_time']
 +            last_time = log_now
 +            last_log_step = i
++            _add_compute_metrics(train_metrics, step=i, total_time=train_metrics['time/total_time'])
 +
 +            # Parameter magnitude stats (drift detection).
 +            critic_params = _extract_module_params(agent.network.params, 'critic')
 +            critic_abs_mean, _ = _abs_param_stats(critic_params)
 +            if critic_abs_mean is not None:
 +                train_metrics['params/critic_abs_mean'] = critic_abs_mean
++
++            if 'value_goal_source' in batch:
++                source = np.asarray(batch['value_goal_source'])
++                horizon = np.asarray(batch.get('value_goal_horizon', np.full_like(source, -1)))
++                for source_id, source_name in source_labels.items():
++                    train_metrics[f'batch/value_goal_source_{source_name}_frac'] = float(np.mean(source == source_id))
++                traj_mask = source == 1
++                if np.any(traj_mask):
++                    train_metrics['batch/value_goal_horizon_mean'] = float(np.mean(horizon[traj_mask]))
++                    train_metrics['batch/value_goal_horizon_std'] = float(np.std(horizon[traj_mask]))
++                maze_meta = _maze_distance_metadata(batch, goal_key='value_goals')
++                if maze_meta is not None:
++                    euclidean = np.asarray(maze_meta['euclidean'])
++                    path_len = np.asarray(maze_meta['path_len'])
++                    finite_path = path_len >= 0
++                    train_metrics['batch/value_goal_maze_xy_distance_mean'] = float(np.mean(euclidean))
++                    train_metrics['batch/value_goal_maze_xy_distance_std'] = float(np.std(euclidean))
++                    train_metrics['batch/value_goal_maze_path_available_frac'] = float(np.mean(finite_path))
++                    if np.any(finite_path):
++                        train_metrics['batch/value_goal_maze_path_len_mean'] = float(np.mean(path_len[finite_path]))
++                        train_metrics['batch/value_goal_maze_path_len_std'] = float(np.std(path_len[finite_path]))
++                        train_metrics['batch/value_goal_maze_path_short_frac'] = float(np.mean(path_len[finite_path] <= 3))
++                        train_metrics['batch/value_goal_maze_path_medium_frac'] = float(
++                            np.mean((path_len[finite_path] >= 4) & (path_len[finite_path] <= 8))
++                        )
++                        train_metrics['batch/value_goal_maze_path_long_frac'] = float(np.mean(path_len[finite_path] >= 9))
 +
 +            # Policy vs behavior action divergence (offline RL sanity).
 +            if not config.get('discrete'):
@@ -4257,22 +4683,152 @@ index 3660e03..7610084 100644
      eval_logger.close()
  
 diff --git a/impls/utils/datasets.py b/impls/utils/datasets.py
-index 59b32a6..4e8543b 100644
+index 59b32a6..72751fc 100644
 --- a/impls/utils/datasets.py
 +++ b/impls/utils/datasets.py
-@@ -249,7 +249,7 @@ class GCDataset:
+@@ -218,27 +218,32 @@ class GCDataset:
+             idxs = self.dataset.get_random_idxs(batch_size)
+ 
+         batch = self.dataset.sample(batch_size, idxs)
++        batch['idxs'] = np.asarray(idxs, dtype=np.int32)
+         if self.config['frame_stack'] is not None:
+             batch['observations'] = self.get_observations(idxs)
+             batch['next_observations'] = self.get_observations(idxs + 1)
+ 
+-        value_goal_idxs = self.sample_goals(
++        value_goal_idxs, value_goal_meta = self.sample_goals(
+             idxs,
+             self.config['value_p_curgoal'],
+             self.config['value_p_trajgoal'],
+             self.config['value_p_randomgoal'],
+             self.config['value_geom_sample'],
++            return_metadata=True,
+         )
+-        actor_goal_idxs = self.sample_goals(
++        actor_goal_idxs, actor_goal_meta = self.sample_goals(
+             idxs,
+             self.config['actor_p_curgoal'],
+             self.config['actor_p_trajgoal'],
+             self.config['actor_p_randomgoal'],
+             self.config['actor_geom_sample'],
++            return_metadata=True,
+         )
+ 
+         batch['value_goals'] = self.get_observations(value_goal_idxs)
+         batch['actor_goals'] = self.get_observations(actor_goal_idxs)
++        batch.update(self._goal_metadata('value', value_goal_idxs, value_goal_meta))
++        batch.update(self._goal_metadata('actor', actor_goal_idxs, actor_goal_meta))
+         successes = (idxs == value_goal_idxs).astype(float)
+         batch['masks'] = 1.0 - successes
+         batch['rewards'] = successes - (1.0 if self.config['gc_negative'] else 0.0)
+@@ -249,7 +254,7 @@ class GCDataset:
  
          return batch
  
 -    def sample_goals(self, idxs, p_curgoal, p_trajgoal, p_randomgoal, geom_sample):
-+    def sample_goals(self, idxs, p_curgoal, p_trajgoal, p_randomgoal, geom_sample, min_d=0):
++    def sample_goals(self, idxs, p_curgoal, p_trajgoal, p_randomgoal, geom_sample, min_d=0, return_metadata=False):
          """Sample goals for the given indices."""
          batch_size = len(idxs)
  
-@@ -398,3 +398,116 @@ class HGCDataset(GCDataset):
-                 )
+@@ -270,15 +275,32 @@ class GCDataset:
+             ).astype(int)
+         if p_curgoal == 1.0:
+             goal_idxs = idxs
++            goal_source = np.zeros(batch_size, dtype=np.int32)
+         else:
+-            goal_idxs = np.where(
+-                np.random.rand(batch_size) < p_trajgoal / (1.0 - p_curgoal), traj_goal_idxs, random_goal_idxs
+-            )
++            choose_traj = np.random.rand(batch_size) < p_trajgoal / (1.0 - p_curgoal)
++            goal_idxs = np.where(choose_traj, traj_goal_idxs, random_goal_idxs)
++            goal_source = np.where(choose_traj, 1, 2).astype(np.int32)
  
-         return batch
+             # Goals at the current state.
+-            goal_idxs = np.where(np.random.rand(batch_size) < p_curgoal, idxs, goal_idxs)
++            choose_current = np.random.rand(batch_size) < p_curgoal
++            goal_idxs = np.where(choose_current, idxs, goal_idxs)
++            goal_source = np.where(choose_current, 0, goal_source).astype(np.int32)
++
++        if not return_metadata:
++            return goal_idxs
+ 
+-        return goal_idxs
++        metadata = dict(
++            source=goal_source,
++            horizon=np.where(goal_source == 2, -1, np.maximum(goal_idxs - idxs, 0)).astype(np.int32),
++        )
++        return goal_idxs, metadata
++
++    def _goal_metadata(self, prefix, goal_idxs, metadata):
++        return {
++            f'{prefix}_goal_idxs': np.asarray(goal_idxs, dtype=np.int32),
++            f'{prefix}_goal_source': np.asarray(metadata['source'], dtype=np.int32),
++            f'{prefix}_goal_horizon': np.asarray(metadata['horizon'], dtype=np.int32),
++        }
+ 
+     def augment(self, batch, keys):
+         """Apply image augmentation to the given keys."""
+@@ -334,19 +356,22 @@ class HGCDataset(GCDataset):
+             idxs = self.dataset.get_random_idxs(batch_size)
+ 
+         batch = self.dataset.sample(batch_size, idxs)
++        batch['idxs'] = np.asarray(idxs, dtype=np.int32)
+         if self.config['frame_stack'] is not None:
+             batch['observations'] = self.get_observations(idxs)
+             batch['next_observations'] = self.get_observations(idxs + 1)
+ 
+         # Sample value goals.
+-        value_goal_idxs = self.sample_goals(
++        value_goal_idxs, value_goal_meta = self.sample_goals(
+             idxs,
+             self.config['value_p_curgoal'],
+             self.config['value_p_trajgoal'],
+             self.config['value_p_randomgoal'],
+             self.config['value_geom_sample'],
++            return_metadata=True,
+         )
+         batch['value_goals'] = self.get_observations(value_goal_idxs)
++        batch.update(self._goal_metadata('value', value_goal_idxs, value_goal_meta))
+ 
+         successes = (idxs == value_goal_idxs).astype(float)
+         batch['masks'] = 1.0 - successes
+@@ -356,6 +381,8 @@ class HGCDataset(GCDataset):
+         final_state_idxs = self.terminal_locs[np.searchsorted(self.terminal_locs, idxs)]
+         low_goal_idxs = np.minimum(idxs + self.config['subgoal_steps'], final_state_idxs)
+         batch['low_actor_goals'] = self.get_observations(low_goal_idxs)
++        batch['low_actor_goal_idxs'] = np.asarray(low_goal_idxs, dtype=np.int32)
++        batch['low_actor_goal_horizon'] = np.asarray(np.maximum(low_goal_idxs - idxs, 0), dtype=np.int32)
+ 
+         # Sample high-level actor goals and set prediction targets.
+         # High-level future goals.
+@@ -382,6 +409,134 @@ class HGCDataset(GCDataset):
+ 
+         batch['high_actor_goals'] = self.get_observations(high_goal_idxs)
+         batch['high_actor_targets'] = self.get_observations(high_target_idxs)
++        batch['high_actor_goal_idxs'] = np.asarray(high_goal_idxs, dtype=np.int32)
++        batch['high_actor_target_idxs'] = np.asarray(high_target_idxs, dtype=np.int32)
++        batch['high_actor_goal_source'] = np.where(pick_random, 2, 1).astype(np.int32)
++        batch['high_actor_goal_horizon'] = np.where(
++            pick_random,
++            -1,
++            np.maximum(high_goal_idxs - idxs, 0),
++        ).astype(np.int32)
++
++        if self.config['p_aug'] is not None and not evaluation:
++            if np.random.rand() < self.config['p_aug']:
++                self.augment(
++                    batch,
++                    [
++                        'observations',
++                        'next_observations',
++                        'value_goals',
++                        'low_actor_goals',
++                        'high_actor_goals',
++                        'high_actor_targets',
++                    ],
++                )
++
++        return batch
 +
 +
 +@dataclasses.dataclass
@@ -4285,25 +4841,28 @@ index 59b32a6..4e8543b 100644
 +            idxs = self.dataset.get_random_idxs(batch_size)
 +
 +        batch = self.dataset.sample(batch_size, idxs)
++        batch['idxs'] = np.asarray(idxs, dtype=np.int32)
 +        if self.config['frame_stack'] is not None:
 +            batch['observations'] = self.get_observations(idxs)
 +            batch['next_observations'] = self.get_observations(idxs + 1)
 +
-+        value_goal_idxs = self.sample_goals(
++        value_goal_idxs, value_goal_meta = self.sample_goals(
 +            idxs,
 +            self.config['value_p_curgoal'],
 +            self.config['value_p_trajgoal'],
 +            self.config['value_p_randomgoal'],
 +            self.config['value_geom_sample'],
 +            min_d=min_d,
++            return_metadata=True,
 +        )
-+        value_gd_idxs = self.sample_goals(
++        value_gd_idxs, value_gd_meta = self.sample_goals(
 +            idxs,
 +            self.config['gd_p_curgoal'],
 +            self.config['gd_p_trajgoal'],
 +            self.config['gd_p_randomgoal'],
 +            self.config['gd_geom_sample'],
 +            min_d=min_d,
++            return_metadata=True,
 +        )
 +
 +        value_random_idxs = self.dataset.get_random_idxs(batch_size)
@@ -4338,6 +4897,10 @@ index 59b32a6..4e8543b 100644
 +        batch['value_goals'] = self.get_observations(value_goal_idxs)
 +        batch['value_random_goals'] = self.get_observations(value_random_idxs)
 +        batch['low_actor_goals'] = self.get_observations(low_goal_idxs)
++        batch.update(self._goal_metadata('value', value_goal_idxs, value_goal_meta))
++        batch.update(self._goal_metadata('value_gd', value_gd_idxs, value_gd_meta))
++        batch['low_actor_goal_idxs'] = np.asarray(low_goal_idxs, dtype=np.int32)
++        batch['low_actor_goal_horizon'] = np.asarray(np.maximum(low_goal_idxs - idxs, 0), dtype=np.int32)
 +        batch['goals'] = self.get_observations(idxs)
 +        batch['next_goals'] = self.get_observations(idxs + 1)
 +        batch['value_gd_goals'] = self.get_observations(value_gd_idxs)
@@ -4360,20 +4923,23 @@ index 59b32a6..4e8543b 100644
 +        high_target_idxs = np.where(pick_random, high_random_target_idxs, high_traj_target_idxs)
 +        batch['high_actor_goals'] = self.get_observations(high_goal_idxs)
 +        batch['high_actor_targets'] = self.get_observations(high_target_idxs)
++        batch['high_actor_goal_idxs'] = np.asarray(high_goal_idxs, dtype=np.int32)
++        batch['high_actor_target_idxs'] = np.asarray(high_target_idxs, dtype=np.int32)
++        batch['high_actor_goal_source'] = np.where(pick_random, 2, 1).astype(np.int32)
++        batch['high_actor_goal_horizon'] = np.where(
++            pick_random,
++            -1,
++            np.maximum(high_goal_idxs - idxs, 0),
++        ).astype(np.int32)
 +        batch['value_targets'] = self.get_observations(high_traj_target_idxs)
 +        batch['high_actor_targets_observations'] = self.get_observations(high_target_idxs)
-+
-+        if self.config['p_aug'] is not None and not evaluation:
-+            if np.random.rand() < self.config['p_aug']:
-+                self.augment(
-+                    batch,
-+                    [
-+                        'observations',
-+                        'next_observations',
-+                        'value_goals',
-+                        'low_actor_goals',
-+                        'high_actor_goals',
-+                        'high_actor_targets',
+ 
+         if self.config['p_aug'] is not None and not evaluation:
+             if np.random.rand() < self.config['p_aug']:
+@@ -394,6 +549,14 @@ class HGCDataset(GCDataset):
+                         'low_actor_goals',
+                         'high_actor_goals',
+                         'high_actor_targets',
 +                        'high_actor_targets_observations',
 +                        'goals',
 +                        'value_random_goals',
@@ -4382,10 +4948,9 @@ index 59b32a6..4e8543b 100644
 +                        'value_targets',
 +                        'value_gd_goals',
 +                        'gd_random_observations',
-+                    ],
-+                )
-+
-+        return batch
+                     ],
+                 )
+ 
 diff --git a/impls/utils/env_utils.py b/impls/utils/env_utils.py
 index 6b17e11..863dd39 100644
 --- a/impls/utils/env_utils.py
