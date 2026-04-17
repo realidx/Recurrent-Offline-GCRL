@@ -372,16 +372,52 @@ Purpose:
 
 - show the gain is not just from having more parameters
 
+Core idea:
+
+- hold the algorithm, task, actor, batch size, and train-step budget fixed
+- change only the critic-side architecture
+- compare the frozen proposed critic against MLP baselines that match the changed module parameter count as closely as possible
+
 Compare:
 
-- proposed iterative critic
+- full proposed critic
 - deeper MLP matched by parameter count
 - wider MLP matched by parameter count
+- optional standard MLP baseline as an anchor row
+
+Matching rule:
+
+- match the changed module rather than only total model size
+- for `CRL`, match `params/critic_count`
+- for `HIQL`, match `params/value_count`
+- use the real parameter count from the instantiated model, not a hand-derived formula
+
+Recommended scope:
+
+- start with one primary algorithm, preferably `CRL`
+- start with one representative hard task, preferably `antmaze-large-stitch-v0`
+- then add `antmaze-giant-navigate-v0`
+- extend to `HIQL` only after the protocol is stable
+
+Implementation note:
+
+- use the existing parameter-count search utility to find close width-matched and depth-matched MLP baselines
+- if input dimensions differ across task families, recompute the match rather than assuming one match transfers automatically
 
 Important:
 
-- use at least one matched point that is very close
-- ideally use a small 3-point scaling curve instead of only one point
+- use at least one MLP match that is very close to the target module count
+- report the exact matched counts in the paper table
+- use the same seeds and train-step budget across the matched models
+- ideally include both one depth-matched and one width-matched MLP
+- a small scaling curve is a nice upgrade, but one clean matched point is acceptable for the first pass
+
+Required outputs:
+
+- final task performance across seeds
+- exact module parameter counts for every compared model
+- delta relative to the full proposed model
+- one concise table showing fairness and outcome together
 
 ### F. Matched-compute comparison
 
@@ -389,20 +425,57 @@ Purpose:
 
 - show the gain is not just from spending more computation
 
+Core idea:
+
+- tied recurrence reuses the same parameters multiple times per update, so parameter count alone is not enough
+- this section should compare the proposed critic against MLP baselines with similar empirical training cost per update
+
 Compare:
 
-- proposed iterative critic
-- deeper MLP
-- wider MLP
+- full proposed critic
+- deeper MLP matched by empirical training cost
+- wider MLP matched by empirical training cost
 
-Do not rely on wall-clock alone. Use wall-clock as a secondary metric.
+Recommended fairness protocol:
 
-Primary fairness metrics should be one or more of:
+- run short pilot jobs on the same hardware, with the same algorithm, task, batch size, and logging cadence
+- ignore warmup and use a stable post-JIT window
+- measure empirical per-update cost using `time/step_time`
+- choose MLP baselines whose median per-update cost is close to the proposed model
+- after the pilot matching is fixed, run the full training comparison at the same train-step budget
 
+Important:
+
+- do not use wall-clock alone as the primary fairness metric
+- do not rely only on parameter-update proxies for tied recurrent models
+- current `compute/critic_param_updates` and related metrics are useful bookkeeping, but they do not fully capture repeated application of tied parameters inside one update
+- use wall-clock as a secondary practical-efficiency result, not as the only fairness story
+
+Recommended scope:
+
+- start with `CRL` on `antmaze-large-stitch-v0`
+- then add `antmaze-giant-navigate-v0`
+- only expand to additional algorithms after the pilot protocol is stable
+
+Primary fairness measurements should include:
+
+- empirical per-update runtime from the training loop
+- same number of updates
+- same hardware type and batch size
+
+Secondary measurements may include:
+
+- wall-clock to threshold
+- wall-clock to final score
 - parameter count
-- total parameter updates
-- parameter-sample products
-- estimated critic FLOPs if available
+- parameter-update and parameter-sample proxies
+- estimated critic FLOPs if they can later be measured reliably
+
+Required outputs:
+
+- pilot calibration table showing the matched compute baselines
+- final task performance across seeds
+- practical-efficiency curves or table using wall-clock as a secondary view
 
 ## Critical Missing Controls
 

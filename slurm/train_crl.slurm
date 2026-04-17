@@ -88,6 +88,7 @@ ACTOR_NUM_LAYERS="${ACTOR_NUM_LAYERS:-}"     # Shortcut: e.g., 32
 ACTOR_LAYER_WIDTH="${ACTOR_LAYER_WIDTH:-512}" # Shortcut width used with ACTOR_NUM_LAYERS
 VALUE_NUM_LAYERS="${VALUE_NUM_LAYERS:-}"     # Shortcut: e.g., 32
 VALUE_LAYER_WIDTH="${VALUE_LAYER_WIDTH:-512}" # Shortcut width used with VALUE_NUM_LAYERS
+ACTOR_BACKBONE="${ACTOR_BACKBONE:-mlp}"      # mlp | recur_tied
 ACTOR_P_CURGOAL="${ACTOR_P_CURGOAL:-0.0}"
 ACTOR_P_TRAJGOAL="${ACTOR_P_TRAJGOAL:-1.0}"
 ACTOR_P_RANDOMGOAL="${ACTOR_P_RANDOMGOAL:-0.0}"
@@ -122,6 +123,10 @@ RECUR_USE_ACT="${RECUR_USE_ACT:-0}"
 RECUR_ACT_EPSILON="${RECUR_ACT_EPSILON:-0.01}"
 RECUR_ACT_MIN_ITERS="${RECUR_ACT_MIN_ITERS:-1}"
 RECUR_ACT_PONDER_WEIGHT="${RECUR_ACT_PONDER_WEIGHT:-0.0}"
+
+# actor recurrent tied options.
+ACTOR_RECUR_ITERS="${ACTOR_RECUR_ITERS:-${KTRAIN}}"
+ACTOR_RECUR_MAX_ITERS="${ACTOR_RECUR_MAX_ITERS:-${RECUR_MAX_ITERS}}"
 
 # Seeds controlled via env var: SEEDS="0 1 2"
 SEEDS="${SEEDS:-0 1 2}"
@@ -177,6 +182,7 @@ if [[ "${AGENT_NAME}" == "crl" ]]; then
   AGENT_FLAGS+=(
     "--agent.lr_decay_steps=${LR_DECAY_STEPS}"
     "--agent.lr_min=${LR_MIN}"
+    "--agent.actor_backbone=${ACTOR_BACKBONE}"
   )
 fi
 
@@ -269,6 +275,31 @@ fi
 
 if [[ -n "${ACTOR_GEOM_SAMPLE}" ]]; then
   AGENT_FLAGS+=("--agent.actor_geom_sample=${ACTOR_GEOM_SAMPLE}")
+fi
+
+if [[ "${AGENT_NAME}" == "crl" ]]; then
+  case "${ACTOR_BACKBONE}" in
+    mlp)
+      ;;
+    recur_tied)
+      if [[ ! "${ACTOR_RECUR_ITERS}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Error: ACTOR_RECUR_ITERS='${ACTOR_RECUR_ITERS}' is not a positive integer." >&2
+        exit 2
+      fi
+      if [[ ! "${ACTOR_RECUR_MAX_ITERS}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Error: ACTOR_RECUR_MAX_ITERS='${ACTOR_RECUR_MAX_ITERS}' is not a positive integer." >&2
+        exit 2
+      fi
+      AGENT_FLAGS+=(
+        "--agent.actor_recur_iters=${ACTOR_RECUR_ITERS}"
+        "--agent.actor_recur_max_iters=${ACTOR_RECUR_MAX_ITERS}"
+      )
+      ;;
+    *)
+      echo "Error: unsupported ACTOR_BACKBONE='${ACTOR_BACKBONE}'." >&2
+      exit 2
+      ;;
+  esac
 fi
 
 if [[ -n "${RECUR_NUM_DENSE_LAYERS}" ]]; then
@@ -389,7 +420,7 @@ if [[ -n "${RESTORE_EPOCH}" ]]; then
   cmd+=("--restore_epoch=${RESTORE_EPOCH}")
 fi
 
-echo "GENERIC ${AGENT_NAME^^}: env=${ENV_NAME} seed=${SEED} backbone=${CRITIC_BACKBONE} alpha=${ALPHA} discount=${DISCOUNT} run_group=${RUN_GROUP} exp=${EXP_NAME}"
+echo "GENERIC ${AGENT_NAME^^}: env=${ENV_NAME} seed=${SEED} critic_backbone=${CRITIC_BACKBONE} actor_backbone=${ACTOR_BACKBONE} alpha=${ALPHA} discount=${DISCOUNT} run_group=${RUN_GROUP} exp=${EXP_NAME}"
 echo "${cmd[*]}"
 
 if ! command -v "${CONDA_EXE}" >/dev/null 2>&1; then
