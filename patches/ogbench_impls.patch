@@ -568,10 +568,10 @@ index 0000000..441bfaf
 +    )
 +    return config
 diff --git a/impls/agents/crl.py b/impls/agents/crl.py
-index 53109ab..0008982 100644
+index 53109ab..8093dd3 100644
 --- a/impls/agents/crl.py
 +++ b/impls/agents/crl.py
-@@ -22,51 +22,110 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -22,51 +22,112 @@ class CRLAgent(flax.struct.PyTreeNode):
      config: Any = nonpytree_field()
  
      def contrastive_loss(self, batch, grad_params, module_name='critic'):
@@ -690,9 +690,10 @@ index 53109ab..0008982 100644
 +            'q_mean': logits_diag.mean(),
              'categorical_accuracy': jnp.mean(correct),
              'logits_pos': logits_pos,
--            'logits_neg': logits_neg,
+             'logits_neg': logits_neg,
 -            'logits': logits.mean(),
 +            'score_margin': score_margin,
++            'ensemble_disagreement': ensemble_disagreement,
          }
 +        if act_expected_steps_total is not None:
 +            info['act_expected_steps_phi_mean'] = act_aux['act_expected_steps_phi'].mean()
@@ -703,7 +704,7 @@ index 53109ab..0008982 100644
  
      def actor_loss(self, batch, grad_params, rng=None):
          """Compute the actor loss (AWR or DDPG+BC)."""
-@@ -104,6 +163,7 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -104,6 +165,7 @@ class CRLAgent(flax.struct.PyTreeNode):
              assert not self.config['discrete']
  
              dist = self.network.select('actor')(batch['observations'], batch['actor_goals'], params=grad_params)
@@ -711,7 +712,7 @@ index 53109ab..0008982 100644
              if self.config['const_std']:
                  q_actions = jnp.clip(dist.mode(), -1, 1)
              else:
-@@ -124,10 +184,7 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -124,10 +186,7 @@ class CRLAgent(flax.struct.PyTreeNode):
                  'q_loss': q_loss,
                  'bc_loss': bc_loss,
                  'q_mean': q.mean(),
@@ -723,7 +724,7 @@ index 53109ab..0008982 100644
              }
          else:
              raise ValueError(f'Unsupported actor loss: {self.config["actor_loss"]}')
-@@ -231,6 +288,27 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -231,6 +290,27 @@ class CRLAgent(flax.struct.PyTreeNode):
                  state_encoder=encoders.get('critic_state'),
                  goal_encoder=encoders.get('critic_goal'),
                  action_dim=action_dim,
@@ -751,7 +752,7 @@ index 53109ab..0008982 100644
              )
          else:
              critic_def = GCBilinearValue(
-@@ -241,6 +319,27 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -241,6 +321,27 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
                  state_encoder=encoders.get('critic_state'),
                  goal_encoder=encoders.get('critic_goal'),
@@ -779,7 +780,7 @@ index 53109ab..0008982 100644
              )
  
          if config['actor_loss'] == 'awr':
-@@ -253,6 +352,27 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -253,6 +354,27 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
                  state_encoder=encoders.get('value_state'),
                  goal_encoder=encoders.get('value_goal'),
@@ -807,7 +808,7 @@ index 53109ab..0008982 100644
              )
  
          if config['discrete']:
-@@ -282,7 +402,15 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -282,7 +404,15 @@ class CRLAgent(flax.struct.PyTreeNode):
          network_args = {k: v[1] for k, v in network_info.items()}
  
          network_def = ModuleDict(networks)
@@ -824,7 +825,7 @@ index 53109ab..0008982 100644
          network_params = network_def.init(init_rng, **network_args)['params']
          network = TrainState.create(network_def, network_params, tx=network_tx)
  
-@@ -295,6 +423,8 @@ def get_config():
+@@ -295,6 +425,8 @@ def get_config():
              # Agent hyperparameters.
              agent_name='crl',  # Agent name.
              lr=3e-4,  # Learning rate.
@@ -833,7 +834,7 @@ index 53109ab..0008982 100644
              batch_size=1024,  # Batch size.
              actor_hidden_dims=(512, 512, 512),  # Actor network hidden dimensions.
              value_hidden_dims=(512, 512, 512),  # Value network hidden dimensions.
-@@ -306,6 +436,26 @@ def get_config():
+@@ -306,6 +438,26 @@ def get_config():
              const_std=True,  # Whether to use constant standard deviation for the actor.
              discrete=False,  # Whether the action space is discrete.
              encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
@@ -860,7 +861,7 @@ index 53109ab..0008982 100644
              # Dataset hyperparameters.
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
-@@ -319,6 +469,9 @@ def get_config():
+@@ -319,6 +471,9 @@ def get_config():
              gc_negative=False,  # Unused (defined for compatibility with GCDataset).
              p_aug=0.0,  # Probability of applying image augmentation.
              frame_stack=ml_collections.config_dict.placeholder(int),  # Number of frames to stack.
@@ -3263,7 +3264,7 @@ index 0000000..60716d2
 +if __name__ == '__main__':
 +    main()
 diff --git a/impls/main.py b/impls/main.py
-index 3660e03..2cb4554 100644
+index 3660e03..1e77650 100644
 --- a/impls/main.py
 +++ b/impls/main.py
 @@ -1,17 +1,27 @@
@@ -3549,7 +3550,7 @@ index 3660e03..2cb4554 100644
      setup_wandb(project='OGBench', group=FLAGS.run_group, name=exp_name)
  
      FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, FLAGS.run_group, exp_name)
-@@ -53,108 +287,1074 @@ def main(_):
+@@ -53,108 +287,1361 @@ def main(_):
      with open(os.path.join(FLAGS.save_dir, 'flags.json'), 'w') as f:
          json.dump(flag_dict, f)
  
@@ -3584,13 +3585,13 @@ index 3660e03..2cb4554 100644
 +                min_d=config.get('min_d', 0),
 +            )
 +        return {}
-+
+ 
+-    example_batch = train_dataset.sample(1)
 +    def _sample_dataset(dataset, batch_size, *, idxs=None, evaluation=False):
 +        sample_kwargs = dict(idxs=idxs, evaluation=evaluation)
 +        sample_kwargs.update(_dataset_sample_kwargs())
 +        return dataset.sample(batch_size, **sample_kwargs)
- 
--    example_batch = train_dataset.sample(1)
++
 +    # Initialize agent.
 +    example_batch = _sample_dataset(train_dataset, 1)
      if config['discrete']:
@@ -3671,6 +3672,7 @@ index 3660e03..2cb4554 100644
 +    train_dataset_dir, train_dataset_path, val_dataset_path = _dataset_paths_for_env(FLAGS.env_name)
 +    device_summary = _device_summary()
 +    value_module_name = 'value' if _extract_module_params(agent.network.params, 'value') is not None else None
++    critic_module_name = 'critic' if _extract_module_params(agent.network.params, 'critic') is not None else None
 +    actor_module_names = _actor_module_names()
 +    has_goal_rep_module = _extract_module_params(agent.network.params, 'goal_rep') is not None
 +
@@ -3956,18 +3958,98 @@ index 3660e03..2cb4554 100644
 +            metrics[f'{prefix}/{bucket_name}_margin_mean'] = float(np.mean(bucket_delta))
 +            metrics[f'{prefix}/{bucket_name}_rank_acc'] = float(np.mean(bucket_delta > 0))
 +
++    def _all_bucket_masks(batch, prefix='value'):
++        masks = dict(_goal_bucket_masks(batch, prefix=prefix))
++        maze_meta = _maze_distance_metadata(batch, goal_key=f'{prefix}_goals')
++        if maze_meta is None:
++            return masks
++        euclidean = np.asarray(maze_meta['euclidean'])
++        path_len = np.asarray(maze_meta['path_len'])
++        finite_path = path_len >= 0
++        masks.update(
++            {
++                'maze_xy_short': euclidean <= 4.0,
++                'maze_xy_medium': (euclidean > 4.0) & (euclidean <= 12.0),
++                'maze_xy_long': euclidean > 12.0,
++                'maze_path_short': finite_path & (path_len <= 3),
++                'maze_path_medium': finite_path & (path_len >= 4) & (path_len <= 8),
++                'maze_path_long': finite_path & (path_len >= 9),
++            }
++        )
++        return masks
++
++    def _log_scalar_metrics(metrics, prefix, values, batch=None, goal_prefix='value'):
++        values = np.asarray(values, dtype=np.float64)
++        if values.size == 0:
++            return
++        metrics[f'{prefix}_mean'] = float(np.mean(values))
++        metrics[f'{prefix}_std'] = float(np.std(values))
++        metrics[f'{prefix}_p10'] = float(np.quantile(values, 0.10))
++        metrics[f'{prefix}_p50'] = float(np.quantile(values, 0.50))
++        metrics[f'{prefix}_p90'] = float(np.quantile(values, 0.90))
++        if batch is None:
++            return
++        for bucket_name, mask in _all_bucket_masks(batch, prefix=goal_prefix).items():
++            mask = np.asarray(mask, dtype=bool)
++            metrics[f'{prefix}/{bucket_name}_frac'] = float(np.mean(mask))
++            if not np.any(mask):
++                continue
++            bucket_values = values[mask]
++            metrics[f'{prefix}/{bucket_name}_mean'] = float(np.mean(bucket_values))
++            metrics[f'{prefix}/{bucket_name}_p90'] = float(np.quantile(bucket_values, 0.90))
++
++    def _log_pair_preference_metrics(
++        metrics,
++        prefix,
++        preferred_scores,
++        reference_scores,
++        *,
++        batch=None,
++        goal_prefix='value',
++        preferred_name='preferred',
++        reference_name='reference',
++        delta_name='delta',
++        prefer_name='prefer_preferred_frac',
++    ):
++        preferred_scores = np.asarray(preferred_scores, dtype=np.float64)
++        reference_scores = np.asarray(reference_scores, dtype=np.float64)
++        delta = preferred_scores - reference_scores
++        metrics[f'{prefix}/{preferred_name}_mean'] = float(np.mean(preferred_scores))
++        metrics[f'{prefix}/{reference_name}_mean'] = float(np.mean(reference_scores))
++        metrics[f'{prefix}/{delta_name}_mean'] = float(np.mean(delta))
++        metrics[f'{prefix}/{delta_name}_std'] = float(np.std(delta))
++        metrics[f'{prefix}/{delta_name}_p10'] = float(np.quantile(delta, 0.10))
++        metrics[f'{prefix}/{delta_name}_p50'] = float(np.quantile(delta, 0.50))
++        metrics[f'{prefix}/{delta_name}_p90'] = float(np.quantile(delta, 0.90))
++        metrics[f'{prefix}/{prefer_name}'] = float(np.mean(delta > 0))
++        if batch is None:
++            return
++        for bucket_name, mask in _all_bucket_masks(batch, prefix=goal_prefix).items():
++            mask = np.asarray(mask, dtype=bool)
++            metrics[f'{prefix}/{bucket_name}_frac'] = float(np.mean(mask))
++            if not np.any(mask):
++                continue
++            bucket_delta = delta[mask]
++            metrics[f'{prefix}/{bucket_name}_{delta_name}_mean'] = float(np.mean(bucket_delta))
++            metrics[f'{prefix}/{bucket_name}_{delta_name}_p90'] = float(np.quantile(bucket_delta, 0.90))
++            metrics[f'{prefix}/{bucket_name}_{prefer_name}'] = float(np.mean(bucket_delta > 0))
++
 +    def _score_value_batch(eval_agent, observations, goals, module_name='value'):
 +        values = eval_agent.network.select(module_name)(observations, goals)
 +        return _reduced_scores(values, 'value')
 +
-+    def _score_critic_batch(eval_agent, observations, goals, actions):
-+        critic_eval_num_iters = config.get('critic_eval_num_iters', None)
-+        values = eval_agent.network.select('critic')(
++    def _critic_forward(eval_agent, observations, goals, actions, *, num_iters=None, return_aux=False):
++        critic_num_iters = config.get('critic_eval_num_iters', None) if num_iters is None else num_iters
++        return eval_agent.network.select('critic')(
 +            observations,
 +            goals,
 +            actions,
-+            num_iters=critic_eval_num_iters,
++            num_iters=critic_num_iters,
++            return_aux=return_aux,
 +        )
++
++    def _score_critic_batch(eval_agent, observations, goals, actions, *, num_iters=None):
++        values = _critic_forward(eval_agent, observations, goals, actions, num_iters=num_iters)
 +        return _reduced_scores(values, 'critic')
 +
 +    def _add_compute_metrics(metrics, step: int, total_time: float):
@@ -3991,21 +4073,47 @@ index 3660e03..2cb4554 100644
 +            if not config.get('discrete', False) and 'actor' in actor_module_names and 'actions' in eval_batch:
 +                actor_goals = eval_batch.get('actor_goals', eval_batch.get('value_goals'))
 +                if actor_goals is not None:
++                    actor_goal_prefix = 'actor' if f'actor_goal_source' in eval_batch else 'value'
 +                    dist = eval_agent.network.select('actor')(eval_batch['observations'], actor_goals)
 +                    actor_actions = np.asarray(dist.mode())
 +                    behavior_actions = np.asarray(eval_batch['actions'])
 +                    diff = actor_actions - behavior_actions
-+                    metrics['evaluation/actor_behavior_mse'] = float(np.mean(diff**2))
-+                    metrics['evaluation/actor_behavior_l2'] = float(np.mean(np.linalg.norm(diff, axis=-1)))
++                    per_example_mse = np.mean(diff**2, axis=-1)
++                    per_example_l2 = np.linalg.norm(diff, axis=-1)
 +                    metrics['evaluation/actor_behavior_log_prob'] = float(np.mean(np.asarray(dist.log_prob(eval_batch['actions']))))
-+                    if _extract_module_params(eval_agent.network.params, 'critic') is not None:
-+                        q_actor = _score_critic_batch(eval_agent, eval_batch['observations'], actor_goals, actor_actions)
-+                        q_behavior = _score_critic_batch(eval_agent, eval_batch['observations'], actor_goals, behavior_actions)
-+                        q_delta = q_actor - q_behavior
-+                        metrics['evaluation/actor_critic/q_actor_mean'] = float(np.mean(q_actor))
-+                        metrics['evaluation/actor_critic/q_behavior_mean'] = float(np.mean(q_behavior))
-+                        metrics['evaluation/actor_critic/q_delta_mean'] = float(np.mean(q_delta))
-+                        metrics['evaluation/actor_critic/prefer_actor_frac'] = float(np.mean(q_delta > 0))
++                    _log_scalar_metrics(
++                        metrics,
++                        'evaluation/policy_behavior/mse',
++                        per_example_mse,
++                        batch=eval_batch,
++                        goal_prefix=actor_goal_prefix,
++                    )
++                    _log_scalar_metrics(
++                        metrics,
++                        'evaluation/policy_behavior/l2',
++                        per_example_l2,
++                        batch=eval_batch,
++                        goal_prefix=actor_goal_prefix,
++                    )
++                    if critic_module_name is not None:
++                        q_actor = _score_critic_batch(
++                            eval_agent, eval_batch['observations'], actor_goals, actor_actions
++                        )
++                        q_behavior = _score_critic_batch(
++                            eval_agent, eval_batch['observations'], actor_goals, behavior_actions
++                        )
++                        _log_pair_preference_metrics(
++                            metrics,
++                            'evaluation/actor_critic',
++                            q_actor,
++                            q_behavior,
++                            batch=eval_batch,
++                            goal_prefix=actor_goal_prefix,
++                            preferred_name='q_actor',
++                            reference_name='q_behavior',
++                            delta_name='q_delta',
++                            prefer_name='prefer_actor_frac',
++                        )
 +        except Exception:
 +            pass
 +
@@ -4047,6 +4155,7 @@ index 3660e03..2cb4554 100644
 +    has_value = hasattr(modules, 'keys') and 'value' in modules
 +    has_actor = hasattr(modules, 'keys') and 'actor' in modules
 +    value_backbone = str(config.get('value_backbone', ''))
++    critic_backbone = str(config.get('critic_backbone', ''))
 +    probe_dataset = val_dataset if val_dataset is not None else train_dataset
 +    probe_batch_cache = None
 +    probe_idxs_cache = None
@@ -4064,6 +4173,24 @@ index 3660e03..2cb4554 100644
 +        'evaluation/final_episode.return',
 +        'evaluation/best_so_far_normalized_score',
 +        'evaluation/best_so_far_episode.return',
++        # Low-signal debug metrics that add panel noise but are not used in the
++        # current mechanism or main-result analysis.
++        'evaluation/action_mean',
++        'evaluation/action_std',
++        'evaluation/action_norm_mean',
++        'evaluation/action_norm_std',
++        'evaluation/action_abs_max',
++        'evaluation/action_saturation_frac',
++        'evaluation/policy_behavior_max_diff',
++        'evaluation/critic_q1_abs_max',
++        'evaluation/critic_q2_abs_max',
++        'evaluation/low_actor_behavior_mse',
++        'evaluation/low_actor_behavior_l2',
++        'evaluation/low_actor_behavior_log_prob',
++        'evaluation/high_actor_target_mse',
++        'evaluation/high_actor_target_l2',
++        'evaluation/high_actor_target_cosine',
++        'evaluation/high_actor_target_log_prob',
 +    }
 +    eval_count = 0
 +    last_eval_step = None
@@ -4096,81 +4223,191 @@ index 3660e03..2cb4554 100644
 +        return probe_batch_cache, probe_idxs_cache
 +
 +    def _maybe_log_recurrent_refinement(eval_metrics, eval_agent, *, step: int):
-+        if value_module_name is None or value_backbone != 'recur_tied':
++        has_recurrent_value = value_module_name is not None and value_backbone == 'recur_tied'
++        has_recurrent_critic = critic_module_name is not None and critic_backbone == 'recur_tied'
++        if not has_recurrent_value and not has_recurrent_critic:
 +            return
 +        probe_batch, probe_idxs = _get_probe_batch()
 +        probe_goals = probe_batch.get('value_goals', probe_batch.get('goals'))
 +        if probe_goals is None:
 +            return
 +        probe_negative_goals = _negative_goal_batch(probe_batch, goal_key='value_goals')
-+        total_iters = int(config.get('value_recur_iters', 1))
++        actor_probe_goals = probe_batch.get('actor_goals', probe_goals)
++        actor_goal_prefix = 'actor' if 'actor_goal_source' in probe_batch else 'value'
++        maze_meta_value = _maze_distance_metadata(probe_batch, goal_key='value_goals')
++        maze_meta_actor = _maze_distance_metadata(probe_batch, goal_key='actor_goals')
 +        value_steps = []
 +        hidden_norm_steps = []
-+        for k in range(1, total_iters + 1):
-+            values_k, aux_k = eval_agent.network.select('value')(
-+                probe_batch['observations'],
-+                probe_goals,
-+                return_aux=True,
-+                num_iters=k,
-+            )
-+            values_k = np.asarray(values_k)
-+            value_steps.append(values_k)
-+            hidden_norm = aux_k.get('final_hidden_norm') if isinstance(aux_k, dict) else None
-+            hidden_norm_steps.append(None if hidden_norm is None else np.asarray(hidden_norm))
-+            eval_metrics[f'evaluation/refine/value_step_{k}_mean'] = float(values_k.mean())
-+            eval_metrics[f'evaluation/refine/value_step_{k}_std'] = float(values_k.std())
-+            if probe_negative_goals is not None:
-+                neg_values_k = np.asarray(
-+                    eval_agent.network.select('value')(
-+                        probe_batch['observations'],
-+                        probe_negative_goals,
-+                        num_iters=k,
-+                    )
++        critic_pos_steps = []
++        critic_neg_steps = []
++        critic_hidden_norm_steps = []
++        actor_critic_deltas = []
++
++        if has_recurrent_value:
++            total_iters = int(config.get('value_recur_iters', 1))
++            for k in range(1, total_iters + 1):
++                values_k, aux_k = eval_agent.network.select('value')(
++                    probe_batch['observations'],
++                    probe_goals,
++                    return_aux=True,
++                    num_iters=k,
 +                )
-+                _log_signal_metrics(
++                values_k = np.asarray(values_k)
++                value_steps.append(values_k)
++                hidden_norm = aux_k.get('final_hidden_norm') if isinstance(aux_k, dict) else None
++                hidden_norm_steps.append(None if hidden_norm is None else np.asarray(hidden_norm))
++                eval_metrics[f'evaluation/refine/value_step_{k}_mean'] = float(values_k.mean())
++                eval_metrics[f'evaluation/refine/value_step_{k}_std'] = float(values_k.std())
++                if probe_negative_goals is not None:
++                    neg_values_k = np.asarray(
++                        eval_agent.network.select('value')(
++                            probe_batch['observations'],
++                            probe_negative_goals,
++                            num_iters=k,
++                        )
++                    )
++                    _log_signal_metrics(
++                        eval_metrics,
++                        f'evaluation/refine/value_step_{k}_signal',
++                        _reduced_scores(values_k, 'value'),
++                        _reduced_scores(neg_values_k, 'value'),
++                        batch=probe_batch,
++                        goal_prefix='value',
++                    )
++                _log_path_geometry_metrics(
 +                    eval_metrics,
-+                    f'evaluation/refine/step_{k}_signal',
++                    f'evaluation/refine/value_step_{k}_geometry',
 +                    _reduced_scores(values_k, 'value'),
-+                    _reduced_scores(neg_values_k, 'value'),
-+                    batch=probe_batch,
++                    probe_batch,
 +                    goal_prefix='value',
 +                )
-+            _log_path_geometry_metrics(
-+                eval_metrics,
-+                f'evaluation/refine/step_{k}_geometry',
-+                _reduced_scores(values_k, 'value'),
-+                probe_batch,
-+                goal_prefix='value',
-+            )
-+            if hidden_norm is not None:
-+                eval_metrics[f'evaluation/refine/hidden_norm_step_{k}_mean'] = float(np.asarray(hidden_norm).mean())
-+            if k > 1:
-+                delta_k = np.asarray(value_steps[-1] - value_steps[-2])
-+                eval_metrics[f'evaluation/refine/delta_step_{k}_mean_abs'] = float(np.mean(np.abs(delta_k)))
++                if hidden_norm is not None:
++                    eval_metrics[f'evaluation/refine/value_hidden_norm_step_{k}_mean'] = float(np.asarray(hidden_norm).mean())
++                if k > 1:
++                    delta_k = np.asarray(value_steps[-1] - value_steps[-2])
++                    eval_metrics[f'evaluation/refine/value_delta_step_{k}_mean_abs'] = float(np.mean(np.abs(delta_k)))
 +
-+        target_values = np.asarray(
-+            eval_agent.network.select('target_value')(
-+                probe_batch['observations'],
-+                probe_goals,
-+            )
-+        )
-+        final_values = value_steps[-1]
-+        eval_metrics['evaluation/refine/target_value_mean'] = float(target_values.mean())
-+        eval_metrics['evaluation/refine/target_value_std'] = float(target_values.std())
-+        eval_metrics['evaluation/refine/final_target_mse'] = float(np.mean((final_values - target_values) ** 2))
-+
-+        if 'rewards' in probe_batch and 'masks' in probe_batch and 'next_observations' in probe_batch:
-+            next_target_values = np.asarray(
++            target_values = np.asarray(
 +                eval_agent.network.select('target_value')(
-+                    probe_batch['next_observations'],
++                    probe_batch['observations'],
 +                    probe_goals,
 +                )
 +            )
-+            td_target = np.asarray(probe_batch['rewards']) + float(config['discount']) * np.asarray(
-+                probe_batch['masks']
-+            ) * next_target_values
-+            eval_metrics['evaluation/refine/td_target_mean'] = float(td_target.mean())
-+            eval_metrics['evaluation/refine/final_td_target_mse'] = float(np.mean((final_values - td_target) ** 2))
++            final_values = value_steps[-1]
++            eval_metrics['evaluation/refine/target_value_mean'] = float(target_values.mean())
++            eval_metrics['evaluation/refine/target_value_std'] = float(target_values.std())
++            eval_metrics['evaluation/refine/final_target_mse'] = float(np.mean((final_values - target_values) ** 2))
++
++            if 'rewards' in probe_batch and 'masks' in probe_batch and 'next_observations' in probe_batch:
++                next_target_values = np.asarray(
++                    eval_agent.network.select('target_value')(
++                        probe_batch['next_observations'],
++                        probe_goals,
++                    )
++                )
++                td_target = np.asarray(probe_batch['rewards']) + float(config['discount']) * np.asarray(
++                    probe_batch['masks']
++                ) * next_target_values
++                eval_metrics['evaluation/refine/td_target_mean'] = float(td_target.mean())
++                eval_metrics['evaluation/refine/final_td_target_mse'] = float(np.mean((final_values - td_target) ** 2))
++
++        if has_recurrent_critic and 'actions' in probe_batch:
++            total_iters = int(config.get('critic_recur_iters', 1))
++            behavior_actions = np.asarray(probe_batch['actions'])
++            actor_actions = None
++            if not config.get('discrete', False) and 'actor' in actor_module_names and actor_probe_goals is not None:
++                try:
++                    actor_dist = eval_agent.network.select('actor')(probe_batch['observations'], actor_probe_goals)
++                    actor_actions = np.asarray(actor_dist.mode())
++                except Exception:
++                    actor_actions = None
++
++            for k in range(1, total_iters + 1):
++                critic_values_k, critic_aux_k = _critic_forward(
++                    eval_agent,
++                    probe_batch['observations'],
++                    probe_goals,
++                    behavior_actions,
++                    num_iters=k,
++                    return_aux=True,
++                )
++                critic_values_k = np.asarray(critic_values_k)
++                q_pos_k = _reduced_scores(critic_values_k, 'critic')
++                critic_pos_steps.append(q_pos_k)
++                eval_metrics[f'evaluation/refine/critic_step_{k}_mean'] = float(np.mean(critic_values_k))
++                eval_metrics[f'evaluation/refine/critic_step_{k}_std'] = float(np.std(critic_values_k))
++                if probe_negative_goals is not None:
++                    neg_values_k = np.asarray(
++                        _critic_forward(
++                            eval_agent,
++                            probe_batch['observations'],
++                            probe_negative_goals,
++                            behavior_actions,
++                            num_iters=k,
++                        )
++                    )
++                    q_neg_k = _reduced_scores(neg_values_k, 'critic')
++                    critic_neg_steps.append(q_neg_k)
++                    _log_signal_metrics(
++                        eval_metrics,
++                        f'evaluation/refine/critic_step_{k}_signal',
++                        q_pos_k,
++                        q_neg_k,
++                        batch=probe_batch,
++                        goal_prefix='value',
++                    )
++                _log_path_geometry_metrics(
++                    eval_metrics,
++                    f'evaluation/refine/critic_step_{k}_geometry',
++                    q_pos_k,
++                    probe_batch,
++                    goal_prefix='value',
++                )
++                hidden_norm_total = None
++                if isinstance(critic_aux_k, dict):
++                    hidden_norm_total = critic_aux_k.get('final_hidden_norm_total')
++                    if hidden_norm_total is None:
++                        phi_hidden = critic_aux_k.get('final_hidden_norm_phi')
++                        psi_hidden = critic_aux_k.get('final_hidden_norm_psi')
++                        if phi_hidden is not None and psi_hidden is not None:
++                            hidden_norm_total = np.sqrt(np.asarray(phi_hidden) ** 2 + np.asarray(psi_hidden) ** 2)
++                critic_hidden_norm_steps.append(None if hidden_norm_total is None else np.asarray(hidden_norm_total))
++                if hidden_norm_total is not None:
++                    eval_metrics[f'evaluation/refine/critic_hidden_norm_step_{k}_mean'] = float(
++                        np.asarray(hidden_norm_total).mean()
++                    )
++                if k > 1:
++                    delta_k = critic_pos_steps[-1] - critic_pos_steps[-2]
++                    eval_metrics[f'evaluation/refine/critic_delta_step_{k}_mean_abs'] = float(np.mean(np.abs(delta_k)))
++
++                if actor_actions is not None and actor_probe_goals is not None:
++                    q_actor_k = _score_critic_batch(
++                        eval_agent,
++                        probe_batch['observations'],
++                        actor_probe_goals,
++                        actor_actions,
++                        num_iters=k,
++                    )
++                    q_behavior_k = _score_critic_batch(
++                        eval_agent,
++                        probe_batch['observations'],
++                        actor_probe_goals,
++                        behavior_actions,
++                        num_iters=k,
++                    )
++                    actor_critic_deltas.append(q_actor_k - q_behavior_k)
++                    _log_pair_preference_metrics(
++                        eval_metrics,
++                        f'evaluation/refine/critic_step_{k}_actor_critic',
++                        q_actor_k,
++                        q_behavior_k,
++                        batch=probe_batch,
++                        goal_prefix=actor_goal_prefix,
++                        preferred_name='q_actor',
++                        reference_name='q_behavior',
++                        delta_name='q_delta',
++                        prefer_name='prefer_actor_frac',
++                    )
 +
 +        should_dump = False
 +        for target in dump_targets:
@@ -4184,16 +4421,40 @@ index 3660e03..2cb4554 100644
 +        os.makedirs(refine_dir, exist_ok=True)
 +        dump_dict = {
 +            'probe_idxs': probe_idxs,
-+            'target_value': target_values,
 +            'step': np.asarray([step], dtype=np.int32),
 +        }
-+        for idx, values_k in enumerate(value_steps, start=1):
-+            dump_dict[f'value_step_{idx}'] = values_k
-+            if idx > 1:
-+                dump_dict[f'delta_step_{idx}'] = values_k - value_steps[idx - 2]
-+            hidden_norm = hidden_norm_steps[idx - 1]
-+            if hidden_norm is not None:
-+                dump_dict[f'hidden_norm_step_{idx}'] = hidden_norm
++        for key in ['value_goal_source', 'value_goal_horizon', 'actor_goal_source', 'actor_goal_horizon']:
++            if key in probe_batch:
++                dump_dict[key] = np.asarray(probe_batch[key])
++        if maze_meta_value is not None:
++            dump_dict['value_goal_maze_xy_distance'] = np.asarray(maze_meta_value['euclidean'])
++            dump_dict['value_goal_maze_path_len'] = np.asarray(maze_meta_value['path_len'])
++        if maze_meta_actor is not None:
++            dump_dict['actor_goal_maze_xy_distance'] = np.asarray(maze_meta_actor['euclidean'])
++            dump_dict['actor_goal_maze_path_len'] = np.asarray(maze_meta_actor['path_len'])
++        if has_recurrent_value and value_steps:
++            dump_dict['target_value'] = target_values
++            for idx, values_k in enumerate(value_steps, start=1):
++                dump_dict[f'value_step_{idx}'] = values_k
++                if idx > 1:
++                    dump_dict[f'value_delta_step_{idx}'] = values_k - value_steps[idx - 2]
++                hidden_norm = hidden_norm_steps[idx - 1]
++                if hidden_norm is not None:
++                    dump_dict[f'value_hidden_norm_step_{idx}'] = hidden_norm
++        if has_recurrent_critic and critic_pos_steps:
++            for idx, q_pos_k in enumerate(critic_pos_steps, start=1):
++                dump_dict[f'critic_step_{idx}_pos'] = q_pos_k
++                if idx > 1:
++                    dump_dict[f'critic_delta_step_{idx}'] = q_pos_k - critic_pos_steps[idx - 2]
++                if idx - 1 < len(critic_neg_steps):
++                    q_neg_k = critic_neg_steps[idx - 1]
++                    dump_dict[f'critic_step_{idx}_neg'] = q_neg_k
++                    dump_dict[f'critic_step_{idx}_margin'] = q_pos_k - q_neg_k
++                hidden_norm = critic_hidden_norm_steps[idx - 1]
++                if hidden_norm is not None:
++                    dump_dict[f'critic_hidden_norm_step_{idx}'] = hidden_norm
++                if idx - 1 < len(actor_critic_deltas):
++                    dump_dict[f'critic_step_{idx}_actor_q_delta'] = actor_critic_deltas[idx - 1]
 +        np.savez_compressed(os.path.join(refine_dir, f'step_{step:09d}.npz'), **dump_dict)
 +
 +    def run_evaluation(*, step: int, eval_agent, mark_final: bool = False):
@@ -4248,6 +4509,11 @@ index 3660e03..2cb4554 100644
 +            eval_metrics[f'evaluation/overall_{k}'] = np.mean(v)
 +        eval_metrics.setdefault('evaluation/overall_success', np.nan)
 +        eval_metrics.setdefault('evaluation/overall_episode.return', np.nan)
++        # W&B panels sort metrics lexicographically within a section. Mirror the main
++        # headline metrics under zero-padded aliases so they appear at the top of the
++        # evaluation panel without breaking existing metric names or plots.
++        eval_metrics['evaluation/00_overall_success'] = eval_metrics['evaluation/overall_success']
++        eval_metrics['evaluation/01_overall_episode.return'] = eval_metrics['evaluation/overall_episode.return']
 +        normalized_score = None
 +        if 'episode.return' in overall_metrics:
 +            get_normalized_score = getattr(env.unwrapped, 'get_normalized_score', None)
@@ -4262,6 +4528,7 @@ index 3660e03..2cb4554 100644
 +        if normalized_score is None:
 +            eval_metrics['evaluation/overall_normalized_score'] = np.nan
 +            eval_metrics['evaluation/normalized_score'] = np.nan
++        eval_metrics['evaluation/02_overall_normalized_score'] = eval_metrics['evaluation/overall_normalized_score']
 +
 +        if FLAGS.video_episodes > 0:
 +            video = get_wandb_video(renders=renders, n_cols=num_tasks)
@@ -4387,6 +4654,27 @@ index 3660e03..2cb4554 100644
 +
 +        _maybe_log_actor_quality(eval_metrics, eval_agent, eval_batch)
 +        _maybe_log_recurrent_refinement(eval_metrics, eval_agent, step=step)
++
++        top_eval_aliases = {
++            'evaluation/10_critic_margin_mean': 'evaluation/critic_signal/margin_mean',
++            'evaluation/11_critic_rank_acc': 'evaluation/critic_signal/rank_acc',
++            'evaluation/12_critic_separation_z': 'evaluation/critic_signal/separation_z',
++            'evaluation/13_traj_medium_margin_mean': 'evaluation/critic_signal/traj_medium_margin_mean',
++            'evaluation/14_maze_path_medium_margin_mean': 'evaluation/critic_signal/maze_path_medium_margin_mean',
++            'evaluation/15_actor_q_delta_mean': 'evaluation/actor_critic/q_delta_mean',
++            'evaluation/16_actor_prefer_actor_frac': 'evaluation/actor_critic/prefer_actor_frac',
++            'evaluation/17_policy_behavior_mse_mean': 'evaluation/policy_behavior/mse_mean',
++            'evaluation/18_policy_behavior_l2_mean': 'evaluation/policy_behavior/l2_mean',
++            'evaluation/19_graph_corr': 'evaluation/critic_geometry/graph_corr',
++            'evaluation/30_refine_critic_step1_margin_mean': 'evaluation/refine/critic_step_1_signal/margin_mean',
++            'evaluation/31_refine_critic_step2_margin_mean': 'evaluation/refine/critic_step_2_signal/margin_mean',
++            'evaluation/32_refine_critic_step3_margin_mean': 'evaluation/refine/critic_step_3_signal/margin_mean',
++            'evaluation/33_refine_critic_step4_margin_mean': 'evaluation/refine/critic_step_4_signal/margin_mean',
++            'evaluation/34_refine_critic_step4_actor_q_delta_mean': 'evaluation/refine/critic_step_4_actor_critic/q_delta_mean',
++        }
++        for alias_key, source_key in top_eval_aliases.items():
++            if source_key in eval_metrics:
++                eval_metrics[alias_key] = eval_metrics[source_key]
 +
 +        summary_values = {
 +            'success': eval_metrics.get('evaluation/overall_success'),
@@ -5421,7 +5709,7 @@ index 9c421dd..3da1eab 100644
  
      return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..d41e34b 100644
+index 4ee2b26..c63e137 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
 @@ -6,6 +6,8 @@ import flax.linen as nn
@@ -5997,7 +6285,7 @@ index 4ee2b26..d41e34b 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,16 +864,38 @@ class GCBilinearValue(nn.Module):
+@@ -375,16 +864,48 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
@@ -6010,12 +6298,22 @@ index 4ee2b26..d41e34b 100644
 +            psi, psi_aux = self.psi(goals, num_iters, True, goals)
 +            phi_steps = phi_aux.get('act_expected_steps')
 +            psi_steps = psi_aux.get('act_expected_steps')
++            phi_hidden_norm = phi_aux.get('final_hidden_norm')
++            psi_hidden_norm = psi_aux.get('final_hidden_norm')
 +            if phi_steps is not None and psi_steps is not None:
-+                aux = {
-+                    'act_expected_steps_phi': phi_steps,
-+                    'act_expected_steps_psi': psi_steps,
-+                    'act_expected_steps_total': phi_steps + psi_steps,
-+                }
++                aux.update(
++                    {
++                        'act_expected_steps_phi': phi_steps,
++                        'act_expected_steps_psi': psi_steps,
++                        'act_expected_steps_total': phi_steps + psi_steps,
++                    }
++                )
++            if phi_hidden_norm is not None:
++                aux['final_hidden_norm_phi'] = phi_hidden_norm
++            if psi_hidden_norm is not None:
++                aux['final_hidden_norm_psi'] = psi_hidden_norm
++            if phi_hidden_norm is not None and psi_hidden_norm is not None:
++                aux['final_hidden_norm_total'] = jnp.sqrt(phi_hidden_norm**2 + psi_hidden_norm**2)
 +        elif self.backbone == 'recur_tied':
 +            # IMPORTANT: nn.vmap does not support kwargs; pass iterative args positionally.
 +            phi = self.phi(phi_inputs, num_iters, False, phi_inputs)
@@ -6038,7 +6336,7 @@ index 4ee2b26..d41e34b 100644
          else:
              return v
  
-@@ -394,9 +905,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+@@ -394,9 +915,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
  
      action_dim: int = None
  
@@ -6050,7 +6348,7 @@ index 4ee2b26..d41e34b 100644
  
  
  class GCMRNValue(nn.Module):
-@@ -416,9 +927,54 @@ class GCMRNValue(nn.Module):
+@@ -416,9 +937,54 @@ class GCMRNValue(nn.Module):
      latent_dim: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -6106,7 +6404,7 @@ index 4ee2b26..d41e34b 100644
  
      def __call__(self, observations, goals, is_phi=False, info=False):
          """Return the MRN value function.
-@@ -436,8 +992,12 @@ class GCMRNValue(nn.Module):
+@@ -436,8 +1002,12 @@ class GCMRNValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)
@@ -6121,7 +6419,7 @@ index 4ee2b26..d41e34b 100644
  
          sym_s = phi_s[..., : self.latent_dim // 2]
          sym_g = phi_g[..., : self.latent_dim // 2]
-@@ -471,9 +1031,54 @@ class GCIQEValue(nn.Module):
+@@ -471,9 +1041,54 @@ class GCIQEValue(nn.Module):
      dim_per_component: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -6177,7 +6475,7 @@ index 4ee2b26..d41e34b 100644
          self.alpha = Param()
  
      def __call__(self, observations, goals, is_phi=False, info=False):
-@@ -493,8 +1098,12 @@ class GCIQEValue(nn.Module):
+@@ -493,8 +1108,12 @@ class GCIQEValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)
