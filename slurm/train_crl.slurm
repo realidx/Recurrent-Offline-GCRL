@@ -109,7 +109,7 @@ LAYERSCALE_INIT="${LAYERSCALE_INIT:-1e-2}"
 
 # recurrent tied options.
 KTRAIN="${KTRAIN:-4}"
-RECUR_NUM_DENSE_LAYERS="${RECUR_NUM_DENSE_LAYERS:2}" # User-facing N in NxK: dense layers inside each tied recurrent residual update.
+RECUR_NUM_DENSE_LAYERS="${RECUR_NUM_DENSE_LAYERS:-2}" # User-facing N in NxK: dense layers inside each tied recurrent residual update.
 RECUR_NUM_BLOCKS="${RECUR_NUM_BLOCKS:-1}"   # Deprecated fallback: number of 2-layer pairs inside each tied recurrent residual update.
 RECUR_MAX_ITERS="${RECUR_MAX_ITERS:-4}"
 CRITIC_RECUR_LN_MODE="${CRITIC_RECUR_LN_MODE:-per_layer_final}"
