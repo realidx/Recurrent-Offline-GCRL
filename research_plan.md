@@ -127,7 +127,7 @@ Assume the proposed model is the full iterative critic:
 
 - iterative refinement
 - SwiGLU update block
-- FiLM conditioning
+- Step embedding
 - LayerScale
 - pre-LN
 
@@ -142,7 +142,7 @@ The experimental slate should be organized by claim, not by algorithm count.
 Minimal evidence needed:
 
 - one algorithmic setting that isolates critic behavior well
-- one easy task, one medium task, one hard long-horizon task
+- one easy task, one medium task, one hard long-horizon task: antmaze-medium-stitch, antmaze-giant-navigate, antmaze-large-stitch
 - MLP baseline, deeper MLP, wider MLP, iterative critic
 - matched-parameter or matched-compute comparison
 
@@ -161,10 +161,11 @@ Minimal evidence needed:
 - horizon-sensitive analysis
 - value margin and ranking metrics
 - refinement-step analysis
+- compare MLP baseline and iterative critic
 
 Recommended setting:
 
-- use `CRL`, or use the `HIQL` value network if the implementation is cleaner
+- use `CRL`
 
 Goal:
 
@@ -208,30 +209,62 @@ Purpose:
 - establish the core result
 - provide the main table or figure for the paper
 
+Fixed proposed model:
+
+- iterative SwiGLU + Step embedding + LayerScale + pre-LN critic
+
 Compare:
 
-- plain MLP baseline
-- deeper MLP
-- wider MLP
-- iterative SwiGLU + FiLM + LayerScale + pre-LN critic
+- plain MLP critic baseline
+- fixed proposed iterative critic
 
-Prefer:
+Important:
 
-- `CRL` for critic-isolation results
-- `HIQL` for final task performance and actor-transfer results
+- this section is not for model search
+- this section is not for matched-parameter or matched-compute claims
+- this section should only compare the frozen proposed model against the standard MLP critic
+
+Algorithms:
+
+- `CRL` is required because it gives the clearest critic-side comparison
+- `HIQL` is strongly recommended because it strengthens relevance for offline goal-conditioned RL
+- `IQL` and `SAC+BC` should be included if budget permits, as supporting breadth rather than as the center of the paper
 
 Tasks:
 
-- one easy short-horizon task
-- one medium task
-- one hard stitching or long-horizon task
+- include at least two long-horizon AntMaze tasks
+- include one easier long-horizon setting such as `antmaze-medium-stitch-v0`
+- include one harder long-horizon locomotion setting such as `antmaze-large-stitch-v0` or `antmaze-giant-navigate-v0`
+- include one non-AntMaze OGBench manipulation task if budget permits, such as a `scene`, `cube`, or `puzzle` task
+
+Recommended minimum task slate:
+
+- `antmaze-medium-stitch-v0`
+- `antmaze-large-stitch-v0`
+- `antmaze-giant-navigate-v0`
+
+Optional coverage upgrade:
+
+- add one manipulation task once the locomotion story is stable
+
+Protocol:
+
+- use the same seed set for every compared method whenever possible
+- keep actor architecture, training horizon, and task hyperparameters fixed within each algorithm-task comparison
+- do not mix ablation variants such as no-Step, no-LayerScale, or no-pre-LN into this section
+- do not present this section as a fairness-controlled parameter or compute comparison yet; that belongs later
 
 Required outputs:
 
-- final success or return
-- parameter count
-- compute budget
-- uncertainty across seeds
+- final task performance using the standard benchmark metric for each environment
+- mean and spread across seeds
+- per-seed values saved so the same runs can later support mechanism analysis
+- one benchmark-facing main table
+- one compact figure summarizing the main comparison
+
+Primary question answered by this section:
+
+> Does the frozen proposed critic architecture outperform the standard MLP critic on meaningful long-horizon offline control benchmarks, across more than one algorithm family?
 
 ### B. Mechanism analysis
 
@@ -256,36 +289,64 @@ This section must directly answer:
 
 Purpose:
 
-- show that the final design is not arbitrarily assembled
+- show that the frozen proposed critic is not arbitrarily assembled
+- identify which parts of the final design are responsible for the gain
 
-Use the full model as the reference and test:
+Reference model:
 
-- remove FiLM
+- full proposed critic from Section A:
+  iterative SwiGLU + Step embedding + LayerScale + pre-LN
+
+Required ablations:
+
+- remove Step embedding
 - remove LayerScale
 - remove pre-LN
-- replace iterative refinement with a single step
+- replace iterative refinement with a 1-step version of the same SwiGLU critic
+
+Important interpretation:
+
+- the 1-step control is not the MLP baseline
+- it should keep the same block family and differ mainly in the absence of iterative refinement
+- this is the key control for separating block expressivity from iterative refinement
+
+Recommended scope:
+
+- run this section on one primary algorithm only, preferably `CRL`
+- use one medium and one hard task rather than the full benchmark slate
+- good defaults are `antmaze-large-stitch-v0` and `antmaze-giant-navigate-v0`
+- add more algorithms or tasks only if the main ablation pattern is already clear
 
 Important:
 
-- do not only run leave-one-out ablations
-- also include a small build-up sequence if budget permits
+- do not let this section explode into a full benchmark matrix
+- do not mix matched-parameter or matched-compute claims into this section
+- do not mix iteration-count sweeps into this section; those belong in Part D
+- where possible, pair performance changes with at least one signal-quality metric from Part B
 
-Recommended build-up:
+Required outputs:
+
+- final task performance
+- delta relative to the full proposed model
+- same-seed comparison across ablations
+- at least one mechanism-side measurement when possible
+
+Optional build-up sequence:
 
 - MLP baseline
-- SwiGLU block
+- 1-step SwiGLU block
 - + pre-LN
-- + FiLM
 - + LayerScale
+- + Step embedding
 - + iteration
 
-This is stronger than only saying each component is "essential."
+This optional build-up is useful if the leave-one-out ablations are noisy or if a more constructive design story is needed.
 
 ### D. Iteration-count study
 
 Purpose:
 
-- support the claim that iterative refinement behaves like a controllable sharpening process
+- support the claim that iterative refinement behaves like a controllable sharpening process, and probably show that there is no single sweetspot for all kind of environment using all kind of algorithm.
 
 Compare:
 
