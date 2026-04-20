@@ -272,6 +272,7 @@ Purpose:
 
 - explain why iterative refinement helps
 - connect the performance gain to critic signal quality
+- make the mechanism story reviewer-facing rather than a loose collection of diagnostics
 
 Required measurements:
 
@@ -284,6 +285,91 @@ Required measurements:
 This section must directly answer:
 
 > What critic pathology does the MLP have, and what does iterative refinement fix?
+
+Mechanism claims to support:
+
+- the baseline critic can learn a coarse global value structure while still producing one-shot judgments that are too blunt or brittle for long-horizon actor extraction
+- iterative refinement progressively disambiguates hard state-goal pairs rather than merely producing a deeper one-shot predictor
+- the first major gain is not only sharper final margins, but a critic signal that the actor can use more safely
+- the gain is selective to hard medium/long-horizon stitching decisions rather than uniform across all cases
+- iterative refinement makes the critic more operationally useful for control, not necessarily more globally metric-like
+
+Core empirical story from current CRL results on `antmaze-medium-stitch-v0`:
+
+- early performance gains are much larger than early margin gains
+- at `100k`, baseline and recurrent critics have similar overall margin, but recurrent has much higher success and much better actor-facing diagnostics
+- iteration depth shows a threshold effect: `iter1` helps only modestly, while `iter2+` gives the major jump
+- actor-extraction metrics improve almost monotonically with refinement depth
+- medium-horizon and path-sensitive buckets improve more than easy buckets
+- global maze-geometry correlation can worsen as refinement depth increases, so the correct claim is not "better shortest-path regression everywhere"
+
+Recommended section structure:
+
+1. Set up the failure mode:
+   long-horizon offline goal-conditioned RL requires compositional reachability judgments under dataset support constraints, so a one-shot MLP can produce value estimates that are too coarse or brittle on hard pairs even if its global geometry statistics are reasonable.
+2. Show the early-stage effect:
+   the recurrent critic improves actor usability before it becomes dramatically sharper in aggregate margin.
+3. Show that refinement itself matters:
+   `iter1` is not enough; the main gain appears once the critic can revise its estimate multiple times.
+4. Show selectivity:
+   the improvement is strongest on medium-horizon and path-sensitive buckets and on the hardest stitch subtasks.
+5. State the geometry caveat:
+   the recurrent critic is more useful for control even when it is not a uniformly better global maze-distance surrogate.
+
+Recommended figures:
+
+1. Qualitative critic-field figure.
+   Compare baseline vs `iter1` vs `iter4` on antmaze.
+   Goal:
+   if visible in the field plots, show specific local shortcut or support-mismatch failures in the baseline and more control-useful critic fields in the recurrent model, without claiming that recurrent must be globally more geometry-faithful.
+   This figure should support the opening failure-mode paragraph and the final geometry-caveat paragraph.
+
+2. Iteration-depth mechanism figure.
+   Plot margin or separation versus refinement depth on a fixed probe set, broken out by difficulty buckets such as:
+   `traj_short`, `traj_medium`, `maze_path_medium`.
+   Goal:
+   show that later refinement steps do real corrective work and that the effect concentrates on hard buckets.
+   This figure is the main evidence that iterative refinement itself matters.
+
+3. Actor-extraction figure.
+   Plot `q_delta_mean` and policy-behavior drift versus refinement depth or versus model variant (`baseline`, `iter1`, `iter2`, `iter3`, `iter4`).
+   Goal:
+   show that the critic becomes progressively more usable by the actor, which is especially important in the offline setting.
+
+How the figures and narrative should connect:
+
+- Figure 1 answers:
+  what mistake does the MLP critic make?
+- Figure 2 answers:
+  what do extra refinement steps actually change?
+- Figure 3 answers:
+  why does that matter for offline policy extraction?
+
+The mechanism subsection should not read as three disjoint diagnostics.
+It should read as one argument:
+
+- the baseline critic makes the wrong kind of approximation
+- refinement progressively corrects it
+- this correction first appears as improved actor usability
+- and later appears as stronger medium-horizon discrimination and better stitching success
+
+Most valuable quantitative points to emphasize:
+
+- at `100k`, recurrent and baseline margins can be similar while success differs drastically
+- `q_delta_mean` and policy-behavior drift improve sharply and early
+- the `iter1` to `iter2` jump is more important than the `iter3` to `iter4` gap
+- `task3` and `task4` or similarly hard stitch subtasks carry a disproportionate share of the gain
+- medium-horizon buckets are more diagnostic than global averages alone
+
+What not to claim:
+
+- do not claim that iterative refinement simply learns a uniformly better maze metric
+- do not claim that every geometry statistic must improve
+- do not reduce the mechanism story to "margin goes up"
+
+Preferred conclusion of this section:
+
+> Iterative refinement helps because long-horizon offline goal-conditioned value estimation is a sequential disambiguation problem in disguise. The recurrent critic repeatedly corrects an initially coarse state-goal judgment, reduces actor-facing brittleness early in training, and ultimately sharpens medium-horizon supported-vs-unsupported decisions that are critical for stitching.
 
 ### C. Component ablation
 

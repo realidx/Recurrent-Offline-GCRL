@@ -14,7 +14,7 @@ Excluded:
 
 Source policy:
 
-- `CRL` and `HIQL` antmaze task rows are derived from OGBench third-party benchmark entries in [third_party/ogbench/impls/hyperparameters.sh](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/hyperparameters.sh), plus the corresponding agent defaults in [third_party/ogbench/impls/agents/crl.py](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/agents/crl.py) and [third_party/ogbench/impls/agents/hiql.py](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/agents/hiql.py).
+- `CRL` and `HIQL` task rows are derived from OGBench third-party benchmark entries in [third_party/ogbench/impls/hyperparameters.sh](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/hyperparameters.sh), plus the corresponding agent defaults in [third_party/ogbench/impls/agents/crl.py](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/agents/crl.py) and [third_party/ogbench/impls/agents/hiql.py](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/agents/hiql.py).
 - `CGIVL` / `CGCIVL` values below are taken from the paper appendix in [references/CGCIVL.pdf](/Users/bruce/Recurrent-Offline-RL/references/CGCIVL.pdf), the authors' README example in [third_party/CGCIVL/readme.md](/Users/bruce/Recurrent-Offline-RL/third_party/CGCIVL/readme.md), and the authors' agent defaults in [third_party/CGCIVL/impls/agents/cgivl.py](/Users/bruce/Recurrent-Offline-RL/third_party/CGCIVL/impls/agents/cgivl.py). Where the paper gives only task-family rules rather than per-task commands, those rows are marked as default-backed or inferred from the published rule.
 - `SAW` is not part of the OGBench third-party benchmark table in this repo. Its values below are local worktree defaults from [slurm/train_saw_array.slurm](/Users/bruce/Recurrent-Offline-RL/slurm/train_saw_array.slurm) and [third_party/ogbench/impls/agents/saw.py](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/agents/saw.py).
 
@@ -53,6 +53,40 @@ Pattern from OGBench:
 - `stitch`: actor goal mix is `0.5 / 0.5`
 - `giant`: `discount=0.995`
 - other listed antmaze locomotion tasks: `discount=0.99`
+
+Effective humanoidmaze locomotion hyperparameters:
+
+| Task | alpha | discount | actor_p_curgoal | actor_p_trajgoal | actor_p_randomgoal | value_p_curgoal | value_p_trajgoal | value_p_randomgoal |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `humanoidmaze-medium-navigate-v0` | `0.1` | `0.995` | `0.0` | `1.0` | `0.0` | `0.0` | `1.0` | `0.0` |
+| `humanoidmaze-large-navigate-v0` | `0.1` | `0.995` | `0.0` | `1.0` | `0.0` | `0.0` | `1.0` | `0.0` |
+| `humanoidmaze-giant-navigate-v0` | `0.1` | `0.995` | `0.0` | `1.0` | `0.0` | `0.0` | `1.0` | `0.0` |
+| `humanoidmaze-medium-stitch-v0` | `0.1` | `0.995` | `0.0` | `0.5` | `0.5` | `0.0` | `1.0` | `0.0` |
+| `humanoidmaze-large-stitch-v0` | `0.1` | `0.995` | `0.0` | `0.5` | `0.5` | `0.0` | `1.0` | `0.0` |
+| `humanoidmaze-giant-stitch-v0` | `0.1` | `0.995` | `0.0` | `0.5` | `0.5` | `0.0` | `1.0` | `0.0` |
+
+Pattern from OGBench:
+
+- all listed humanoidmaze CRL tasks use `discount=0.995`
+- `navigate`: actor goal mix is `1.0 / 0.0`
+- `stitch`: actor goal mix is `0.5 / 0.5`
+
+Effective state-manipulation hyperparameters:
+
+| Task family | Tasks covered | alpha | discount | actor_p_curgoal | actor_p_trajgoal | actor_p_randomgoal | value_p_curgoal | value_p_trajgoal | value_p_randomgoal |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `cube` play | `cube-single-play-v0`, `cube-double-play-v0`, `cube-triple-play-v0`, `cube-quadruple-play-v0` | `3.0` | `0.99` | `0.0` | `1.0` | `0.0` | `0.0` | `1.0` | `0.0` |
+| `cube` noisy | `cube-single-noisy-v0`, `cube-double-noisy-v0`, `cube-triple-noisy-v0`, `cube-quadruple-noisy-v0` | `0.1` | `0.99` | `0.0` | `1.0` | `0.0` | `0.0` | `1.0` | `0.0` |
+| `scene` play | `scene-play-v0` | `3.0` | `0.99` | `0.0` | `1.0` | `0.0` | `0.0` | `1.0` | `0.0` |
+| `scene` noisy | `scene-noisy-v0` | `0.1` | `0.99` | `0.0` | `1.0` | `0.0` | `0.0` | `1.0` | `0.0` |
+| `puzzle` play | `puzzle-3x3-play-v0`, `puzzle-4x4-play-v0`, `puzzle-4x5-play-v0`, `puzzle-4x6-play-v0` | `3.0` | `0.99` | `0.0` | `1.0` | `0.0` | `0.0` | `1.0` | `0.0` |
+| `puzzle` noisy | `puzzle-3x3-noisy-v0`, `puzzle-4x4-noisy-v0`, `puzzle-4x5-noisy-v0`, `puzzle-4x6-noisy-v0` | `0.1` | `0.99` | `0.0` | `1.0` | `0.0` | `0.0` | `1.0` | `0.0` |
+
+Pattern from OGBench:
+
+- `play` state-manipulation CRL tasks use `alpha=3.0`
+- `noisy` state-manipulation CRL tasks use `alpha=0.1`
+- those rows do not override `discount` or goal-sampling probabilities, so they inherit the shared CRL defaults
 
 ## CGIVL / CGCIVL
 
