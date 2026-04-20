@@ -272,6 +272,7 @@ Purpose:
 
 - explain why iterative refinement helps
 - connect the performance gain to critic signal quality
+- make the mechanism story reviewer-facing rather than a loose collection of diagnostics
 
 Required measurements:
 
@@ -284,6 +285,91 @@ Required measurements:
 This section must directly answer:
 
 > What critic pathology does the MLP have, and what does iterative refinement fix?
+
+Mechanism claims to support:
+
+- the baseline critic can learn a coarse global value structure while still producing one-shot judgments that are too blunt or brittle for long-horizon actor extraction
+- iterative refinement progressively disambiguates hard state-goal pairs rather than merely producing a deeper one-shot predictor
+- the first major gain is not only sharper final margins, but a critic signal that the actor can use more safely
+- the gain is selective to hard medium/long-horizon stitching decisions rather than uniform across all cases
+- iterative refinement makes the critic more operationally useful for control, not necessarily more globally metric-like
+
+Core empirical story from current CRL results on `antmaze-medium-stitch-v0`:
+
+- early performance gains are much larger than early margin gains
+- at `100k`, baseline and recurrent critics have similar overall margin, but recurrent has much higher success and much better actor-facing diagnostics
+- iteration depth shows a threshold effect: `iter1` helps only modestly, while `iter2+` gives the major jump
+- actor-extraction metrics improve almost monotonically with refinement depth
+- medium-horizon and path-sensitive buckets improve more than easy buckets
+- global maze-geometry correlation can worsen as refinement depth increases, so the correct claim is not "better shortest-path regression everywhere"
+
+Recommended section structure:
+
+1. Set up the failure mode:
+   long-horizon offline goal-conditioned RL requires compositional reachability judgments under dataset support constraints, so a one-shot MLP can produce value estimates that are too coarse or brittle on hard pairs even if its global geometry statistics are reasonable.
+2. Show the early-stage effect:
+   the recurrent critic improves actor usability before it becomes dramatically sharper in aggregate margin.
+3. Show that refinement itself matters:
+   `iter1` is not enough; the main gain appears once the critic can revise its estimate multiple times.
+4. Show selectivity:
+   the improvement is strongest on medium-horizon and path-sensitive buckets and on the hardest stitch subtasks.
+5. State the geometry caveat:
+   the recurrent critic is more useful for control even when it is not a uniformly better global maze-distance surrogate.
+
+Recommended figures:
+
+1. Qualitative critic-field figure.
+   Compare baseline vs `iter1` vs `iter4` on antmaze.
+   Goal:
+   if visible in the field plots, show specific local shortcut or support-mismatch failures in the baseline and more control-useful critic fields in the recurrent model, without claiming that recurrent must be globally more geometry-faithful.
+   This figure should support the opening failure-mode paragraph and the final geometry-caveat paragraph.
+
+2. Iteration-depth mechanism figure.
+   Plot margin or separation versus refinement depth on a fixed probe set, broken out by difficulty buckets such as:
+   `traj_short`, `traj_medium`, `maze_path_medium`.
+   Goal:
+   show that later refinement steps do real corrective work and that the effect concentrates on hard buckets.
+   This figure is the main evidence that iterative refinement itself matters.
+
+3. Actor-extraction figure.
+   Plot `q_delta_mean` and policy-behavior drift versus refinement depth or versus model variant (`baseline`, `iter1`, `iter2`, `iter3`, `iter4`).
+   Goal:
+   show that the critic becomes progressively more usable by the actor, which is especially important in the offline setting.
+
+How the figures and narrative should connect:
+
+- Figure 1 answers:
+  what mistake does the MLP critic make?
+- Figure 2 answers:
+  what do extra refinement steps actually change?
+- Figure 3 answers:
+  why does that matter for offline policy extraction?
+
+The mechanism subsection should not read as three disjoint diagnostics.
+It should read as one argument:
+
+- the baseline critic makes the wrong kind of approximation
+- refinement progressively corrects it
+- this correction first appears as improved actor usability
+- and later appears as stronger medium-horizon discrimination and better stitching success
+
+Most valuable quantitative points to emphasize:
+
+- at `100k`, recurrent and baseline margins can be similar while success differs drastically
+- `q_delta_mean` and policy-behavior drift improve sharply and early
+- the `iter1` to `iter2` jump is more important than the `iter3` to `iter4` gap
+- `task3` and `task4` or similarly hard stitch subtasks carry a disproportionate share of the gain
+- medium-horizon buckets are more diagnostic than global averages alone
+
+What not to claim:
+
+- do not claim that iterative refinement simply learns a uniformly better maze metric
+- do not claim that every geometry statistic must improve
+- do not reduce the mechanism story to "margin goes up"
+
+Preferred conclusion of this section:
+
+> Iterative refinement helps because long-horizon offline goal-conditioned value estimation is a sequential disambiguation problem in disguise. The recurrent critic repeatedly corrects an initially coarse state-goal judgment, reduces actor-facing brittleness early in training, and ultimately sharpens medium-horizon supported-vs-unsupported decisions that are critical for stitching.
 
 ### C. Component ablation
 
@@ -372,16 +458,52 @@ Purpose:
 
 - show the gain is not just from having more parameters
 
+Core idea:
+
+- hold the algorithm, task, actor, batch size, and train-step budget fixed
+- change only the critic-side architecture
+- compare the frozen proposed critic against MLP baselines that match the changed module parameter count as closely as possible
+
 Compare:
 
-- proposed iterative critic
+- full proposed critic
 - deeper MLP matched by parameter count
 - wider MLP matched by parameter count
+- optional standard MLP baseline as an anchor row
+
+Matching rule:
+
+- match the changed module rather than only total model size
+- for `CRL`, match `params/critic_count`
+- for `HIQL`, match `params/value_count`
+- use the real parameter count from the instantiated model, not a hand-derived formula
+
+Recommended scope:
+
+- start with one primary algorithm, preferably `CRL`
+- start with one representative hard task, preferably `antmaze-large-stitch-v0`
+- then add `antmaze-giant-navigate-v0`
+- extend to `HIQL` only after the protocol is stable
+
+Implementation note:
+
+- use the existing parameter-count search utility to find close width-matched and depth-matched MLP baselines
+- if input dimensions differ across task families, recompute the match rather than assuming one match transfers automatically
 
 Important:
 
-- use at least one matched point that is very close
-- ideally use a small 3-point scaling curve instead of only one point
+- use at least one MLP match that is very close to the target module count
+- report the exact matched counts in the paper table
+- use the same seeds and train-step budget across the matched models
+- ideally include both one depth-matched and one width-matched MLP
+- a small scaling curve is a nice upgrade, but one clean matched point is acceptable for the first pass
+
+Required outputs:
+
+- final task performance across seeds
+- exact module parameter counts for every compared model
+- delta relative to the full proposed model
+- one concise table showing fairness and outcome together
 
 ### F. Matched-compute comparison
 
@@ -389,20 +511,57 @@ Purpose:
 
 - show the gain is not just from spending more computation
 
+Core idea:
+
+- tied recurrence reuses the same parameters multiple times per update, so parameter count alone is not enough
+- this section should compare the proposed critic against MLP baselines with similar empirical training cost per update
+
 Compare:
 
-- proposed iterative critic
-- deeper MLP
-- wider MLP
+- full proposed critic
+- deeper MLP matched by empirical training cost
+- wider MLP matched by empirical training cost
 
-Do not rely on wall-clock alone. Use wall-clock as a secondary metric.
+Recommended fairness protocol:
 
-Primary fairness metrics should be one or more of:
+- run short pilot jobs on the same hardware, with the same algorithm, task, batch size, and logging cadence
+- ignore warmup and use a stable post-JIT window
+- measure empirical per-update cost using `time/step_time`
+- choose MLP baselines whose median per-update cost is close to the proposed model
+- after the pilot matching is fixed, run the full training comparison at the same train-step budget
 
+Important:
+
+- do not use wall-clock alone as the primary fairness metric
+- do not rely only on parameter-update proxies for tied recurrent models
+- current `compute/critic_param_updates` and related metrics are useful bookkeeping, but they do not fully capture repeated application of tied parameters inside one update
+- use wall-clock as a secondary practical-efficiency result, not as the only fairness story
+
+Recommended scope:
+
+- start with `CRL` on `antmaze-large-stitch-v0`
+- then add `antmaze-giant-navigate-v0`
+- only expand to additional algorithms after the pilot protocol is stable
+
+Primary fairness measurements should include:
+
+- empirical per-update runtime from the training loop
+- same number of updates
+- same hardware type and batch size
+
+Secondary measurements may include:
+
+- wall-clock to threshold
+- wall-clock to final score
 - parameter count
-- total parameter updates
-- parameter-sample products
-- estimated critic FLOPs if available
+- parameter-update and parameter-sample proxies
+- estimated critic FLOPs if they can later be measured reliably
+
+Required outputs:
+
+- pilot calibration table showing the matched compute baselines
+- final task performance across seeds
+- practical-efficiency curves or table using wall-clock as a secondary view
 
 ## Critical Missing Controls
 
