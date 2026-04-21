@@ -568,10 +568,10 @@ index 0000000..441bfaf
 +    )
 +    return config
 diff --git a/impls/agents/crl.py b/impls/agents/crl.py
-index 53109ab..999054c 100644
+index 53109ab..ca1720d 100644
 --- a/impls/agents/crl.py
 +++ b/impls/agents/crl.py
-@@ -22,51 +22,112 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -22,51 +22,129 @@ class CRLAgent(flax.struct.PyTreeNode):
      config: Any = nonpytree_field()
  
      def contrastive_loss(self, batch, grad_params, module_name='critic'):
@@ -583,8 +583,12 @@ index 53109ab..999054c 100644
 +        - 'infonce': InfoNCE with softmax (normalizes across all negatives)
 +        """
          batch_size = batch['observations'].shape[0]
-+        use_act = bool(
-+            self.config.get('critic_backbone') == 'recur_tied' and self.config.get('critic_recur_use_act', False)
++        use_aux = bool(
++            self.config.get('critic_backbone') == 'recur_tied'
++            and (
++                self.config.get('critic_recur_use_act', False)
++                or self.config.get('critic_recur_use_soft_mixture', False)
++            )
 +        )
  
          if module_name == 'critic':
@@ -599,7 +603,7 @@ index 53109ab..999054c 100644
 -            params=grad_params,
 -        )
 +        act_aux = {}
-+        if use_act:
++        if use_aux:
 +            v, phi, psi, act_aux = self.network.select(module_name)(
 +                batch['observations'],
 +                batch['value_goals'],
@@ -700,11 +704,24 @@ index 53109ab..999054c 100644
 +            info['act_expected_steps_psi_mean'] = act_aux['act_expected_steps_psi'].mean()
 +            info['act_expected_steps_total_mean'] = act_expected_steps_total.mean()
 +            info['act_ponder_loss'] = act_ponder_loss
++        softmix_expected_steps_total = act_aux.get('softmix_expected_steps_total')
++        if softmix_expected_steps_total is not None:
++            info['softmix_expected_steps_phi_mean'] = act_aux['softmix_expected_steps_phi'].mean()
++            info['softmix_expected_steps_psi_mean'] = act_aux['softmix_expected_steps_psi'].mean()
++            info['softmix_expected_steps_total_mean'] = softmix_expected_steps_total.mean()
++            if 'softmix_entropy_phi' in act_aux:
++                info['softmix_entropy_phi_mean'] = act_aux['softmix_entropy_phi'].mean()
++            if 'softmix_entropy_psi' in act_aux:
++                info['softmix_entropy_psi_mean'] = act_aux['softmix_entropy_psi'].mean()
++            if 'softmix_last_step_weight_phi' in act_aux:
++                info['softmix_last_step_weight_phi_mean'] = act_aux['softmix_last_step_weight_phi'].mean()
++            if 'softmix_last_step_weight_psi' in act_aux:
++                info['softmix_last_step_weight_psi_mean'] = act_aux['softmix_last_step_weight_psi'].mean()
 +        return contrastive_loss, info
  
      def actor_loss(self, batch, grad_params, rng=None):
          """Compute the actor loss (AWR or DDPG+BC)."""
-@@ -104,6 +165,7 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -104,6 +182,7 @@ class CRLAgent(flax.struct.PyTreeNode):
              assert not self.config['discrete']
  
              dist = self.network.select('actor')(batch['observations'], batch['actor_goals'], params=grad_params)
@@ -712,7 +729,7 @@ index 53109ab..999054c 100644
              if self.config['const_std']:
                  q_actions = jnp.clip(dist.mode(), -1, 1)
              else:
-@@ -124,10 +186,7 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -124,10 +203,7 @@ class CRLAgent(flax.struct.PyTreeNode):
                  'q_loss': q_loss,
                  'bc_loss': bc_loss,
                  'q_mean': q.mean(),
@@ -724,7 +741,7 @@ index 53109ab..999054c 100644
              }
          else:
              raise ValueError(f'Unsupported actor loss: {self.config["actor_loss"]}')
-@@ -231,6 +290,28 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -231,6 +307,29 @@ class CRLAgent(flax.struct.PyTreeNode):
                  state_encoder=encoders.get('critic_state'),
                  goal_encoder=encoders.get('critic_goal'),
                  action_dim=action_dim,
@@ -744,6 +761,7 @@ index 53109ab..999054c 100644
 +                recur_use_film=bool(config.get('critic_recur_use_film', True)),
 +                recur_film_mode=str(config.get('critic_recur_film_mode', 'hidden')),
 +                recur_use_input_injection=bool(config.get('critic_recur_use_input_injection', False)),
++                recur_use_soft_mixture=bool(config.get('critic_recur_use_soft_mixture', False)),
 +                recur_use_layerscale=bool(config.get('critic_recur_use_layerscale', True)),
 +                recur_swiglu_pre_ln=bool(config.get('critic_recur_swiglu_pre_ln', True)),
 +                recur_use_act=bool(config.get('critic_recur_use_act', False)),
@@ -753,7 +771,7 @@ index 53109ab..999054c 100644
              )
          else:
              critic_def = GCBilinearValue(
-@@ -241,6 +322,28 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -241,6 +340,29 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
                  state_encoder=encoders.get('critic_state'),
                  goal_encoder=encoders.get('critic_goal'),
@@ -773,6 +791,7 @@ index 53109ab..999054c 100644
 +                recur_use_film=bool(config.get('critic_recur_use_film', True)),
 +                recur_film_mode=str(config.get('critic_recur_film_mode', 'hidden')),
 +                recur_use_input_injection=bool(config.get('critic_recur_use_input_injection', False)),
++                recur_use_soft_mixture=bool(config.get('critic_recur_use_soft_mixture', False)),
 +                recur_use_layerscale=bool(config.get('critic_recur_use_layerscale', True)),
 +                recur_swiglu_pre_ln=bool(config.get('critic_recur_swiglu_pre_ln', True)),
 +                recur_use_act=bool(config.get('critic_recur_use_act', False)),
@@ -782,7 +801,7 @@ index 53109ab..999054c 100644
              )
  
          if config['actor_loss'] == 'awr':
-@@ -253,6 +356,28 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -253,6 +375,29 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
                  state_encoder=encoders.get('value_state'),
                  goal_encoder=encoders.get('value_goal'),
@@ -802,6 +821,7 @@ index 53109ab..999054c 100644
 +                recur_use_film=bool(config.get('critic_recur_use_film', True)),
 +                recur_film_mode=str(config.get('critic_recur_film_mode', 'hidden')),
 +                recur_use_input_injection=bool(config.get('critic_recur_use_input_injection', False)),
++                recur_use_soft_mixture=bool(config.get('critic_recur_use_soft_mixture', False)),
 +                recur_use_layerscale=bool(config.get('critic_recur_use_layerscale', True)),
 +                recur_swiglu_pre_ln=bool(config.get('critic_recur_swiglu_pre_ln', True)),
 +                recur_use_act=bool(config.get('critic_recur_use_act', False)),
@@ -811,7 +831,7 @@ index 53109ab..999054c 100644
              )
  
          if config['discrete']:
-@@ -260,6 +385,10 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -260,6 +405,10 @@ class CRLAgent(flax.struct.PyTreeNode):
                  hidden_dims=config['actor_hidden_dims'],
                  action_dim=action_dim,
                  gc_encoder=encoders.get('actor'),
@@ -822,7 +842,7 @@ index 53109ab..999054c 100644
              )
          else:
              actor_def = GCActor(
-@@ -268,6 +397,10 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -268,6 +417,10 @@ class CRLAgent(flax.struct.PyTreeNode):
                  state_dependent_std=False,
                  const_std=config['const_std'],
                  gc_encoder=encoders.get('actor'),
@@ -833,7 +853,7 @@ index 53109ab..999054c 100644
              )
  
          network_info = dict(
-@@ -282,7 +415,15 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -282,7 +435,15 @@ class CRLAgent(flax.struct.PyTreeNode):
          network_args = {k: v[1] for k, v in network_info.items()}
  
          network_def = ModuleDict(networks)
@@ -850,7 +870,7 @@ index 53109ab..999054c 100644
          network_params = network_def.init(init_rng, **network_args)['params']
          network = TrainState.create(network_def, network_params, tx=network_tx)
  
-@@ -295,8 +436,13 @@ def get_config():
+@@ -295,8 +456,13 @@ def get_config():
              # Agent hyperparameters.
              agent_name='crl',  # Agent name.
              lr=3e-4,  # Learning rate.
@@ -864,7 +884,7 @@ index 53109ab..999054c 100644
              value_hidden_dims=(512, 512, 512),  # Value network hidden dimensions.
              latent_dim=512,  # Latent dimension for phi and psi.
              layer_norm=True,  # Whether to use layer normalization.
-@@ -306,6 +452,27 @@ def get_config():
+@@ -306,6 +472,28 @@ def get_config():
              const_std=True,  # Whether to use constant standard deviation for the actor.
              discrete=False,  # Whether the action space is discrete.
              encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
@@ -883,6 +903,7 @@ index 53109ab..999054c 100644
 +            critic_recur_use_film=True,  # Enable FiLM modulation inside recur_tied.
 +            critic_recur_film_mode='hidden',  # One of: hidden | context | hidden_context.
 +            critic_recur_use_input_injection=False,  # Add a projected copy of the original critic input to every recurrent step.
++            critic_recur_use_soft_mixture=False,  # Read out every recurrent step with a shared head and soft-mix them.
 +            critic_recur_use_layerscale=True,  # Use learnable residual scaling alpha_k in recur_tied.
 +            critic_recur_swiglu_pre_ln=True,  # Apply the single pre-loop LayerNorm in the SwiGLU recurrent cell.
 +            critic_recur_use_act=False,  # Enable ACT halting for recur_tied critic/value backbones.
@@ -892,7 +913,7 @@ index 53109ab..999054c 100644
              # Dataset hyperparameters.
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
-@@ -319,6 +486,9 @@ def get_config():
+@@ -319,6 +507,9 @@ def get_config():
              gc_negative=False,  # Unused (defined for compatibility with GCDataset).
              p_aug=0.0,  # Probability of applying image augmentation.
              frame_stack=ml_collections.config_dict.placeholder(int),  # Number of frames to stack.
@@ -903,7 +924,7 @@ index 53109ab..999054c 100644
      )
      return config
 diff --git a/impls/agents/hiql.py b/impls/agents/hiql.py
-index 63e5dee..9c92e81 100644
+index 63e5dee..b1eaeb3 100644
 --- a/impls/agents/hiql.py
 +++ b/impls/agents/hiql.py
 @@ -8,7 +8,7 @@ import ml_collections
@@ -915,16 +936,20 @@ index 63e5dee..9c92e81 100644
  
  
  class HIQLAgent(flax.struct.PyTreeNode):
-@@ -43,19 +43,40 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -43,19 +43,51 @@ class HIQLAgent(flax.struct.PyTreeNode):
  
          q1 = batch['rewards'] + self.config['discount'] * batch['masks'] * next_v1_t
          q2 = batch['rewards'] + self.config['discount'] * batch['masks'] * next_v2_t
 -        (v1, v2) = self.network.select('value')(batch['observations'], batch['value_goals'], params=grad_params)
-+        value_use_act = bool(
-+            self.config.get('value_backbone') == 'recur_tied' and self.config.get('value_recur_use_act', False)
++        value_use_aux = bool(
++            self.config.get('value_backbone') == 'recur_tied'
++            and (
++                self.config.get('value_recur_use_act', False)
++                or self.config.get('value_recur_use_soft_mixture', False)
++            )
 +        )
 +        value_aux = {}
-+        if value_use_act:
++        if value_use_aux:
 +            (v1, v2), value_aux = self.network.select('value')(
 +                batch['observations'],
 +                batch['value_goals'],
@@ -954,11 +979,18 @@ index 63e5dee..9c92e81 100644
 +        if act_expected_steps is not None:
 +            info['act_expected_steps_mean'] = act_expected_steps.mean()
 +            info['act_ponder_loss'] = ponder_loss
++        softmix_expected_steps = value_aux.get('softmix_expected_steps')
++        if softmix_expected_steps is not None:
++            info['softmix_expected_steps_mean'] = softmix_expected_steps.mean()
++            if 'softmix_entropy' in value_aux:
++                info['softmix_entropy_mean'] = value_aux['softmix_entropy'].mean()
++            if 'softmix_last_step_weight' in value_aux:
++                info['softmix_last_step_weight_mean'] = value_aux['softmix_last_step_weight'].mean()
 +        return value_loss, info
  
      def low_actor_loss(self, batch, grad_params):
          """Compute the low-level actor loss."""
-@@ -259,18 +280,41 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -259,18 +291,42 @@ class HIQLAgent(flax.struct.PyTreeNode):
              high_actor_encoder_def = None
  
          # Define value and actor networks.
@@ -999,6 +1031,7 @@ index 63e5dee..9c92e81 100644
 +                recur_use_film=bool(config.get('value_recur_use_film', True)),
 +                recur_film_mode=str(config.get('value_recur_film_mode', 'hidden')),
 +                recur_use_input_injection=bool(config.get('value_recur_use_input_injection', False)),
++                recur_use_soft_mixture=bool(config.get('value_recur_use_soft_mixture', False)),
 +                recur_use_layerscale=bool(config.get('value_recur_use_layerscale', True)),
 +                recur_use_act=bool(config.get('value_recur_use_act', False)),
 +                recur_act_epsilon=float(config.get('value_recur_act_epsilon', 0.01)),
@@ -1012,7 +1045,7 @@ index 63e5dee..9c92e81 100644
  
          if config['discrete']:
              low_actor_def = GCDiscreteActor(
-@@ -306,7 +350,15 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -306,7 +362,15 @@ class HIQLAgent(flax.struct.PyTreeNode):
          network_args = {k: v[1] for k, v in network_info.items()}
  
          network_def = ModuleDict(networks)
@@ -1029,7 +1062,7 @@ index 63e5dee..9c92e81 100644
          network_params = network_def.init(init_rng, **network_args)['params']
          network = TrainState.create(network_def, network_params, tx=network_tx)
  
-@@ -322,9 +374,12 @@ def get_config():
+@@ -322,9 +386,12 @@ def get_config():
              # Agent hyperparameters.
              agent_name='hiql',  # Agent name.
              lr=3e-4,  # Learning rate.
@@ -1042,7 +1075,7 @@ index 63e5dee..9c92e81 100644
              layer_norm=True,  # Whether to use layer normalization.
              discount=0.99,  # Discount factor.
              tau=0.005,  # Target network update rate.
-@@ -333,6 +388,22 @@ def get_config():
+@@ -333,6 +400,23 @@ def get_config():
              high_alpha=3.0,  # High-level AWR temperature.
              subgoal_steps=25,  # Subgoal steps.
              rep_dim=10,  # Goal representation dimension.
@@ -1056,6 +1089,7 @@ index 63e5dee..9c92e81 100644
 +            value_recur_use_film=True,  # Enable FiLM inside the recurrent HIQL value.
 +            value_recur_film_mode='hidden',  # One of: hidden | context | hidden_context.
 +            value_recur_use_input_injection=False,  # Add a projected copy of the original value input to every recurrent step.
++            value_recur_use_soft_mixture=False,  # Read out every recurrent step with a shared head and soft-mix them.
 +            value_recur_use_layerscale=True,  # Use LayerScale in the recurrent HIQL value.
 +            value_recur_use_act=False,  # Enable ACT halting for recurrent HIQL value.
 +            value_recur_act_epsilon=0.01,  # ACT halting threshold slack for recurrent HIQL value.
@@ -1066,10 +1100,10 @@ index 63e5dee..9c92e81 100644
              const_std=True,  # Whether to use constant standard deviation for the actors.
              discrete=False,  # Whether the action space is discrete.
 diff --git a/impls/agents/qrl.py b/impls/agents/qrl.py
-index 79852cb..5771894 100644
+index 79852cb..9cc702e 100644
 --- a/impls/agents/qrl.py
 +++ b/impls/agents/qrl.py
-@@ -234,6 +234,24 @@ class QRLAgent(flax.struct.PyTreeNode):
+@@ -234,6 +234,25 @@ class QRLAgent(flax.struct.PyTreeNode):
                  latent_dim=config['latent_dim'],
                  layer_norm=config['layer_norm'],
                  encoder=encoders.get('value'),
@@ -1089,12 +1123,13 @@ index 79852cb..5771894 100644
 +                recur_use_film=bool(config.get('critic_recur_use_film', True)),
 +                recur_film_mode=str(config.get('critic_recur_film_mode', 'hidden')),
 +                recur_use_input_injection=bool(config.get('critic_recur_use_input_injection', False)),
++                recur_use_soft_mixture=bool(config.get('critic_recur_use_soft_mixture', False)),
 +                recur_use_layerscale=bool(config.get('critic_recur_use_layerscale', True)),
 +                layerscale_init=config['critic_layerscale_init'],
              )
          elif config['quasimetric_type'] == 'iqe':
              value_def = GCIQEValue(
-@@ -242,6 +260,24 @@ class QRLAgent(flax.struct.PyTreeNode):
+@@ -242,6 +261,25 @@ class QRLAgent(flax.struct.PyTreeNode):
                  dim_per_component=8,
                  layer_norm=config['layer_norm'],
                  encoder=encoders.get('value'),
@@ -1114,12 +1149,13 @@ index 79852cb..5771894 100644
 +                recur_use_film=bool(config.get('critic_recur_use_film', True)),
 +                recur_film_mode=str(config.get('critic_recur_film_mode', 'hidden')),
 +                recur_use_input_injection=bool(config.get('critic_recur_use_input_injection', False)),
++                recur_use_soft_mixture=bool(config.get('critic_recur_use_soft_mixture', False)),
 +                recur_use_layerscale=bool(config.get('critic_recur_use_layerscale', True)),
 +                layerscale_init=config['critic_layerscale_init'],
              )
          else:
              raise ValueError(f'Unsupported quasimetric type: {config["quasimetric_type"]}')
-@@ -310,6 +346,21 @@ def get_config():
+@@ -310,6 +348,22 @@ def get_config():
              const_std=True,  # Whether to use constant standard deviation for the actor.
              discrete=False,  # Whether the action space is discrete.
              encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
@@ -1137,16 +1173,17 @@ index 79852cb..5771894 100644
 +            critic_recur_use_film=True,  # Enable FiLM modulation inside recur_tied.
 +            critic_recur_film_mode='hidden',  # One of: hidden | context | hidden_context.
 +            critic_recur_use_input_injection=False,  # Add a projected copy of the original critic input to every recurrent step.
++            critic_recur_use_soft_mixture=False,  # Read out every recurrent step with a shared head and soft-mix them.
 +            critic_recur_use_layerscale=True,  # Use learnable residual scaling alpha_k in recur_tied.
              # Dataset hyperparameters.
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
 diff --git a/impls/agents/saw.py b/impls/agents/saw.py
 new file mode 100644
-index 0000000..95ac8c2
+index 0000000..b1018c4
 --- /dev/null
 +++ b/impls/agents/saw.py
-@@ -0,0 +1,412 @@
+@@ -0,0 +1,425 @@
 +import copy
 +from typing import Any
 +
@@ -1186,11 +1223,15 @@ index 0000000..95ac8c2
 +
 +        q1 = batch['rewards'] + self.config['discount'] * batch['masks'] * next_v1_t
 +        q2 = batch['rewards'] + self.config['discount'] * batch['masks'] * next_v2_t
-+        value_use_act = bool(
-+            self.config.get('value_backbone') == 'recur_tied' and self.config.get('value_recur_use_act', False)
++        value_use_aux = bool(
++            self.config.get('value_backbone') == 'recur_tied'
++            and (
++                self.config.get('value_recur_use_act', False)
++                or self.config.get('value_recur_use_soft_mixture', False)
++            )
 +        )
 +        value_aux = {}
-+        if value_use_act:
++        if value_use_aux:
 +            (v1, v2), value_aux = self.network.select('value')(
 +                batch['observations'],
 +                batch['value_goals'],
@@ -1219,6 +1260,13 @@ index 0000000..95ac8c2
 +        if act_expected_steps is not None:
 +            info['act_expected_steps_mean'] = act_expected_steps.mean()
 +            info['act_ponder_loss'] = ponder_loss
++        softmix_expected_steps = value_aux.get('softmix_expected_steps')
++        if softmix_expected_steps is not None:
++            info['softmix_expected_steps_mean'] = softmix_expected_steps.mean()
++            if 'softmix_entropy' in value_aux:
++                info['softmix_entropy_mean'] = value_aux['softmix_entropy'].mean()
++            if 'softmix_last_step_weight' in value_aux:
++                info['softmix_last_step_weight_mean'] = value_aux['softmix_last_step_weight'].mean()
 +        return value_loss, info
 +
 +    def target_actor_loss(self, batch, grad_params):
@@ -1436,6 +1484,7 @@ index 0000000..95ac8c2
 +                recur_use_film=bool(config.get('value_recur_use_film', True)),
 +                recur_film_mode=str(config.get('value_recur_film_mode', 'hidden')),
 +                recur_use_input_injection=bool(config.get('value_recur_use_input_injection', False)),
++                recur_use_soft_mixture=bool(config.get('value_recur_use_soft_mixture', False)),
 +                recur_use_layerscale=bool(config.get('value_recur_use_layerscale', True)),
 +                recur_use_act=bool(config.get('value_recur_use_act', False)),
 +                recur_act_epsilon=float(config.get('value_recur_act_epsilon', 0.01)),
@@ -1525,6 +1574,7 @@ index 0000000..95ac8c2
 +            value_recur_use_film=True,
 +            value_recur_film_mode='hidden',  # One of: hidden | context | hidden_context.
 +            value_recur_use_input_injection=False,
++            value_recur_use_soft_mixture=False,
 +            value_recur_use_layerscale=True,
 +            value_recur_use_act=False,
 +            value_recur_act_epsilon=0.01,
@@ -5831,7 +5881,7 @@ index 9c421dd..3da1eab 100644
  
      return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..990515a 100644
+index 4ee2b26..249fc73 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
 @@ -6,6 +6,8 @@ import flax.linen as nn
@@ -5843,7 +5893,7 @@ index 4ee2b26..990515a 100644
  
  def default_init(scale=1.0):
      """Default kernel initializer."""
-@@ -60,6 +62,357 @@ class MLP(nn.Module):
+@@ -60,6 +62,401 @@ class MLP(nn.Module):
          return x
  
  
@@ -5980,6 +6030,7 @@ index 4ee2b26..990515a 100644
 +    use_film: bool = True
 +    film_mode: str = 'hidden'  # one of: hidden | context | hidden_context
 +    use_input_injection: bool = False
++    use_soft_mixture: bool = False
 +    use_layerscale: bool = True
 +    swiglu_pre_ln: bool = True
 +    use_act: bool = False
@@ -6010,8 +6061,9 @@ index 4ee2b26..990515a 100644
 +            raise ValueError(f'act_min_iters must be in [1, num_iters]. Got act_min_iters={act_min_iters} num_iters={iters}.')
 +
 +        has_discrete_step_params = self.use_step_info and not self.use_sinusoidal_step_encoding
++        has_input_lambda = self.use_input_injection
 +        has_per_iter_alpha = self.use_layerscale
-+        requires_iter_bound = has_discrete_step_params or has_per_iter_alpha
++        requires_iter_bound = has_discrete_step_params or has_per_iter_alpha or has_input_lambda
 +        if requires_iter_bound and iters > self.max_iters:
 +            raise ValueError(
 +                f'num_iters={iters} exceeds max_iters={self.max_iters} for recur_tied with per-iteration parameters'
@@ -6022,12 +6074,19 @@ index 4ee2b26..990515a 100644
 +            raise ValueError(f"Unsupported film_mode={film_mode!r}. Use 'hidden', 'context', or 'hidden_context'.")
 +        if self.use_input_injection and self.use_film:
 +            raise ValueError('Additive input injection is intended as a no-FiLM mechanism. Disable FiLM to use it.')
++        if self.use_soft_mixture and self.use_act:
++            raise ValueError('Soft-mixture and ACT are alternative adaptive-depth mechanisms; do not enable both together.')
 +
-+        h = nn.Dense(self.hidden_dim)(x)
-+        input_injection = None
++        h = nn.Dense(self.hidden_dim, name='input_state_proj')(x)
++        input_anchor = None
++        input_lambda = None
 +        if self.use_input_injection:
-+            # Re-inject the original input at every recurrent step through a fixed learned projection.
-+            input_injection = nn.Dense(self.hidden_dim, use_bias=False, name='input_inj_proj')(x)
++            # Split the input path into:
++            # - a stable anchor reused at every recurrent step
++            # - the initial hidden state h_0, initialized separately above
++            input_anchor = nn.Dense(self.hidden_dim, name='input_anchor_proj')(x)
++            input_anchor = nn.LayerNorm(name='input_anchor_ln')(input_anchor)
++            input_lambda = self.param('input_lambda', nn.initializers.constant(0.0), (self.max_iters,))
 +        use_hidden_film = self.use_film and film_mode in ('hidden', 'hidden_context')
 +        use_context_film = self.use_film and film_mode in ('context', 'hidden_context')
 +        if use_context_film:
@@ -6059,6 +6118,17 @@ index 4ee2b26..990515a 100644
 +        film_fc1_h = nn.Dense(self.hidden_dim) if use_hidden_film else None
 +        film_fc2 = nn.Dense(2 * self.hidden_dim) if self.use_film else None
 +        act_halting = nn.Dense(1, name='act_halting') if self.use_act else None
++        output_proj = nn.Dense(self.out_dim, name='output_proj')
++        softmix_gate = (
++            nn.Dense(
++                1,
++                name='softmix_gate',
++                kernel_init=nn.initializers.zeros,
++                bias_init=nn.initializers.zeros,
++            )
++            if self.use_soft_mixture
++            else None
++        )
 +
 +        tied_layers = None
 +        swiglu_gate = None
@@ -6105,6 +6175,7 @@ index 4ee2b26..990515a 100644
 +            act_expected_steps = jnp.zeros(h.shape[:-1], dtype=h.dtype)
 +            act_accumulated = jnp.zeros(h.shape[:-1], dtype=h.dtype)
 +            act_weighted_h = jnp.zeros_like(h)
++        hidden_steps = [] if self.use_soft_mixture else None
 +
 +        for k in range(iters):
 +            h1 = h
@@ -6136,8 +6207,8 @@ index 4ee2b26..990515a 100644
 +                u = (1.0 + gamma) * h1 + beta
 +            else:
 +                u = h1
-+                if input_injection is not None:
-+                    u = u + input_injection
++                if input_anchor is not None:
++                    u = u + input_lambda[k] * input_anchor
 +                if step_contrib_k is not None:
 +                    u = u + step_contrib_k
 +
@@ -6184,14 +6255,37 @@ index 4ee2b26..990515a 100644
 +                act_weighted_h = act_weighted_h + halt_weight[..., None] * h_next
 +
 +            h = h_next
++            if hidden_steps is not None:
++                hidden_steps.append(h_next)
 +
-+        final_h = act_weighted_h if self.use_act else h
-+        outputs = nn.Dense(self.out_dim)(final_h)
++        softmix_expected_steps = None
++        softmix_entropy = None
++        softmix_last_step_weight = None
++        if self.use_soft_mixture:
++            hidden_stack = jnp.stack(hidden_steps, axis=0)
++            step_outputs = output_proj(hidden_stack)
++            step_logits = softmix_gate(hidden_stack).squeeze(-1)
++            step_weights = nn.softmax(step_logits, axis=0)
++            outputs = jnp.sum(step_weights[..., None] * step_outputs, axis=0)
++            step_ids = jnp.arange(1, iters + 1, dtype=outputs.dtype)
++            reshape = (iters,) + (1,) * (step_weights.ndim - 1)
++            step_ids = step_ids.reshape(reshape)
++            softmix_expected_steps = jnp.sum(step_weights * step_ids, axis=0)
++            softmix_entropy = -jnp.sum(step_weights * jnp.log(jnp.maximum(step_weights, 1e-8)), axis=0)
++            softmix_last_step_weight = step_weights[-1]
++            final_h = jnp.sum(step_weights[..., None] * hidden_stack, axis=0)
++        else:
++            final_h = act_weighted_h if self.use_act else h
++            outputs = output_proj(final_h)
 +
 +        if return_aux:
 +            aux = {}
 +            if self.use_act:
 +                aux['act_expected_steps'] = act_expected_steps
++            if self.use_soft_mixture:
++                aux['softmix_expected_steps'] = softmix_expected_steps
++                aux['softmix_entropy'] = softmix_entropy
++                aux['softmix_last_step_weight'] = softmix_last_step_weight
 +            aux['final_hidden_norm'] = jnp.linalg.norm(final_h, axis=-1)
 +            return outputs, aux
 +
@@ -6201,7 +6295,7 @@ index 4ee2b26..990515a 100644
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -164,9 +517,37 @@ class GCActor(nn.Module):
+@@ -164,9 +561,37 @@ class GCActor(nn.Module):
      const_std: bool = True
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -6240,7 +6334,7 @@ index 4ee2b26..990515a 100644
          self.mean_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
          if self.state_dependent_std:
              self.log_std_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
-@@ -196,7 +577,10 @@ class GCActor(nn.Module):
+@@ -196,7 +621,10 @@ class GCActor(nn.Module):
              if goals is not None:
                  inputs.append(goals)
              inputs = jnp.concatenate(inputs, axis=-1)
@@ -6252,7 +6346,7 @@ index 4ee2b26..990515a 100644
  
          means = self.mean_net(outputs)
          if self.state_dependent_std:
-@@ -230,9 +614,37 @@ class GCDiscreteActor(nn.Module):
+@@ -230,9 +658,37 @@ class GCDiscreteActor(nn.Module):
      action_dim: int
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -6291,7 +6385,7 @@ index 4ee2b26..990515a 100644
          self.logit_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
  
      def __call__(
-@@ -257,7 +669,10 @@ class GCDiscreteActor(nn.Module):
+@@ -257,7 +713,10 @@ class GCDiscreteActor(nn.Module):
              if goals is not None:
                  inputs.append(goals)
              inputs = jnp.concatenate(inputs, axis=-1)
@@ -6303,7 +6397,7 @@ index 4ee2b26..990515a 100644
  
          logits = self.logit_net(outputs)
  
-@@ -282,14 +697,22 @@ class GCValue(nn.Module):
+@@ -282,14 +741,22 @@ class GCValue(nn.Module):
      layer_norm: bool = True
      ensemble: bool = True
      gc_encoder: nn.Module = None
@@ -6331,7 +6425,7 @@ index 4ee2b26..990515a 100644
  
      def __call__(self, observations, goals=None, actions=None):
          """Return the value/critic function.
-@@ -314,6 +737,75 @@ class GCValue(nn.Module):
+@@ -314,6 +781,77 @@ class GCValue(nn.Module):
          return v
  
  
@@ -6352,6 +6446,7 @@ index 4ee2b26..990515a 100644
 +    recur_use_film: bool = True
 +    recur_film_mode: str = 'hidden'
 +    recur_use_input_injection: bool = False
++    recur_use_soft_mixture: bool = False
 +    recur_use_layerscale: bool = True
 +    recur_swiglu_pre_ln: bool = True
 +    recur_use_act: bool = False
@@ -6376,6 +6471,7 @@ index 4ee2b26..990515a 100644
 +            use_film=bool(self.recur_use_film),
 +            film_mode=str(self.recur_film_mode),
 +            use_input_injection=bool(self.recur_use_input_injection),
++            use_soft_mixture=bool(self.recur_use_soft_mixture),
 +            use_layerscale=bool(self.recur_use_layerscale),
 +            swiglu_pre_ln=bool(self.recur_swiglu_pre_ln),
 +            use_act=bool(self.recur_use_act),
@@ -6407,7 +6503,7 @@ index 4ee2b26..990515a 100644
  class GCDiscreteCritic(GCValue):
      """Goal-conditioned critic for discrete actions."""
  
-@@ -347,16 +839,88 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +885,91 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
@@ -6423,6 +6519,7 @@ index 4ee2b26..990515a 100644
 +    recur_use_film: bool = True
 +    recur_film_mode: str = 'hidden'
 +    recur_use_input_injection: bool = False
++    recur_use_soft_mixture: bool = False
 +    recur_use_layerscale: bool = True
 +    recur_swiglu_pre_ln: bool = True
 +    recur_use_act: bool = False
@@ -6454,6 +6551,7 @@ index 4ee2b26..990515a 100644
 +                use_film=bool(self.recur_use_film),
 +                film_mode=str(self.recur_film_mode),
 +                use_input_injection=bool(self.recur_use_input_injection),
++                use_soft_mixture=bool(self.recur_use_soft_mixture),
 +                use_layerscale=bool(self.recur_use_layerscale),
 +                swiglu_pre_ln=bool(self.recur_swiglu_pre_ln),
 +                use_act=bool(self.recur_use_act),
@@ -6476,6 +6574,7 @@ index 4ee2b26..990515a 100644
 +                use_film=bool(self.recur_use_film),
 +                film_mode=str(self.recur_film_mode),
 +                use_input_injection=bool(self.recur_use_input_injection),
++                use_soft_mixture=bool(self.recur_use_soft_mixture),
 +                use_layerscale=bool(self.recur_use_layerscale),
 +                swiglu_pre_ln=bool(self.recur_swiglu_pre_ln),
 +                use_act=bool(self.recur_use_act),
@@ -6501,7 +6600,7 @@ index 4ee2b26..990515a 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +928,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +977,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -6509,7 +6608,7 @@ index 4ee2b26..990515a 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,16 +940,48 @@ class GCBilinearValue(nn.Module):
+@@ -375,16 +989,68 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
@@ -6524,6 +6623,12 @@ index 4ee2b26..990515a 100644
 +            psi_steps = psi_aux.get('act_expected_steps')
 +            phi_hidden_norm = phi_aux.get('final_hidden_norm')
 +            psi_hidden_norm = psi_aux.get('final_hidden_norm')
++            phi_softmix_steps = phi_aux.get('softmix_expected_steps')
++            psi_softmix_steps = psi_aux.get('softmix_expected_steps')
++            phi_softmix_entropy = phi_aux.get('softmix_entropy')
++            psi_softmix_entropy = psi_aux.get('softmix_entropy')
++            phi_softmix_last = phi_aux.get('softmix_last_step_weight')
++            psi_softmix_last = psi_aux.get('softmix_last_step_weight')
 +            if phi_steps is not None and psi_steps is not None:
 +                aux.update(
 +                    {
@@ -6538,6 +6643,20 @@ index 4ee2b26..990515a 100644
 +                aux['final_hidden_norm_psi'] = psi_hidden_norm
 +            if phi_hidden_norm is not None and psi_hidden_norm is not None:
 +                aux['final_hidden_norm_total'] = jnp.sqrt(phi_hidden_norm**2 + psi_hidden_norm**2)
++            if phi_softmix_steps is not None:
++                aux['softmix_expected_steps_phi'] = phi_softmix_steps
++            if psi_softmix_steps is not None:
++                aux['softmix_expected_steps_psi'] = psi_softmix_steps
++            if phi_softmix_steps is not None and psi_softmix_steps is not None:
++                aux['softmix_expected_steps_total'] = phi_softmix_steps + psi_softmix_steps
++            if phi_softmix_entropy is not None:
++                aux['softmix_entropy_phi'] = phi_softmix_entropy
++            if psi_softmix_entropy is not None:
++                aux['softmix_entropy_psi'] = psi_softmix_entropy
++            if phi_softmix_last is not None:
++                aux['softmix_last_step_weight_phi'] = phi_softmix_last
++            if psi_softmix_last is not None:
++                aux['softmix_last_step_weight_psi'] = psi_softmix_last
 +        elif self.backbone == 'recur_tied':
 +            # IMPORTANT: nn.vmap does not support kwargs; pass iterative args positionally.
 +            phi = self.phi(phi_inputs, num_iters, False, phi_inputs)
@@ -6560,7 +6679,7 @@ index 4ee2b26..990515a 100644
          else:
              return v
  
-@@ -394,9 +991,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+@@ -394,9 +1060,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
  
      action_dim: int = None
  
@@ -6572,7 +6691,7 @@ index 4ee2b26..990515a 100644
  
  
  class GCMRNValue(nn.Module):
-@@ -416,9 +1013,56 @@ class GCMRNValue(nn.Module):
+@@ -416,9 +1082,58 @@ class GCMRNValue(nn.Module):
      latent_dim: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -6587,6 +6706,7 @@ index 4ee2b26..990515a 100644
 +    recur_use_film: bool = True
 +    recur_film_mode: str = 'hidden'
 +    recur_use_input_injection: bool = False
++    recur_use_soft_mixture: bool = False
 +    recur_use_layerscale: bool = True
 +    recur_swiglu_pre_ln: bool = True
 +    layerscale_init: float = 1e-2
@@ -6618,6 +6738,7 @@ index 4ee2b26..990515a 100644
 +                use_film=bool(self.recur_use_film),
 +                film_mode=str(self.recur_film_mode),
 +                use_input_injection=bool(self.recur_use_input_injection),
++                use_soft_mixture=bool(self.recur_use_soft_mixture),
 +                use_layerscale=bool(self.recur_use_layerscale),
 +                swiglu_pre_ln=bool(self.recur_swiglu_pre_ln),
 +                layerscale_init=self.layerscale_init,
@@ -6630,7 +6751,7 @@ index 4ee2b26..990515a 100644
  
      def __call__(self, observations, goals, is_phi=False, info=False):
          """Return the MRN value function.
-@@ -436,8 +1080,12 @@ class GCMRNValue(nn.Module):
+@@ -436,8 +1151,12 @@ class GCMRNValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)
@@ -6645,7 +6766,7 @@ index 4ee2b26..990515a 100644
  
          sym_s = phi_s[..., : self.latent_dim // 2]
          sym_g = phi_g[..., : self.latent_dim // 2]
-@@ -471,9 +1119,56 @@ class GCIQEValue(nn.Module):
+@@ -471,9 +1190,58 @@ class GCIQEValue(nn.Module):
      dim_per_component: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -6660,6 +6781,7 @@ index 4ee2b26..990515a 100644
 +    recur_use_film: bool = True
 +    recur_film_mode: str = 'hidden'
 +    recur_use_input_injection: bool = False
++    recur_use_soft_mixture: bool = False
 +    recur_use_layerscale: bool = True
 +    recur_swiglu_pre_ln: bool = True
 +    layerscale_init: float = 1e-2
@@ -6691,6 +6813,7 @@ index 4ee2b26..990515a 100644
 +                use_film=bool(self.recur_use_film),
 +                film_mode=str(self.recur_film_mode),
 +                use_input_injection=bool(self.recur_use_input_injection),
++                use_soft_mixture=bool(self.recur_use_soft_mixture),
 +                use_layerscale=bool(self.recur_use_layerscale),
 +                swiglu_pre_ln=bool(self.recur_swiglu_pre_ln),
 +                layerscale_init=self.layerscale_init,
@@ -6703,7 +6826,7 @@ index 4ee2b26..990515a 100644
          self.alpha = Param()
  
      def __call__(self, observations, goals, is_phi=False, info=False):
-@@ -493,8 +1188,12 @@ class GCIQEValue(nn.Module):
+@@ -493,8 +1261,12 @@ class GCIQEValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)
