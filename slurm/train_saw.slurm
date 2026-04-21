@@ -25,13 +25,14 @@ if [[ ! -f "${IMPL_DIR}/agents/saw.py" ]]; then
 fi
 
 CONDA_ENV="${CONDA_ENV:-recurrent}"
-CONDA_EXE="${CONDA_EXE:-conda}"
+CONDA_EXE="${CONDA_EXE:-/app/apps/miniforge3/25.3.1/bin/conda}"
 WANDB_MODE="${WANDB_MODE:-online}"
 
 ENV_NAME="${ENV_NAME:-antmaze-large-stitch-v0}"
 RUN_GROUP="${RUN_GROUP:-SAW_AntLargeStitch}"
-SAVE_DIR="${SAVE_DIR:-${SLURM_SUBMIT_DIR}/exp}"
-DATASET_DIR="${DATASET_DIR:-${SLURM_SUBMIT_DIR}/.ogbench_data}"
+SCRATCH_ROOT="${SCRATCH_ROOT:-${SCRATCH:-/scratch/users/nus/${USER}}}"
+SAVE_DIR="${SAVE_DIR:-${SCRATCH_ROOT}/OGBench/exp}"
+DATASET_DIR="${DATASET_DIR:-${SCRATCH_ROOT}/OGBench/data}"
 RESTORE_PATH="${RESTORE_PATH:-}"
 RESTORE_EPOCH="${RESTORE_EPOCH:-}"
 
@@ -120,7 +121,7 @@ if [[ "${EVAL_ON_CPU}" == "1" ]]; then
 else
   export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda}"
 fi
-mkdir -p "${DATASET_DIR}" logs/phase_4
+mkdir -p "${DATASET_DIR}" "${SAVE_DIR}" logs/phase_4
 export OGBENCH_DATASET_DIR="${DATASET_DIR}"
 
 if [[ -n "${RESTORE_PATH}" && "${RESTORE_PATH}" != /* ]]; then

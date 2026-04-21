@@ -4,6 +4,8 @@
 #PBS -l select=1:ncpus=16:ngpus=1:mem=110G
 #PBS -l walltime=10:00:00
 #PBS -J 0-2
+#PBS -o /dev/null
+#PBS -e /dev/null
 
 set -euo pipefail
 
@@ -13,6 +15,9 @@ export SLURM_SUBMIT_DIR="${PBS_O_WORKDIR}"
 export SLURM_ARRAY_TASK_ID="${PBS_ARRAY_INDEX:-0}"
 export SLURM_JOB_ID="${PBS_JOBID:-}"
 export SLURM_JOB_NODELIST="$(hostname)"
+CONDA_MODULE_DEFAULT="${CONDA_MODULE:-none}"
+CONDA_EXE_DEFAULT="${CONDA_EXE:-/app/apps/miniforge3/25.3.1/bin/conda}"
+export CONDA_EXE="${CONDA_EXE_DEFAULT}"
 
 mkdir -p logs/phase_5
 
@@ -30,13 +35,13 @@ for modules_init in \
   fi
 done
 
-if [[ "${CONDA_MODULE:-miniforge3/25.3.1}" != "none" ]] && command -v module >/dev/null 2>&1; then
-  module load "${CONDA_MODULE:-miniforge3/25.3.1}"
+if [[ "${CONDA_MODULE_DEFAULT}" != "none" ]] && command -v module >/dev/null 2>&1; then
+  module load "${CONDA_MODULE_DEFAULT}"
 fi
 
 if ! command -v conda >/dev/null 2>&1; then
-  if [[ -n "${CONDA_EXE:-}" && -x "${CONDA_EXE}" ]]; then
-    conda_root="$(cd "$(dirname "${CONDA_EXE}")/.." && pwd)"
+  if [[ -n "${CONDA_EXE_DEFAULT}" && -x "${CONDA_EXE_DEFAULT}" ]]; then
+    conda_root="$(cd "$(dirname "${CONDA_EXE_DEFAULT}")/.." && pwd)"
     if [[ -f "${conda_root}/etc/profile.d/conda.sh" ]]; then
       # shellcheck source=/dev/null
       source "${conda_root}/etc/profile.d/conda.sh"

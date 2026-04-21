@@ -12,7 +12,17 @@ These wrappers let you keep using the existing environment variables such as `EN
 
 The Slurm launchers were also relaxed from a hardcoded `h100-47` request to a generic `--gpus=1`, which makes them more portable on non-H100 systems.
 
-The PBS wrappers also try to load `miniforge3/25.3.1` automatically at job runtime. Override that with `-v CONDA_MODULE=...` if you need a different Conda module, or disable module loading entirely with `-v CONDA_MODULE=none,CONDA_EXE=/full/path/to/conda`.
+The PBS wrappers now default to `CONDA_MODULE=none` and `CONDA_EXE=/app/apps/miniforge3/25.3.1/bin/conda`, which avoids the broken `miniforge3/25.3.1` modulefile in batch jobs.
+
+The training launchers now default to:
+
+- `CONDA_ENV=recurrent`
+- `CONDA_EXE=/app/apps/miniforge3/25.3.1/bin/conda`
+- `WANDB_MODE=online`
+- `SAVE_DIR=${SCRATCH_ROOT}/OGBench/exp`
+- `DATASET_DIR=${SCRATCH_ROOT}/OGBench/data`
+
+where `SCRATCH_ROOT` resolves to `${SCRATCH}` if available, else `/scratch/users/nus/${USER}`.
 
 ## Cluster Notes
 
@@ -101,10 +111,12 @@ Use a short single-seed CRL job to verify PBS submission, Conda, JAX GPU visibil
 
 ```bash
 mkdir -p logs/phase_4 logs/phase_5
+mkdir -p "${SCRATCH:-/scratch/users/nus/${USER}}/OGBench/exp"
+mkdir -p "${SCRATCH:-/scratch/users/nus/${USER}}/OGBench/data"
 
 qsub -P personal \
   -q normal \
-  -v CONDA_ENV=recurrent,CONDA_EXE=conda,WANDB_MODE=offline,SEEDS=0,ENV_NAME=antmaze-medium-stitch-v0,RUN_GROUP=NSCC_Sanity,EXP_NAME=sd000_nscc_sanity,TRAIN_STEPS=2000,LOG_INTERVAL=200,EVAL_INTERVAL=1000,SAVE_INTERVAL=2000,EVAL_TASKS=1,EVAL_EPISODES=2,VIDEO_EPISODES=0,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5 \
+  -v WANDB_MODE=offline,SEEDS=0,ENV_NAME=antmaze-medium-stitch-v0,RUN_GROUP=NSCC_Sanity,EXP_NAME=sd000_nscc_sanity,TRAIN_STEPS=2000,LOG_INTERVAL=200,EVAL_INTERVAL=1000,SAVE_INTERVAL=2000,EVAL_TASKS=1,EVAL_EPISODES=2,VIDEO_EPISODES=0,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5 \
   pbs/train_crl.pbs
 ```
 
@@ -117,7 +129,7 @@ The wrapper writes its combined stdout/stderr to `logs/phase_5/pbs-crl_train-<jo
 ```bash
 qsub -P <project_id> \
   -q normal \
-  -v CONDA_ENV=recurrent,CONDA_EXE=conda,WANDB_MODE=online,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_AntLargeStitch_SwiGLU,EXP_NAME=sd000_ALS_Swi_noFiLM_noLN,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=4,CRITIC_RECUR_USE_FILM=0,CRITIC_RECUR_SWIGLU_PRE_LN=0,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,EVAL_ON_CPU=0 \
+  -v SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_AntLargeStitch_SwiGLU,EXP_NAME=sd000_ALS_Swi_noFiLM_noLN,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=4,CRITIC_RECUR_USE_FILM=0,CRITIC_RECUR_SWIGLU_PRE_LN=0,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,EVAL_ON_CPU=0 \
   pbs/train_crl.pbs
 ```
 
@@ -126,7 +138,7 @@ qsub -P <project_id> \
 ```bash
 qsub -P <project_id> \
   -q normal \
-  -v CONDA_ENV=recurrent,CONDA_EXE=conda,WANDB_MODE=online,SEEDS=0,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=SAW_AntGiantNav_SwiGLU,EXP_NAME=sd000_AGN_SAW_Swi,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=4,VALUE_RECUR_NUM_DENSE_LAYERS=2,VALUE_RECUR_BLOCK_TYPE=swiglu,VALUE_RECUR_MAX_ITERS=4,VALUE_RECUR_USE_FILM=0,VALUE_RECUR_USE_INPUT_INJECTION=1,DISCOUNT=0.995,EXPECTILE=0.7,LOW_ALPHA=3.0,AWR_ALPHA=3.0,KL_ALPHA=3.0,SUBGOAL_STEPS=25 \
+  -v SEEDS=0,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=SAW_AntGiantNav_SwiGLU,EXP_NAME=sd000_AGN_SAW_Swi,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=4,VALUE_RECUR_NUM_DENSE_LAYERS=2,VALUE_RECUR_BLOCK_TYPE=swiglu,VALUE_RECUR_MAX_ITERS=4,VALUE_RECUR_USE_FILM=0,VALUE_RECUR_USE_INPUT_INJECTION=1,DISCOUNT=0.995,EXPECTILE=0.7,LOW_ALPHA=3.0,AWR_ALPHA=3.0,KL_ALPHA=3.0,SUBGOAL_STEPS=25 \
   pbs/train_saw.pbs
 ```
 
@@ -135,7 +147,7 @@ qsub -P <project_id> \
 ```bash
 qsub -P <project_id> \
   -q normal \
-  -v CONDA_ENV=recurrent,CONDA_EXE=conda,WANDB_MODE=online,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=HIQL_AntLargeStitch,EXP_NAME=sd000_ALS_hiql_recur,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=6,VALUE_RECUR_NUM_DENSE_LAYERS=4,VALUE_RECUR_MAX_ITERS=6,VALUE_RECUR_USE_STEP_INFO=0,VALUE_RECUR_USE_FILM=1,VALUE_RECUR_FILM_MODE=hidden,DISCOUNT=0.99,LOW_ALPHA=3.0,HIGH_ALPHA=3.0,SUBGOAL_STEPS=25 \
+  -v SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=HIQL_AntLargeStitch,EXP_NAME=sd000_ALS_hiql_recur,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=6,VALUE_RECUR_NUM_DENSE_LAYERS=4,VALUE_RECUR_MAX_ITERS=6,VALUE_RECUR_USE_STEP_INFO=0,VALUE_RECUR_USE_FILM=1,VALUE_RECUR_FILM_MODE=hidden,DISCOUNT=0.99,LOW_ALPHA=3.0,HIGH_ALPHA=3.0,SUBGOAL_STEPS=25 \
   pbs/train_hiql.pbs
 ```
 
@@ -146,9 +158,7 @@ The PBS wrappers default to the same 3-way seed array pattern as the Slurm scrip
 Use:
 
 ```bash
-qsub -P <project_id> -q normal -J 0-2 \
-  -v CONDA_ENV=recurrent,CONDA_EXE=conda,WANDB_MODE=online \
-  pbs/train_crl.pbs
+qsub -P <project_id> -q normal -J 0-2 pbs/train_crl.pbs
 ```
 
 and add the same `ENV_NAME=...`, `RUN_GROUP=...`, `EXP_NAME=...`, and model hyperparameters you would normally pass.
@@ -159,12 +169,10 @@ If you keep the default seed list in the launcher, `-J 0-2` maps to seeds `0 1 2
 
 ### `conda: command not found`
 
-If the wrapper still does not find Conda, either override the module name or bypass modules completely with the full executable path:
+If the wrapper still does not find Conda, either override the module name or pass the full executable path explicitly:
 
 ```bash
-qsub -P personal -q normal -v CONDA_MODULE=miniforge3/25.3.1,CONDA_ENV=recurrent,CONDA_EXE=conda ...
 qsub -P personal -q normal -v CONDA_MODULE=none,CONDA_ENV=recurrent,CONDA_EXE=/full/path/to/conda ...
-qsub -P personal -q normal -v CONDA_ENV=recurrent,CONDA_EXE=/full/path/to/conda ...
 ```
 
 ### JAX only sees CPU
@@ -188,7 +196,29 @@ again on the repo checkout used for submission.
 By default the launchers use:
 
 ```bash
-DATASET_DIR=${PWD}/.ogbench_data
+SAVE_DIR=${SCRATCH_ROOT}/OGBench/exp
+DATASET_DIR=${SCRATCH_ROOT}/OGBench/data
 ```
 
-Override it with `-v DATASET_DIR=/path/to/project/storage/...` if you want the dataset somewhere else.
+Override them with `-v SAVE_DIR=...` and `-v DATASET_DIR=...` if you want a different location.
+
+## Weights & Biases
+
+The training launchers default to `WANDB_MODE=online`.
+
+Before your first online run, authenticate once inside the `recurrent` environment:
+
+```bash
+module load miniforge3/25.3.1
+source "$(conda info --base)/etc/profile.d/conda.sh"
+conda activate recurrent
+wandb login
+```
+
+If you prefer not to paste the API key interactively, set:
+
+```bash
+export WANDB_API_KEY=...
+```
+
+before submitting, or put it in your shell startup file on the cluster.
