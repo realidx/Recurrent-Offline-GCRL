@@ -75,11 +75,14 @@ VALUE_HIDDEN_DIMS="${VALUE_HIDDEN_DIMS:-512x512x512}"
 VALUE_BACKBONE="${VALUE_BACKBONE:-mlp}"
 VALUE_RECUR_ITERS="${VALUE_RECUR_ITERS:-4}"
 VALUE_RECUR_NUM_DENSE_LAYERS="${VALUE_RECUR_NUM_DENSE_LAYERS:-2}"
+VALUE_RECUR_BLOCK_TYPE="${VALUE_RECUR_BLOCK_TYPE:-dense}"
 VALUE_RECUR_MAX_ITERS="${VALUE_RECUR_MAX_ITERS:-16}"
 VALUE_RECUR_LN_MODE="${VALUE_RECUR_LN_MODE:-per_layer_final}"
-VALUE_RECUR_USE_STEP_INFO="${VALUE_RECUR_USE_STEP_INFO:-0}"
-VALUE_RECUR_USE_FILM="${VALUE_RECUR_USE_FILM:-1}"
+VALUE_RECUR_USE_STEP_INFO="${VALUE_RECUR_USE_STEP_INFO:-1}"
+VALUE_RECUR_SINUSOIDAL="${VALUE_RECUR_SINUSOIDAL:-0}"
+VALUE_RECUR_USE_FILM="${VALUE_RECUR_USE_FILM:-0}"
 VALUE_RECUR_FILM_MODE="${VALUE_RECUR_FILM_MODE:-hidden}"
+VALUE_RECUR_USE_LAYERSCALE="${VALUE_RECUR_USE_LAYERSCALE:-1}"
 VALUE_RECUR_USE_ACT="${VALUE_RECUR_USE_ACT:-0}"
 VALUE_RECUR_ACT_EPSILON="${VALUE_RECUR_ACT_EPSILON:-0.01}"
 VALUE_RECUR_ACT_MIN_ITERS="${VALUE_RECUR_ACT_MIN_ITERS:-1}"
@@ -200,11 +203,11 @@ case "${VALUE_BACKBONE}" in
       echo "Error: VALUE_RECUR_LN_MODE='${VALUE_RECUR_LN_MODE}' is invalid. Use pre_loop, per_layer, per_layer_final, or pre_loop_per_layer." >&2
       exit 2
     fi
-    if [[ ! "${VALUE_RECUR_BLOCK_TYPE:-dense}" =~ ^(dense|swiglu)$ ]]; then
+    if [[ ! "${VALUE_RECUR_BLOCK_TYPE}" =~ ^(dense|swiglu)$ ]]; then
       echo "Error: VALUE_RECUR_BLOCK_TYPE='${VALUE_RECUR_BLOCK_TYPE}' is invalid. Use dense or swiglu." >&2
       exit 2
     fi
-    if [[ "${VALUE_RECUR_BLOCK_TYPE:-dense}" == "swiglu" && "${VALUE_RECUR_NUM_DENSE_LAYERS}" != "2" ]]; then
+    if [[ "${VALUE_RECUR_BLOCK_TYPE}" == "swiglu" && "${VALUE_RECUR_NUM_DENSE_LAYERS}" != "2" ]]; then
       echo "Error: VALUE_RECUR_BLOCK_TYPE=swiglu requires VALUE_RECUR_NUM_DENSE_LAYERS=2." >&2
       exit 2
     fi
@@ -215,12 +218,14 @@ case "${VALUE_BACKBONE}" in
     AGENT_FLAGS+=(
       "--agent.value_recur_iters=${VALUE_RECUR_ITERS}"
       "--agent.value_recur_num_dense_layers=${VALUE_RECUR_NUM_DENSE_LAYERS}"
-      "--agent.value_recur_block_type=${VALUE_RECUR_BLOCK_TYPE:-dense}"
+      "--agent.value_recur_block_type=${VALUE_RECUR_BLOCK_TYPE}"
       "--agent.value_recur_max_iters=${VALUE_RECUR_MAX_ITERS}"
       "--agent.value_recur_ln_mode=${VALUE_RECUR_LN_MODE}"
       "--agent.value_recur_use_step_info=${VALUE_RECUR_USE_STEP_INFO}"
+      "--agent.value_recur_sinusoidal=${VALUE_RECUR_SINUSOIDAL}"
       "--agent.value_recur_use_film=${VALUE_RECUR_USE_FILM}"
       "--agent.value_recur_film_mode=${VALUE_RECUR_FILM_MODE}"
+      "--agent.value_recur_use_layerscale=${VALUE_RECUR_USE_LAYERSCALE}"
       "--agent.value_recur_use_act=${VALUE_RECUR_USE_ACT}"
       "--agent.value_recur_act_epsilon=${VALUE_RECUR_ACT_EPSILON}"
       "--agent.value_recur_act_min_iters=${VALUE_RECUR_ACT_MIN_ITERS}"

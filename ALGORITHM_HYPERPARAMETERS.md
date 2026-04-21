@@ -16,7 +16,7 @@ Source policy:
 
 - `CRL` and `HIQL` task rows are derived from OGBench third-party benchmark entries in [third_party/ogbench/impls/hyperparameters.sh](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/hyperparameters.sh), plus the corresponding agent defaults in [third_party/ogbench/impls/agents/crl.py](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/agents/crl.py) and [third_party/ogbench/impls/agents/hiql.py](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/agents/hiql.py).
 - `CGIVL` / `CGCIVL` values below are taken from the paper appendix in [references/CGCIVL.pdf](/Users/bruce/Recurrent-Offline-RL/references/CGCIVL.pdf), the authors' README example in [third_party/CGCIVL/readme.md](/Users/bruce/Recurrent-Offline-RL/third_party/CGCIVL/readme.md), and the authors' agent defaults in [third_party/CGCIVL/impls/agents/cgivl.py](/Users/bruce/Recurrent-Offline-RL/third_party/CGCIVL/impls/agents/cgivl.py). Where the paper gives only task-family rules rather than per-task commands, those rows are marked as default-backed or inferred from the published rule.
-- `SAW` is not part of the OGBench third-party benchmark table in this repo. Its values below are local worktree defaults from [slurm/train_saw_array.slurm](/Users/bruce/Recurrent-Offline-RL/slurm/train_saw_array.slurm) and [third_party/ogbench/impls/agents/saw.py](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/agents/saw.py).
+- `SAW` is not part of the OGBench third-party benchmark table in this repo. Its values below are taken from the SAW paper appendix in [references/SAW.pdf](/Users/bruce/Recurrent-Offline-RL/references/SAW.pdf), plus local worktree defaults from [slurm/train_saw.slurm](/Users/bruce/Recurrent-Offline-RL/slurm/train_saw.slurm) and [third_party/ogbench/impls/agents/saw.py](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/agents/saw.py).
 
 ## CRL
 
@@ -200,7 +200,43 @@ Pattern from OGBench:
 
 `SAW` does not appear in the OGBench third-party benchmark table in [third_party/ogbench/impls/hyperparameters.sh](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/hyperparameters.sh), so there is no repo-provided task-specific benchmark grid analogous to `CRL` or `HIQL`.
 
-Current local non-model defaults used by [slurm/train_saw_array.slurm](/Users/bruce/Recurrent-Offline-RL/slurm/train_saw_array.slurm#L46) and [saw.py](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/agents/saw.py#L509):
+Published SAW task-specific settings come from Table 2 in [references/SAW.pdf](/Users/bruce/Recurrent-Offline-RL/references/SAW.pdf). The paper states that:
+
+- common hyperparameters follow OGBench / HIQL settings from Park et al. (2024a)
+- state, subgoal, and goal-sampling distributions are identical to `HIQL`
+- Table 2 only overrides `expectile`, `AWR alpha`, `KLD beta`, and `subgoal steps`
+
+Notation mapping from the paper to the local SAW code:
+
+- paper `AWR alpha` maps to both `low_alpha` and `awr_alpha`
+- paper `KLD beta` maps to `kl_alpha`
+
+Effective published state-based SAW hyperparameters:
+
+| Task | discount | expectile | low_alpha | awr_alpha | kl_alpha | subgoal_steps | value_p_curgoal | value_p_trajgoal | value_p_randomgoal | actor_p_curgoal | actor_p_trajgoal | actor_p_randomgoal |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `pointmaze-medium-navigate-v0` | `0.99` | `0.7` | `3.0` | `3.0` | `3.0` | `25` | `0.2` | `0.5` | `0.3` | `0.0` | `1.0` | `0.0` |
+| `pointmaze-large-navigate-v0` | `0.99` | `0.7` | `3.0` | `3.0` | `3.0` | `25` | `0.2` | `0.5` | `0.3` | `0.0` | `1.0` | `0.0` |
+| `pointmaze-giant-navigate-v0` | `0.995` | `0.7` | `3.0` | `3.0` | `3.0` | `25` | `0.2` | `0.5` | `0.3` | `0.0` | `1.0` | `0.0` |
+| `antmaze-medium-navigate-v0` | `0.99` | `0.7` | `3.0` | `3.0` | `3.0` | `25` | `0.2` | `0.5` | `0.3` | `0.0` | `1.0` | `0.0` |
+| `antmaze-large-navigate-v0` | `0.99` | `0.7` | `3.0` | `3.0` | `3.0` | `25` | `0.2` | `0.5` | `0.3` | `0.0` | `1.0` | `0.0` |
+| `antmaze-giant-navigate-v0` | `0.995` | `0.7` | `3.0` | `3.0` | `3.0` | `25` | `0.2` | `0.5` | `0.3` | `0.0` | `1.0` | `0.0` |
+| `humanoidmaze-medium-navigate-v0` | `0.995` | `0.7` | `3.0` | `3.0` | `3.0` | `100` | `0.2` | `0.5` | `0.3` | `0.0` | `1.0` | `0.0` |
+| `humanoidmaze-large-navigate-v0` | `0.995` | `0.7` | `3.0` | `3.0` | `3.0` | `100` | `0.2` | `0.5` | `0.3` | `0.0` | `1.0` | `0.0` |
+| `humanoidmaze-giant-navigate-v0` | `0.995` | `0.7` | `3.0` | `3.0` | `3.0` | `100` | `0.2` | `0.5` | `0.3` | `0.0` | `1.0` | `0.0` |
+| `cube-single-play-v0` | `0.99` | `0.9` | `3.0` | `3.0` | `0.3` | `10` | `0.2` | `0.5` | `0.3` | `0.0` | `1.0` | `0.0` |
+| `cube-double-play-v0` | `0.99` | `0.7` | `3.0` | `3.0` | `1.0` | `10` | `0.2` | `0.5` | `0.3` | `0.0` | `1.0` | `0.0` |
+| `cube-triple-play-v0` | `0.99` | `0.7` | `3.0` | `3.0` | `1.0` | `10` | `0.2` | `0.5` | `0.3` | `0.0` | `1.0` | `0.0` |
+| `scene-play-v0` | `0.99` | `0.7` | `3.0` | `3.0` | `1.0` | `10` | `0.2` | `0.5` | `0.3` | `0.0` | `1.0` | `0.0` |
+
+Patterns from the SAW paper:
+
+- `antmaze-giant-navigate-v0` uses `discount=0.995`, `expectile=0.7`, `low_alpha=awr_alpha=3.0`, `kl_alpha=3.0`, `subgoal_steps=25`
+- `humanoidmaze-giant-navigate-v0` uses the same temperatures as antmaze giant, but increases `subgoal_steps` to `100`
+- `cube-double-play-v0` and `scene-play-v0` both use `expectile=0.7`, `low_alpha=awr_alpha=3.0`, `kl_alpha=1.0`, `subgoal_steps=10`
+- `cube-single-play-v0` is the main manipulation outlier with `expectile=0.9` and `kl_alpha=0.3`
+
+Current local non-model defaults used by [slurm/train_saw.slurm](/Users/bruce/Recurrent-Offline-RL/slurm/train_saw.slurm) and [saw.py](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/agents/saw.py):
 
 | Hyperparameter | Value |
 | --- | --- |
@@ -229,5 +265,6 @@ Current local non-model defaults used by [slurm/train_saw_array.slurm](/Users/br
 
 Practical note:
 
-- if you run `SAW` through [slurm/train_saw_array.slurm](/Users/bruce/Recurrent-Offline-RL/slurm/train_saw_array.slurm) without overrides, these are the effective algorithm hyperparameters regardless of antmaze task
-- if you want task-specific `SAW` settings analogous to OGBench `CRL` / `HIQL`, they need to be defined explicitly by local run commands or a new task table
+- if you run `SAW` through [slurm/train_saw.slurm](/Users/bruce/Recurrent-Offline-RL/slurm/train_saw.slurm) without overrides, these local defaults are used regardless of task
+- the local launcher does not automatically encode the paper's task-specific SAW overrides such as `discount=0.995` for giant mazes, `subgoal_steps=100` for humanoidmaze navigation, or `kl_alpha=1.0` / `subgoal_steps=10` for `cube-double-play-v0` and `scene-play-v0`
+- if you want paper-matched `SAW` settings, those task-specific overrides need to be passed explicitly in local run commands
