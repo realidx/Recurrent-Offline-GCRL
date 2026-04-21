@@ -30,11 +30,18 @@ for modules_init in \
   fi
 done
 
-if command -v module >/dev/null 2>&1; then
+if [[ "${CONDA_MODULE:-miniforge3/25.3.1}" != "none" ]] && command -v module >/dev/null 2>&1; then
   module load "${CONDA_MODULE:-miniforge3/25.3.1}"
 fi
 
 if ! command -v conda >/dev/null 2>&1; then
+  if [[ -n "${CONDA_EXE:-}" && -x "${CONDA_EXE}" ]]; then
+    conda_root="$(cd "$(dirname "${CONDA_EXE}")/.." && pwd)"
+    if [[ -f "${conda_root}/etc/profile.d/conda.sh" ]]; then
+      # shellcheck source=/dev/null
+      source "${conda_root}/etc/profile.d/conda.sh"
+    fi
+  fi
   for conda_sh in \
     "${HOME}/miniforge3/etc/profile.d/conda.sh" \
     "${HOME}/miniconda3/etc/profile.d/conda.sh" \

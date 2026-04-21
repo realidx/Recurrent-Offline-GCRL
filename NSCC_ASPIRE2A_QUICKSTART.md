@@ -12,7 +12,7 @@ These wrappers let you keep using the existing environment variables such as `EN
 
 The Slurm launchers were also relaxed from a hardcoded `h100-47` request to a generic `--gpus=1`, which makes them more portable on non-H100 systems.
 
-The PBS wrappers also try to load `miniforge3/25.3.1` automatically at job runtime. Override that with `-v CONDA_MODULE=...` if you need a different Conda module.
+The PBS wrappers also try to load `miniforge3/25.3.1` automatically at job runtime. Override that with `-v CONDA_MODULE=...` if you need a different Conda module, or disable module loading entirely with `-v CONDA_MODULE=none,CONDA_EXE=/full/path/to/conda`.
 
 ## Cluster Notes
 
@@ -159,10 +159,11 @@ If you keep the default seed list in the launcher, `-J 0-2` maps to seeds `0 1 2
 
 ### `conda: command not found`
 
-If the wrapper still does not find Conda, either override the module name or pass the full executable path:
+If the wrapper still does not find Conda, either override the module name or bypass modules completely with the full executable path:
 
 ```bash
 qsub -P personal -q normal -v CONDA_MODULE=miniforge3/25.3.1,CONDA_ENV=recurrent,CONDA_EXE=conda ...
+qsub -P personal -q normal -v CONDA_MODULE=none,CONDA_ENV=recurrent,CONDA_EXE=/full/path/to/conda ...
 qsub -P personal -q normal -v CONDA_ENV=recurrent,CONDA_EXE=/full/path/to/conda ...
 ```
 
