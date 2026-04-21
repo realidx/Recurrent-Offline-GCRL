@@ -4,7 +4,7 @@
 #SBATCH --time=10:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=24G
-#SBATCH --gpus=h100-47
+#SBATCH --gpus=1
 #SBATCH --output=logs/phase_5/slurm-%x-%A_%a.out
 #SBATCH --error=logs/phase_5/slurm-%x-%A_%a.err
 #SBATCH --array=0-2
@@ -153,7 +153,7 @@ if [[ "${EVAL_ON_CPU}" == "1" ]]; then
 else
   export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda}"
 fi
-mkdir -p "${DATASET_DIR}" logs/phase_4
+mkdir -p "${DATASET_DIR}" logs/phase_5
 export OGBENCH_DATASET_DIR="${DATASET_DIR}"
 
 ENV_TAG="${ENV_NAME%-v0}"

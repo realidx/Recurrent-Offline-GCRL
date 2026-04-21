@@ -1,0 +1,20 @@
+#!/bin/bash
+#PBS -N crl_train
+#PBS -q normal
+#PBS -l select=1:ncpus=16:ngpus=1:mem=110G
+#PBS -l walltime=10:00:00
+#PBS -J 0-2
+#PBS -j oe
+
+set -euo pipefail
+
+cd "${PBS_O_WORKDIR}"
+
+export SLURM_SUBMIT_DIR="${PBS_O_WORKDIR}"
+export SLURM_ARRAY_TASK_ID="${PBS_ARRAY_INDEX:-0}"
+export SLURM_JOB_ID="${PBS_JOBID:-}"
+export SLURM_JOB_NODELIST="$(hostname)"
+
+mkdir -p logs/phase_5
+
+exec bash "${PBS_O_WORKDIR}/slurm/train_crl.slurm"
