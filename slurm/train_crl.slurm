@@ -7,7 +7,7 @@
 #SBATCH --gpus=1
 #SBATCH --output=logs/phase_5/slurm-%x-%A_%a.out
 #SBATCH --error=logs/phase_5/slurm-%x-%A_%a.err
-#SBATCH --array=0-2
+#SBATCH --array=0
 
 # Generic OGBench GCRL trainer (array by seed).
 #

@@ -4,7 +4,6 @@
 #PBS -l select=1:ncpus=16:ngpus=1:mem=110G
 #PBS -l walltime=10:00:00
 #PBS -J 0-2
-#PBS -j oe
 
 set -euo pipefail
 
@@ -16,5 +15,36 @@ export SLURM_JOB_ID="${PBS_JOBID:-}"
 export SLURM_JOB_NODELIST="$(hostname)"
 
 mkdir -p logs/phase_5
+
+LOG_FILE="logs/phase_5/pbs-${PBS_JOBNAME:-crl_train}-${PBS_JOBID:-unknown}_${PBS_ARRAY_INDEX:-0}.log"
+exec >"${LOG_FILE}" 2>&1
+
+for modules_init in \
+  /usr/share/Modules/init/bash \
+  /etc/profile.d/modules.sh \
+  /usr/share/lmod/lmod/init/bash; do
+  if [[ -f "${modules_init}" ]]; then
+    # shellcheck source=/dev/null
+    source "${modules_init}"
+    break
+  fi
+done
+
+if command -v module >/dev/null 2>&1; then
+  module load "${CONDA_MODULE:-miniforge3/25.3.1}"
+fi
+
+if ! command -v conda >/dev/null 2>&1; then
+  for conda_sh in \
+    "${HOME}/miniforge3/etc/profile.d/conda.sh" \
+    "${HOME}/miniconda3/etc/profile.d/conda.sh" \
+    "${HOME}/anaconda3/etc/profile.d/conda.sh"; do
+    if [[ -f "${conda_sh}" ]]; then
+      # shellcheck source=/dev/null
+      source "${conda_sh}"
+      break
+    fi
+  done
+fi
 
 exec bash "${PBS_O_WORKDIR}/slurm/train_crl.slurm"

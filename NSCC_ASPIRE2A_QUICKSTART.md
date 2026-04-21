@@ -12,6 +12,8 @@ These wrappers let you keep using the existing environment variables such as `EN
 
 The Slurm launchers were also relaxed from a hardcoded `h100-47` request to a generic `--gpus=1`, which makes them more portable on non-H100 systems.
 
+The PBS wrappers also try to load `miniforge3/25.3.1` automatically at job runtime. Override that with `-v CONDA_MODULE=...` if you need a different Conda module.
+
 ## Cluster Notes
 
 - ASPIRE2A uses PBS Pro queues, not Slurm.
@@ -100,11 +102,13 @@ Use a short single-seed CRL job to verify PBS submission, Conda, JAX GPU visibil
 ```bash
 mkdir -p logs/phase_4 logs/phase_5
 
-qsub -P <project_id> \
+qsub -P personal \
   -q normal \
   -v CONDA_ENV=recurrent,CONDA_EXE=conda,WANDB_MODE=offline,SEEDS=0,ENV_NAME=antmaze-medium-stitch-v0,RUN_GROUP=NSCC_Sanity,EXP_NAME=sd000_nscc_sanity,TRAIN_STEPS=2000,LOG_INTERVAL=200,EVAL_INTERVAL=1000,SAVE_INTERVAL=2000,EVAL_TASKS=1,EVAL_EPISODES=2,VIDEO_EPISODES=0,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5 \
   pbs/train_crl.pbs
 ```
+
+The wrapper writes its combined stdout/stderr to `logs/phase_5/pbs-crl_train-<jobid>_<array>.log`.
 
 ## First Real Runs
 
@@ -155,10 +159,11 @@ If you keep the default seed list in the launcher, `-J 0-2` maps to seeds `0 1 2
 
 ### `conda: command not found`
 
-Load the Conda module first, or pass the full executable path:
+If the wrapper still does not find Conda, either override the module name or pass the full executable path:
 
 ```bash
-qsub -P <project_id> -q normal -v CONDA_ENV=recurrent,CONDA_EXE=/full/path/to/conda ...
+qsub -P personal -q normal -v CONDA_MODULE=miniforge3/25.3.1,CONDA_ENV=recurrent,CONDA_EXE=conda ...
+qsub -P personal -q normal -v CONDA_ENV=recurrent,CONDA_EXE=/full/path/to/conda ...
 ```
 
 ### JAX only sees CPU
