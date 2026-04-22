@@ -568,10 +568,10 @@ index 0000000..441bfaf
 +    )
 +    return config
 diff --git a/impls/agents/crl.py b/impls/agents/crl.py
-index 53109ab..ca1720d 100644
+index 53109ab..dc94c52 100644
 --- a/impls/agents/crl.py
 +++ b/impls/agents/crl.py
-@@ -22,51 +22,129 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -22,51 +22,178 @@ class CRLAgent(flax.struct.PyTreeNode):
      config: Any = nonpytree_field()
  
      def contrastive_loss(self, batch, grad_params, module_name='critic'):
@@ -588,8 +588,16 @@ index 53109ab..ca1720d 100644
 +            and (
 +                self.config.get('critic_recur_use_act', False)
 +                or self.config.get('critic_recur_use_soft_mixture', False)
++                or self.config.get('critic_recur_use_input_injection', False)
 +            )
 +        )
++
++        def _step_mean_vector(step_values):
++            arr = jnp.asarray(step_values)
++            if arr.ndim < 2:
++                return arr.reshape(-1)
++            reduce_axes = tuple(i for i in range(arr.ndim) if i != arr.ndim - 2)
++            return jnp.mean(arr, axis=reduce_axes)
  
          if module_name == 'critic':
              actions = batch['actions']
@@ -704,11 +712,34 @@ index 53109ab..ca1720d 100644
 +            info['act_expected_steps_psi_mean'] = act_aux['act_expected_steps_psi'].mean()
 +            info['act_expected_steps_total_mean'] = act_expected_steps_total.mean()
 +            info['act_ponder_loss'] = act_ponder_loss
++        hidden_drift_mean = act_aux.get('hidden_drift_mean')
++        if hidden_drift_mean is not None:
++            if 'hidden_drift_phi' in act_aux:
++                info['hidden_drift_phi_mean'] = act_aux['hidden_drift_phi'].mean()
++            if 'hidden_drift_psi' in act_aux:
++                info['hidden_drift_psi_mean'] = act_aux['hidden_drift_psi'].mean()
++            info['hidden_drift_mean'] = hidden_drift_mean.mean()
++        input_ratio_mean = act_aux.get('input_injection_ratio_mean')
++        if input_ratio_mean is not None:
++            if 'input_injection_ratio_phi' in act_aux:
++                info['input_injection_ratio_phi_mean'] = act_aux['input_injection_ratio_phi'].mean()
++            if 'input_injection_ratio_psi' in act_aux:
++                info['input_injection_ratio_psi_mean'] = act_aux['input_injection_ratio_psi'].mean()
++            info['input_injection_ratio_mean'] = input_ratio_mean.mean()
++        anchor_alignment_mean = act_aux.get('anchor_alignment_mean')
++        if anchor_alignment_mean is not None:
++            if 'anchor_alignment_phi' in act_aux:
++                info['anchor_alignment_phi_mean'] = act_aux['anchor_alignment_phi'].mean()
++            if 'anchor_alignment_psi' in act_aux:
++                info['anchor_alignment_psi_mean'] = act_aux['anchor_alignment_psi'].mean()
++            info['anchor_alignment_mean'] = anchor_alignment_mean.mean()
 +        softmix_expected_steps_total = act_aux.get('softmix_expected_steps_total')
 +        if softmix_expected_steps_total is not None:
 +            info['softmix_expected_steps_phi_mean'] = act_aux['softmix_expected_steps_phi'].mean()
 +            info['softmix_expected_steps_psi_mean'] = act_aux['softmix_expected_steps_psi'].mean()
 +            info['softmix_expected_steps_total_mean'] = softmix_expected_steps_total.mean()
++            if 'softmix_expected_steps_mean' in act_aux:
++                info['softmix_expected_steps_mean'] = act_aux['softmix_expected_steps_mean'].mean()
 +            if 'softmix_entropy_phi' in act_aux:
 +                info['softmix_entropy_phi_mean'] = act_aux['softmix_entropy_phi'].mean()
 +            if 'softmix_entropy_psi' in act_aux:
@@ -717,11 +748,29 @@ index 53109ab..ca1720d 100644
 +                info['softmix_last_step_weight_phi_mean'] = act_aux['softmix_last_step_weight_phi'].mean()
 +            if 'softmix_last_step_weight_psi' in act_aux:
 +                info['softmix_last_step_weight_psi_mean'] = act_aux['softmix_last_step_weight_psi'].mean()
++            if 'softmix_late_step_mass_phi' in act_aux:
++                info['softmix_late_step_mass_phi_mean'] = act_aux['softmix_late_step_mass_phi'].mean()
++            if 'softmix_late_step_mass_psi' in act_aux:
++                info['softmix_late_step_mass_psi_mean'] = act_aux['softmix_late_step_mass_psi'].mean()
++            if 'softmix_late_step_mass_mean' in act_aux:
++                info['softmix_late_step_mass_mean'] = act_aux['softmix_late_step_mass_mean'].mean()
++            if 'softmix_step_weights_phi' in act_aux:
++                phi_step_means = _step_mean_vector(act_aux['softmix_step_weights_phi'])
++                for step_idx, value in enumerate(phi_step_means, start=1):
++                    info[f'softmix_weight_step_{step_idx}_phi_mean'] = value
++            if 'softmix_step_weights_psi' in act_aux:
++                psi_step_means = _step_mean_vector(act_aux['softmix_step_weights_psi'])
++                for step_idx, value in enumerate(psi_step_means, start=1):
++                    info[f'softmix_weight_step_{step_idx}_psi_mean'] = value
++            if 'softmix_step_weights_mean' in act_aux:
++                total_step_means = _step_mean_vector(act_aux['softmix_step_weights_mean'])
++                for step_idx, value in enumerate(total_step_means, start=1):
++                    info[f'softmix_weight_step_{step_idx}_mean'] = value
 +        return contrastive_loss, info
  
      def actor_loss(self, batch, grad_params, rng=None):
          """Compute the actor loss (AWR or DDPG+BC)."""
-@@ -104,6 +182,7 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -104,6 +231,7 @@ class CRLAgent(flax.struct.PyTreeNode):
              assert not self.config['discrete']
  
              dist = self.network.select('actor')(batch['observations'], batch['actor_goals'], params=grad_params)
@@ -729,7 +778,7 @@ index 53109ab..ca1720d 100644
              if self.config['const_std']:
                  q_actions = jnp.clip(dist.mode(), -1, 1)
              else:
-@@ -124,10 +203,7 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -124,10 +252,7 @@ class CRLAgent(flax.struct.PyTreeNode):
                  'q_loss': q_loss,
                  'bc_loss': bc_loss,
                  'q_mean': q.mean(),
@@ -741,7 +790,7 @@ index 53109ab..ca1720d 100644
              }
          else:
              raise ValueError(f'Unsupported actor loss: {self.config["actor_loss"]}')
-@@ -231,6 +307,29 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -231,6 +356,29 @@ class CRLAgent(flax.struct.PyTreeNode):
                  state_encoder=encoders.get('critic_state'),
                  goal_encoder=encoders.get('critic_goal'),
                  action_dim=action_dim,
@@ -771,7 +820,7 @@ index 53109ab..ca1720d 100644
              )
          else:
              critic_def = GCBilinearValue(
-@@ -241,6 +340,29 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -241,6 +389,29 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
                  state_encoder=encoders.get('critic_state'),
                  goal_encoder=encoders.get('critic_goal'),
@@ -801,7 +850,7 @@ index 53109ab..ca1720d 100644
              )
  
          if config['actor_loss'] == 'awr':
-@@ -253,6 +375,29 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -253,6 +424,29 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
                  state_encoder=encoders.get('value_state'),
                  goal_encoder=encoders.get('value_goal'),
@@ -831,7 +880,7 @@ index 53109ab..ca1720d 100644
              )
  
          if config['discrete']:
-@@ -260,6 +405,10 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -260,6 +454,10 @@ class CRLAgent(flax.struct.PyTreeNode):
                  hidden_dims=config['actor_hidden_dims'],
                  action_dim=action_dim,
                  gc_encoder=encoders.get('actor'),
@@ -842,7 +891,7 @@ index 53109ab..ca1720d 100644
              )
          else:
              actor_def = GCActor(
-@@ -268,6 +417,10 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -268,6 +466,10 @@ class CRLAgent(flax.struct.PyTreeNode):
                  state_dependent_std=False,
                  const_std=config['const_std'],
                  gc_encoder=encoders.get('actor'),
@@ -853,7 +902,7 @@ index 53109ab..ca1720d 100644
              )
  
          network_info = dict(
-@@ -282,7 +435,15 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -282,7 +484,15 @@ class CRLAgent(flax.struct.PyTreeNode):
          network_args = {k: v[1] for k, v in network_info.items()}
  
          network_def = ModuleDict(networks)
@@ -870,7 +919,7 @@ index 53109ab..ca1720d 100644
          network_params = network_def.init(init_rng, **network_args)['params']
          network = TrainState.create(network_def, network_params, tx=network_tx)
  
-@@ -295,8 +456,13 @@ def get_config():
+@@ -295,8 +505,13 @@ def get_config():
              # Agent hyperparameters.
              agent_name='crl',  # Agent name.
              lr=3e-4,  # Learning rate.
@@ -884,7 +933,7 @@ index 53109ab..ca1720d 100644
              value_hidden_dims=(512, 512, 512),  # Value network hidden dimensions.
              latent_dim=512,  # Latent dimension for phi and psi.
              layer_norm=True,  # Whether to use layer normalization.
-@@ -306,6 +472,28 @@ def get_config():
+@@ -306,6 +521,28 @@ def get_config():
              const_std=True,  # Whether to use constant standard deviation for the actor.
              discrete=False,  # Whether the action space is discrete.
              encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
@@ -913,7 +962,7 @@ index 53109ab..ca1720d 100644
              # Dataset hyperparameters.
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
-@@ -319,6 +507,9 @@ def get_config():
+@@ -319,6 +556,9 @@ def get_config():
              gc_negative=False,  # Unused (defined for compatibility with GCDataset).
              p_aug=0.0,  # Probability of applying image augmentation.
              frame_stack=ml_collections.config_dict.placeholder(int),  # Number of frames to stack.
@@ -3352,7 +3401,7 @@ index 0000000..60716d2
 +if __name__ == '__main__':
 +    main()
 diff --git a/impls/main.py b/impls/main.py
-index 3660e03..72672d7 100644
+index 3660e03..5f952a2 100644
 --- a/impls/main.py
 +++ b/impls/main.py
 @@ -1,17 +1,27 @@
@@ -3384,7 +3433,7 @@ index 3660e03..72672d7 100644
  from utils.env_utils import make_env_and_datasets
  from utils.evaluation import evaluate
  from utils.flax_utils import restore_agent, save_agent
-@@ -23,28 +33,252 @@ flags.DEFINE_string('run_group', 'Debug', 'Run group.')
+@@ -23,29 +33,255 @@ flags.DEFINE_string('run_group', 'Debug', 'Run group.')
  flags.DEFINE_integer('seed', 0, 'Random seed.')
  flags.DEFINE_string('env_name', 'antmaze-large-navigate-v0', 'Environment (dataset) name.')
  flags.DEFINE_string('save_dir', 'exp/', 'Save directory.')
@@ -3634,11 +3683,15 @@ index 3660e03..72672d7 100644
 +
      # Set up logger.
 -    exp_name = get_exp_name(FLAGS.seed)
+-    setup_wandb(project='OGBench', group=FLAGS.run_group, name=exp_name)
 +    exp_name = FLAGS.exp_name or get_exp_name(FLAGS.seed)
-     setup_wandb(project='OGBench', group=FLAGS.run_group, name=exp_name)
++    wandb_project = os.environ.get('WANDB_PROJECT', 'OGBench')
++    wandb_entity = os.environ.get('WANDB_ENTITY')
++    setup_wandb(entity=wandb_entity, project=wandb_project, group=FLAGS.run_group, name=exp_name)
  
      FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, FLAGS.run_group, exp_name)
-@@ -53,108 +287,1444 @@ def main(_):
+     os.makedirs(FLAGS.save_dir, exist_ok=True)
+@@ -53,108 +289,1588 @@ def main(_):
      with open(os.path.join(FLAGS.save_dir, 'flags.json'), 'w') as f:
          json.dump(flag_dict, f)
  
@@ -3673,13 +3726,13 @@ index 3660e03..72672d7 100644
 +                min_d=config.get('min_d', 0),
 +            )
 +        return {}
- 
--    example_batch = train_dataset.sample(1)
++
 +    def _sample_dataset(dataset, batch_size, *, idxs=None, evaluation=False):
 +        sample_kwargs = dict(idxs=idxs, evaluation=evaluation)
 +        sample_kwargs.update(_dataset_sample_kwargs())
 +        return dataset.sample(batch_size, **sample_kwargs)
-+
+ 
+-    example_batch = train_dataset.sample(1)
 +    # Initialize agent.
 +    example_batch = _sample_dataset(train_dataset, 1)
      if config['discrete']:
@@ -3728,6 +3781,22 @@ index 3660e03..72672d7 100644
 +            if module_name in str(k):
 +                return v
 +        return None
++
++    def _collect_named_leaves(tree, target_key: str):
++        leaves = []
++
++        def _walk(node):
++            if hasattr(node, 'items'):
++                for k, v in node.items():
++                    if str(k) == target_key:
++                        leaves.append(np.asarray(v))
++                    _walk(v)
++            elif isinstance(node, (list, tuple)):
++                for v in node:
++                    _walk(v)
++
++        _walk(tree)
++        return leaves
 +
 +    def _abs_param_stats(param_tree):
 +        if param_tree is None:
@@ -3798,6 +3867,11 @@ index 3660e03..72672d7 100644
 +                'evaluation/17_',
 +                'evaluation/18_',
 +                'evaluation/19_',
++                'evaluation/20_',
++                'evaluation/21_',
++                'evaluation/22_',
++                'evaluation/23_',
++                'evaluation/24_',
 +                'evaluation/30_',
 +                'evaluation/31_',
 +                'evaluation/32_',
@@ -3825,6 +3899,13 @@ index 3660e03..72672d7 100644
 +                'training/critic/logits_pos',
 +                'training/critic/logits_neg',
 +                'training/critic/ensemble_disagreement',
++                'training/critic/input_lambda_abs_mean',
++                'training/critic/input_injection_ratio_mean',
++                'training/critic/hidden_drift_mean',
++                'training/critic/anchor_alignment_mean',
++                'training/critic/softmix_expected_steps_mean',
++                'training/critic/softmix_expected_steps_total_mean',
++                'training/critic/softmix_late_step_mass_mean',
 +                'training/actor/actor_loss',
 +                'training/actor/bc_loss',
 +                'training/actor/q_loss',
@@ -4205,6 +4286,26 @@ index 3660e03..72672d7 100644
 +            metrics[f'{prefix}/{bucket_name}_{delta_name}_p90'] = float(np.quantile(bucket_delta, 0.90))
 +            metrics[f'{prefix}/{bucket_name}_{prefer_name}'] = float(np.mean(bucket_delta > 0))
 +
++    def _reduce_aux_per_example(values):
++        arr = np.asarray(values, dtype=np.float64)
++        if arr.ndim == 0:
++            return arr.reshape(1)
++        if arr.ndim == 1:
++            return arr
++        reduce_axes = tuple(range(arr.ndim - 1))
++        return np.mean(arr, axis=reduce_axes)
++
++    def _reduce_aux_stepwise(values):
++        arr = np.asarray(values, dtype=np.float64)
++        if arr.ndim < 2:
++            return arr.reshape(1, -1)
++        if arr.ndim == 2:
++            return arr
++        step_axis = arr.ndim - 2
++        batch_axis = arr.ndim - 1
++        reduce_axes = tuple(i for i in range(arr.ndim) if i not in (step_axis, batch_axis))
++        return np.mean(arr, axis=reduce_axes)
++
 +    def _score_value_batch(eval_agent, observations, goals, module_name='value'):
 +        values = eval_agent.network.select(module_name)(observations, goals)
 +        return _reduced_scores(values, 'value')
@@ -4344,15 +4445,7 @@ index 3660e03..72672d7 100644
 +        'evaluation/final_episode.return',
 +        'evaluation/best_so_far_normalized_score',
 +        'evaluation/best_so_far_episode.return',
-+        # Low-signal debug metrics that add panel noise but are not used in the
-+        # current mechanism or main-result analysis.
-+        'evaluation/action_mean',
-+        'evaluation/action_std',
-+        'evaluation/action_norm_mean',
-+        'evaluation/action_norm_std',
-+        'evaluation/action_abs_max',
-+        'evaluation/action_saturation_frac',
-+        'evaluation/policy_behavior_max_diff',
++        # Low-signal debug metrics that are not part of the current mechanism story.
 +        'evaluation/critic_q1_abs_max',
 +        'evaluation/critic_q2_abs_max',
 +        'evaluation/low_actor_behavior_mse',
@@ -4411,8 +4504,10 @@ index 3660e03..72672d7 100644
 +        hidden_norm_steps = []
 +        critic_pos_steps = []
 +        critic_neg_steps = []
++        critic_margin_steps = []
 +        critic_hidden_norm_steps = []
 +        actor_critic_deltas = []
++        critic_final_aux = None
 +
 +        if has_recurrent_value:
 +            total_iters = int(config.get('value_recur_iters', 1))
@@ -4527,6 +4622,7 @@ index 3660e03..72672d7 100644
 +                        batch=probe_batch,
 +                        goal_prefix='value',
 +                    )
++                    critic_margin_steps.append(q_pos_k - q_neg_k)
 +                _log_path_geometry_metrics(
 +                    eval_metrics,
 +                    f'evaluation/refine/critic_step_{k}_geometry',
@@ -4547,6 +4643,31 @@ index 3660e03..72672d7 100644
 +                    eval_metrics[f'evaluation/refine/critic_hidden_norm_step_{k}_mean'] = float(
 +                        np.asarray(hidden_norm_total).mean()
 +                    )
++                if isinstance(critic_aux_k, dict):
++                    hidden_drift = critic_aux_k.get('hidden_drift_mean')
++                    if hidden_drift is not None:
++                        hidden_drift = _reduce_aux_per_example(hidden_drift)
++                        eval_metrics[f'evaluation/refine/critic_hidden_drift_step_{k}_mean'] = float(
++                            np.mean(hidden_drift)
++                        )
++                    input_ratio = critic_aux_k.get('input_injection_ratio_mean')
++                    if input_ratio is not None:
++                        input_ratio = _reduce_aux_per_example(input_ratio)
++                        eval_metrics[f'evaluation/refine/critic_input_injection_ratio_step_{k}_mean'] = float(
++                            np.mean(input_ratio)
++                        )
++                    anchor_alignment = critic_aux_k.get('anchor_alignment_mean')
++                    if anchor_alignment is not None:
++                        anchor_alignment = _reduce_aux_per_example(anchor_alignment)
++                        eval_metrics[f'evaluation/refine/critic_anchor_alignment_step_{k}_mean'] = float(
++                            np.mean(anchor_alignment)
++                        )
++                    if k == total_iters:
++                        critic_final_aux = {
++                            key: np.asarray(value)
++                            for key, value in critic_aux_k.items()
++                            if value is not None
++                        }
 +                if k > 1:
 +                    delta_k = critic_pos_steps[-1] - critic_pos_steps[-2]
 +                    eval_metrics[f'evaluation/refine/critic_delta_step_{k}_mean_abs'] = float(np.mean(np.abs(delta_k)))
@@ -4565,7 +4686,7 @@ index 3660e03..72672d7 100644
 +                        actor_probe_goals,
 +                        behavior_actions,
 +                        num_iters=k,
-+                    )
++                        )
 +                    actor_critic_deltas.append(q_actor_k - q_behavior_k)
 +                    _log_pair_preference_metrics(
 +                        eval_metrics,
@@ -4576,8 +4697,67 @@ index 3660e03..72672d7 100644
 +                        goal_prefix=actor_goal_prefix,
 +                        preferred_name='q_actor',
 +                        reference_name='q_behavior',
-+                        delta_name='q_delta',
-+                        prefer_name='prefer_actor_frac',
++                            delta_name='q_delta',
++                            prefer_name='prefer_actor_frac',
++                        )
++
++            if len(critic_margin_steps) >= 2:
++                margin_gain = critic_margin_steps[-1] - critic_margin_steps[0]
++                _log_scalar_metrics(
++                    eval_metrics,
++                    f'evaluation/refine/critic_margin_gain_1_to_{total_iters}',
++                    margin_gain,
++                    batch=probe_batch,
++                    goal_prefix='value',
++                )
++            if len(actor_critic_deltas) >= 2:
++                actor_q_delta_gain = actor_critic_deltas[-1] - actor_critic_deltas[0]
++                _log_scalar_metrics(
++                    eval_metrics,
++                    f'evaluation/refine/critic_actor_q_delta_gain_1_to_{total_iters}',
++                    actor_q_delta_gain,
++                    batch=probe_batch,
++                    goal_prefix=actor_goal_prefix,
++                )
++            if critic_final_aux is not None:
++                scalar_aux_metrics = {
++                    'evaluation/refine/critic_hidden_drift': 'hidden_drift_mean',
++                    'evaluation/refine/critic_input_injection_ratio': 'input_injection_ratio_mean',
++                    'evaluation/refine/critic_anchor_alignment': 'anchor_alignment_mean',
++                    'evaluation/refine/critic_softmix/expected_steps': 'softmix_expected_steps_mean',
++                    'evaluation/refine/critic_softmix/late_step_mass': 'softmix_late_step_mass_mean',
++                    'evaluation/refine/critic_softmix/entropy_phi': 'softmix_entropy_phi',
++                    'evaluation/refine/critic_softmix/entropy_psi': 'softmix_entropy_psi',
++                }
++                for metric_prefix, aux_key in scalar_aux_metrics.items():
++                    values = critic_final_aux.get(aux_key)
++                    if values is None:
++                        continue
++                    _log_scalar_metrics(
++                        eval_metrics,
++                        metric_prefix,
++                        _reduce_aux_per_example(values),
++                        batch=probe_batch,
++                        goal_prefix='value',
++                    )
++                softmix_weights = critic_final_aux.get('softmix_step_weights_mean')
++                if softmix_weights is not None:
++                    softmix_weights = _reduce_aux_stepwise(softmix_weights)
++                    for step_idx, step_weights in enumerate(softmix_weights, start=1):
++                        _log_scalar_metrics(
++                            eval_metrics,
++                            f'evaluation/refine/critic_softmix/weight_step_{step_idx}',
++                            step_weights,
++                            batch=probe_batch,
++                            goal_prefix='value',
++                        )
++                late_step_mass = critic_final_aux.get('softmix_late_step_mass_mean')
++                if late_step_mass is not None and len(critic_margin_steps) >= 2:
++                    late_step_mass = _reduce_aux_per_example(late_step_mass)
++                    margin_gain = critic_margin_steps[-1] - critic_margin_steps[0]
++                    eval_metrics['evaluation/refine/critic_softmix/late_step_mass_vs_margin_gain_corr'] = _pearson_corr(
++                        late_step_mass,
++                        margin_gain,
 +                    )
 +
 +        should_dump = False
@@ -4626,6 +4806,29 @@ index 3660e03..72672d7 100644
 +                    dump_dict[f'critic_hidden_norm_step_{idx}'] = hidden_norm
 +                if idx - 1 < len(actor_critic_deltas):
 +                    dump_dict[f'critic_step_{idx}_actor_q_delta'] = actor_critic_deltas[idx - 1]
++            if len(critic_margin_steps) >= 2:
++                dump_dict[f'critic_margin_gain_1_to_{len(critic_margin_steps)}'] = critic_margin_steps[-1] - critic_margin_steps[0]
++            if len(actor_critic_deltas) >= 2:
++                dump_dict[f'critic_actor_q_delta_gain_1_to_{len(actor_critic_deltas)}'] = (
++                    actor_critic_deltas[-1] - actor_critic_deltas[0]
++                )
++            if critic_final_aux is not None:
++                final_dump_scalars = {
++                    'critic_hidden_drift_final': 'hidden_drift_mean',
++                    'critic_input_injection_ratio_final': 'input_injection_ratio_mean',
++                    'critic_anchor_alignment_final': 'anchor_alignment_mean',
++                    'critic_softmix_expected_steps_final': 'softmix_expected_steps_mean',
++                    'critic_softmix_late_step_mass_final': 'softmix_late_step_mass_mean',
++                }
++                for dump_key, aux_key in final_dump_scalars.items():
++                    values = critic_final_aux.get(aux_key)
++                    if values is not None:
++                        dump_dict[dump_key] = _reduce_aux_per_example(values)
++                softmix_weights = critic_final_aux.get('softmix_step_weights_mean')
++                if softmix_weights is not None:
++                    softmix_weights = _reduce_aux_stepwise(softmix_weights)
++                    for idx, step_weights in enumerate(softmix_weights, start=1):
++                        dump_dict[f'critic_softmix_weight_step_{idx}_final'] = step_weights
 +        np.savez_compressed(os.path.join(refine_dir, f'step_{step:09d}.npz'), **dump_dict)
 +
 +    def run_evaluation(*, step: int, eval_agent, mark_final: bool = False):
@@ -4797,35 +5000,10 @@ index 3660e03..72672d7 100644
 +        except Exception:
 +            pass
 +
-+        # Actor action stats + behavior divergence (offline RL debugging).
-+        try:
-+            if not config.get('discrete', False):
-+                actor_goals = eval_batch.get('actor_goals', None)
-+                if actor_goals is None:
-+                    actor_goals = eval_batch.get('value_goals', None)
-+                if actor_goals is not None:
-+                    dist = eval_agent.network.select('actor')(eval_batch['observations'], actor_goals)
-+                    a_mode = np.asarray(dist.mode())
-+                    eval_metrics['evaluation/action_mean'] = float(np.mean(a_mode))
-+                    eval_metrics['evaluation/action_std'] = float(np.std(a_mode))
-+                    a_norm = np.linalg.norm(a_mode, axis=-1)
-+                    eval_metrics['evaluation/action_norm_mean'] = float(np.mean(a_norm))
-+                    eval_metrics['evaluation/action_norm_std'] = float(np.std(a_norm))
-+                    eval_metrics['evaluation/action_abs_max'] = float(np.max(np.abs(a_mode)))
-+                    eval_metrics['evaluation/action_saturation_frac'] = float(np.mean((np.abs(a_mode) > 0.99).astype(np.float32)))
-+
-+                    if 'actions' in eval_batch:
-+                        a_b = np.asarray(eval_batch['actions'])
-+                        diff = a_mode - a_b
-+                        eval_metrics['evaluation/policy_behavior_mse'] = float(np.mean(diff**2))
-+                        eval_metrics['evaluation/policy_behavior_l2'] = float(np.mean(np.linalg.norm(diff, axis=-1)))
-+                        eval_metrics['evaluation/policy_behavior_max_diff'] = float(np.max(np.abs(diff)))
-+        except Exception:
-+            pass
-+
 +        _maybe_log_actor_quality(eval_metrics, eval_agent, eval_batch)
 +        _maybe_log_recurrent_refinement(eval_metrics, eval_agent, step=step)
 +
++        final_critic_refine_step = int(config.get('critic_recur_iters', 1))
 +        top_eval_aliases = {
 +            'evaluation/10_critic_margin_mean': 'evaluation/critic_signal/margin_mean',
 +            'evaluation/11_critic_rank_acc': 'evaluation/critic_signal/rank_acc',
@@ -4837,11 +5015,16 @@ index 3660e03..72672d7 100644
 +            'evaluation/17_policy_behavior_mse_mean': 'evaluation/policy_behavior/mse_mean',
 +            'evaluation/18_policy_behavior_l2_mean': 'evaluation/policy_behavior/l2_mean',
 +            'evaluation/19_graph_corr': 'evaluation/critic_geometry/graph_corr',
++            'evaluation/20_refine_margin_gain_mean': f'evaluation/refine/critic_margin_gain_1_to_{final_critic_refine_step}_mean',
++            'evaluation/21_refine_input_ratio_mean': 'evaluation/refine/critic_input_injection_ratio_mean',
++            'evaluation/22_refine_hidden_drift_mean': 'evaluation/refine/critic_hidden_drift_mean',
++            'evaluation/23_refine_softmix_expected_steps_mean': 'evaluation/refine/critic_softmix/expected_steps_mean',
++            'evaluation/24_refine_softmix_late_step_mass_mean': 'evaluation/refine/critic_softmix/late_step_mass_mean',
 +            'evaluation/30_refine_critic_step1_margin_mean': 'evaluation/refine/critic_step_1_signal/margin_mean',
 +            'evaluation/31_refine_critic_step2_margin_mean': 'evaluation/refine/critic_step_2_signal/margin_mean',
 +            'evaluation/32_refine_critic_step3_margin_mean': 'evaluation/refine/critic_step_3_signal/margin_mean',
 +            'evaluation/33_refine_critic_step4_margin_mean': 'evaluation/refine/critic_step_4_signal/margin_mean',
-+            'evaluation/34_refine_critic_step4_actor_q_delta_mean': 'evaluation/refine/critic_step_4_actor_critic/q_delta_mean',
++            'evaluation/34_refine_final_actor_q_delta_mean': f'evaluation/refine/critic_step_{final_critic_refine_step}_actor_critic/q_delta_mean',
 +        }
 +        for alias_key, source_key in top_eval_aliases.items():
 +            if source_key in eval_metrics:
@@ -5008,6 +5191,20 @@ index 3660e03..72672d7 100644
 +            critic_abs_mean, _ = _abs_param_stats(critic_params)
 +            if critic_abs_mean is not None:
 +                train_metrics['params/critic_abs_mean'] = critic_abs_mean
++            input_lambda_leaves = _collect_named_leaves(critic_params, 'input_lambda')
++            if input_lambda_leaves:
++                lambda_rows = []
++                for leaf in input_lambda_leaves:
++                    leaf = np.asarray(leaf, dtype=np.float64)
++                    if leaf.ndim == 1:
++                        lambda_rows.append(leaf[None, :])
++                    else:
++                        lambda_rows.append(leaf.reshape(-1, leaf.shape[-1]))
++                lambda_matrix = np.concatenate(lambda_rows, axis=0)
++                train_metrics['training/critic/input_lambda_abs_mean'] = float(np.mean(np.abs(lambda_matrix)))
++                active_steps = int(config.get('critic_recur_iters', lambda_matrix.shape[-1]))
++                for step_idx, value in enumerate(np.mean(lambda_matrix, axis=0)[:active_steps], start=1):
++                    train_metrics[f'training/critic/input_lambda_step_{step_idx}'] = float(value)
 +
 +            if 'value_goal_source' in batch:
 +                source = np.asarray(batch['value_goal_source'])
@@ -5881,7 +6078,7 @@ index 9c421dd..3da1eab 100644
  
      return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..249fc73 100644
+index 4ee2b26..516a259 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
 @@ -6,6 +6,8 @@ import flax.linen as nn
@@ -5893,7 +6090,7 @@ index 4ee2b26..249fc73 100644
  
  def default_init(scale=1.0):
      """Default kernel initializer."""
-@@ -60,6 +62,401 @@ class MLP(nn.Module):
+@@ -60,6 +62,435 @@ class MLP(nn.Module):
          return x
  
  
@@ -6078,6 +6275,7 @@ index 4ee2b26..249fc73 100644
 +            raise ValueError('Soft-mixture and ACT are alternative adaptive-depth mechanisms; do not enable both together.')
 +
 +        h = nn.Dense(self.hidden_dim, name='input_state_proj')(x)
++        initial_h = h
 +        input_anchor = None
 +        input_lambda = None
 +        if self.use_input_injection:
@@ -6176,6 +6374,9 @@ index 4ee2b26..249fc73 100644
 +            act_accumulated = jnp.zeros(h.shape[:-1], dtype=h.dtype)
 +            act_weighted_h = jnp.zeros_like(h)
 +        hidden_steps = [] if self.use_soft_mixture else None
++        hidden_drift_steps = []
++        input_injection_ratio_steps = [] if input_anchor is not None else None
++        anchor_alignment_steps = [] if input_anchor is not None else None
 +
 +        for k in range(iters):
 +            h1 = h
@@ -6239,6 +6440,18 @@ index 4ee2b26..249fc73 100644
 +            else:
 +                h_next = h + u
 +
++            initial_h_norm = jnp.linalg.norm(initial_h, axis=-1)
++            hidden_drift = jnp.linalg.norm(h_next - initial_h, axis=-1) / (initial_h_norm + 1e-8)
++            hidden_drift_steps.append(hidden_drift)
++            if input_anchor is not None:
++                anchor_norm = jnp.linalg.norm(input_anchor, axis=-1)
++                pre_update_norm = jnp.linalg.norm(h1, axis=-1)
++                input_injection_ratio_steps.append((jnp.abs(input_lambda[k]) * anchor_norm) / (pre_update_norm + 1e-8))
++                anchor_alignment_steps.append(
++                    jnp.sum(h_next * input_anchor, axis=-1)
++                    / (jnp.linalg.norm(h_next, axis=-1) * anchor_norm + 1e-8)
++                )
++
 +            if self.use_act:
 +                still_running = (act_accumulated < (1.0 - self.act_epsilon)).astype(h.dtype)
 +                if k + 1 < act_min_iters:
@@ -6261,11 +6474,14 @@ index 4ee2b26..249fc73 100644
 +        softmix_expected_steps = None
 +        softmix_entropy = None
 +        softmix_last_step_weight = None
++        softmix_late_step_mass = None
++        softmix_step_weights = None
 +        if self.use_soft_mixture:
 +            hidden_stack = jnp.stack(hidden_steps, axis=0)
 +            step_outputs = output_proj(hidden_stack)
 +            step_logits = softmix_gate(hidden_stack).squeeze(-1)
 +            step_weights = nn.softmax(step_logits, axis=0)
++            softmix_step_weights = step_weights
 +            outputs = jnp.sum(step_weights[..., None] * step_outputs, axis=0)
 +            step_ids = jnp.arange(1, iters + 1, dtype=outputs.dtype)
 +            reshape = (iters,) + (1,) * (step_weights.ndim - 1)
@@ -6273,6 +6489,8 @@ index 4ee2b26..249fc73 100644
 +            softmix_expected_steps = jnp.sum(step_weights * step_ids, axis=0)
 +            softmix_entropy = -jnp.sum(step_weights * jnp.log(jnp.maximum(step_weights, 1e-8)), axis=0)
 +            softmix_last_step_weight = step_weights[-1]
++            late_start = min(max(iters // 2, 0), iters - 1)
++            softmix_late_step_mass = jnp.sum(step_weights[late_start:], axis=0)
 +            final_h = jnp.sum(step_weights[..., None] * hidden_stack, axis=0)
 +        else:
 +            final_h = act_weighted_h if self.use_act else h
@@ -6286,6 +6504,19 @@ index 4ee2b26..249fc73 100644
 +                aux['softmix_expected_steps'] = softmix_expected_steps
 +                aux['softmix_entropy'] = softmix_entropy
 +                aux['softmix_last_step_weight'] = softmix_last_step_weight
++                aux['softmix_late_step_mass'] = softmix_late_step_mass
++                aux['softmix_step_weights'] = softmix_step_weights
++            hidden_drift_steps = jnp.stack(hidden_drift_steps, axis=0)
++            aux['hidden_drift_steps'] = hidden_drift_steps
++            aux['hidden_drift'] = hidden_drift_steps[-1]
++            if input_injection_ratio_steps is not None:
++                input_injection_ratio_steps = jnp.stack(input_injection_ratio_steps, axis=0)
++                aux['input_injection_ratio_steps'] = input_injection_ratio_steps
++                aux['input_injection_ratio'] = input_injection_ratio_steps[-1]
++            if anchor_alignment_steps is not None:
++                anchor_alignment_steps = jnp.stack(anchor_alignment_steps, axis=0)
++                aux['anchor_alignment_steps'] = anchor_alignment_steps
++                aux['anchor_alignment'] = anchor_alignment_steps[-1]
 +            aux['final_hidden_norm'] = jnp.linalg.norm(final_h, axis=-1)
 +            return outputs, aux
 +
@@ -6295,7 +6526,7 @@ index 4ee2b26..249fc73 100644
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -164,9 +561,37 @@ class GCActor(nn.Module):
+@@ -164,9 +595,37 @@ class GCActor(nn.Module):
      const_std: bool = True
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -6334,7 +6565,7 @@ index 4ee2b26..249fc73 100644
          self.mean_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
          if self.state_dependent_std:
              self.log_std_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
-@@ -196,7 +621,10 @@ class GCActor(nn.Module):
+@@ -196,7 +655,10 @@ class GCActor(nn.Module):
              if goals is not None:
                  inputs.append(goals)
              inputs = jnp.concatenate(inputs, axis=-1)
@@ -6346,7 +6577,7 @@ index 4ee2b26..249fc73 100644
  
          means = self.mean_net(outputs)
          if self.state_dependent_std:
-@@ -230,9 +658,37 @@ class GCDiscreteActor(nn.Module):
+@@ -230,9 +692,37 @@ class GCDiscreteActor(nn.Module):
      action_dim: int
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -6385,7 +6616,7 @@ index 4ee2b26..249fc73 100644
          self.logit_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
  
      def __call__(
-@@ -257,7 +713,10 @@ class GCDiscreteActor(nn.Module):
+@@ -257,7 +747,10 @@ class GCDiscreteActor(nn.Module):
              if goals is not None:
                  inputs.append(goals)
              inputs = jnp.concatenate(inputs, axis=-1)
@@ -6397,7 +6628,7 @@ index 4ee2b26..249fc73 100644
  
          logits = self.logit_net(outputs)
  
-@@ -282,14 +741,22 @@ class GCValue(nn.Module):
+@@ -282,14 +775,22 @@ class GCValue(nn.Module):
      layer_norm: bool = True
      ensemble: bool = True
      gc_encoder: nn.Module = None
@@ -6425,7 +6656,7 @@ index 4ee2b26..249fc73 100644
  
      def __call__(self, observations, goals=None, actions=None):
          """Return the value/critic function.
-@@ -314,6 +781,77 @@ class GCValue(nn.Module):
+@@ -314,6 +815,77 @@ class GCValue(nn.Module):
          return v
  
  
@@ -6503,7 +6734,7 @@ index 4ee2b26..249fc73 100644
  class GCDiscreteCritic(GCValue):
      """Goal-conditioned critic for discrete actions."""
  
-@@ -347,16 +885,91 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +919,91 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
@@ -6600,7 +6831,7 @@ index 4ee2b26..249fc73 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +977,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +1011,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -6608,7 +6839,7 @@ index 4ee2b26..249fc73 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,16 +989,68 @@ class GCBilinearValue(nn.Module):
+@@ -375,16 +1023,127 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
@@ -6623,12 +6854,28 @@ index 4ee2b26..249fc73 100644
 +            psi_steps = psi_aux.get('act_expected_steps')
 +            phi_hidden_norm = phi_aux.get('final_hidden_norm')
 +            psi_hidden_norm = psi_aux.get('final_hidden_norm')
++            phi_hidden_drift = phi_aux.get('hidden_drift')
++            psi_hidden_drift = psi_aux.get('hidden_drift')
++            phi_hidden_drift_steps = phi_aux.get('hidden_drift_steps')
++            psi_hidden_drift_steps = psi_aux.get('hidden_drift_steps')
++            phi_input_ratio = phi_aux.get('input_injection_ratio')
++            psi_input_ratio = psi_aux.get('input_injection_ratio')
++            phi_input_ratio_steps = phi_aux.get('input_injection_ratio_steps')
++            psi_input_ratio_steps = psi_aux.get('input_injection_ratio_steps')
++            phi_anchor_alignment = phi_aux.get('anchor_alignment')
++            psi_anchor_alignment = psi_aux.get('anchor_alignment')
++            phi_anchor_alignment_steps = phi_aux.get('anchor_alignment_steps')
++            psi_anchor_alignment_steps = psi_aux.get('anchor_alignment_steps')
 +            phi_softmix_steps = phi_aux.get('softmix_expected_steps')
 +            psi_softmix_steps = psi_aux.get('softmix_expected_steps')
 +            phi_softmix_entropy = phi_aux.get('softmix_entropy')
 +            psi_softmix_entropy = psi_aux.get('softmix_entropy')
 +            phi_softmix_last = phi_aux.get('softmix_last_step_weight')
 +            psi_softmix_last = psi_aux.get('softmix_last_step_weight')
++            phi_softmix_late = phi_aux.get('softmix_late_step_mass')
++            psi_softmix_late = psi_aux.get('softmix_late_step_mass')
++            phi_softmix_weights = phi_aux.get('softmix_step_weights')
++            psi_softmix_weights = psi_aux.get('softmix_step_weights')
 +            if phi_steps is not None and psi_steps is not None:
 +                aux.update(
 +                    {
@@ -6643,12 +6890,43 @@ index 4ee2b26..249fc73 100644
 +                aux['final_hidden_norm_psi'] = psi_hidden_norm
 +            if phi_hidden_norm is not None and psi_hidden_norm is not None:
 +                aux['final_hidden_norm_total'] = jnp.sqrt(phi_hidden_norm**2 + psi_hidden_norm**2)
++            if phi_hidden_drift is not None:
++                aux['hidden_drift_phi'] = phi_hidden_drift
++            if psi_hidden_drift is not None:
++                aux['hidden_drift_psi'] = psi_hidden_drift
++            if phi_hidden_drift is not None and psi_hidden_drift is not None:
++                aux['hidden_drift_mean'] = 0.5 * (phi_hidden_drift + psi_hidden_drift)
++            if phi_hidden_drift_steps is not None:
++                aux['hidden_drift_steps_phi'] = phi_hidden_drift_steps
++            if psi_hidden_drift_steps is not None:
++                aux['hidden_drift_steps_psi'] = psi_hidden_drift_steps
++            if phi_input_ratio is not None:
++                aux['input_injection_ratio_phi'] = phi_input_ratio
++            if psi_input_ratio is not None:
++                aux['input_injection_ratio_psi'] = psi_input_ratio
++            if phi_input_ratio is not None and psi_input_ratio is not None:
++                aux['input_injection_ratio_mean'] = 0.5 * (phi_input_ratio + psi_input_ratio)
++            if phi_input_ratio_steps is not None:
++                aux['input_injection_ratio_steps_phi'] = phi_input_ratio_steps
++            if psi_input_ratio_steps is not None:
++                aux['input_injection_ratio_steps_psi'] = psi_input_ratio_steps
++            if phi_anchor_alignment is not None:
++                aux['anchor_alignment_phi'] = phi_anchor_alignment
++            if psi_anchor_alignment is not None:
++                aux['anchor_alignment_psi'] = psi_anchor_alignment
++            if phi_anchor_alignment is not None and psi_anchor_alignment is not None:
++                aux['anchor_alignment_mean'] = 0.5 * (phi_anchor_alignment + psi_anchor_alignment)
++            if phi_anchor_alignment_steps is not None:
++                aux['anchor_alignment_steps_phi'] = phi_anchor_alignment_steps
++            if psi_anchor_alignment_steps is not None:
++                aux['anchor_alignment_steps_psi'] = psi_anchor_alignment_steps
 +            if phi_softmix_steps is not None:
 +                aux['softmix_expected_steps_phi'] = phi_softmix_steps
 +            if psi_softmix_steps is not None:
 +                aux['softmix_expected_steps_psi'] = psi_softmix_steps
 +            if phi_softmix_steps is not None and psi_softmix_steps is not None:
 +                aux['softmix_expected_steps_total'] = phi_softmix_steps + psi_softmix_steps
++                aux['softmix_expected_steps_mean'] = 0.5 * (phi_softmix_steps + psi_softmix_steps)
 +            if phi_softmix_entropy is not None:
 +                aux['softmix_entropy_phi'] = phi_softmix_entropy
 +            if psi_softmix_entropy is not None:
@@ -6657,6 +6935,18 @@ index 4ee2b26..249fc73 100644
 +                aux['softmix_last_step_weight_phi'] = phi_softmix_last
 +            if psi_softmix_last is not None:
 +                aux['softmix_last_step_weight_psi'] = psi_softmix_last
++            if phi_softmix_late is not None:
++                aux['softmix_late_step_mass_phi'] = phi_softmix_late
++            if psi_softmix_late is not None:
++                aux['softmix_late_step_mass_psi'] = psi_softmix_late
++            if phi_softmix_late is not None and psi_softmix_late is not None:
++                aux['softmix_late_step_mass_mean'] = 0.5 * (phi_softmix_late + psi_softmix_late)
++            if phi_softmix_weights is not None:
++                aux['softmix_step_weights_phi'] = phi_softmix_weights
++            if psi_softmix_weights is not None:
++                aux['softmix_step_weights_psi'] = psi_softmix_weights
++            if phi_softmix_weights is not None and psi_softmix_weights is not None:
++                aux['softmix_step_weights_mean'] = 0.5 * (phi_softmix_weights + psi_softmix_weights)
 +        elif self.backbone == 'recur_tied':
 +            # IMPORTANT: nn.vmap does not support kwargs; pass iterative args positionally.
 +            phi = self.phi(phi_inputs, num_iters, False, phi_inputs)
@@ -6679,7 +6969,7 @@ index 4ee2b26..249fc73 100644
          else:
              return v
  
-@@ -394,9 +1060,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+@@ -394,9 +1153,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
  
      action_dim: int = None
  
@@ -6691,7 +6981,7 @@ index 4ee2b26..249fc73 100644
  
  
  class GCMRNValue(nn.Module):
-@@ -416,9 +1082,58 @@ class GCMRNValue(nn.Module):
+@@ -416,9 +1175,58 @@ class GCMRNValue(nn.Module):
      latent_dim: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -6751,7 +7041,7 @@ index 4ee2b26..249fc73 100644
  
      def __call__(self, observations, goals, is_phi=False, info=False):
          """Return the MRN value function.
-@@ -436,8 +1151,12 @@ class GCMRNValue(nn.Module):
+@@ -436,8 +1244,12 @@ class GCMRNValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)
@@ -6766,7 +7056,7 @@ index 4ee2b26..249fc73 100644
  
          sym_s = phi_s[..., : self.latent_dim // 2]
          sym_g = phi_g[..., : self.latent_dim // 2]
-@@ -471,9 +1190,58 @@ class GCIQEValue(nn.Module):
+@@ -471,9 +1283,58 @@ class GCIQEValue(nn.Module):
      dim_per_component: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -6826,7 +7116,7 @@ index 4ee2b26..249fc73 100644
          self.alpha = Param()
  
      def __call__(self, observations, goals, is_phi=False, info=False):
-@@ -493,8 +1261,12 @@ class GCIQEValue(nn.Module):
+@@ -493,8 +1354,12 @@ class GCIQEValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)
