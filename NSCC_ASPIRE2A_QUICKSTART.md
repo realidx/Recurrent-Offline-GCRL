@@ -14,7 +14,7 @@ The Slurm launchers were also relaxed from a hardcoded `h100-47` request to a ge
 
 The PBS wrappers now default to `CONDA_MODULE=none` and `CONDA_EXE=/app/apps/miniforge3/25.3.1/bin/conda`, which avoids the broken `miniforge3/25.3.1` modulefile in batch jobs.
 
-The training launchers now default to:
+The PBS wrappers now default to:
 
 - `CONDA_ENV=recurrent`
 - `CONDA_EXE=/app/apps/miniforge3/25.3.1/bin/conda`
@@ -23,6 +23,8 @@ The training launchers now default to:
 - `DATASET_DIR=${SCRATCH_ROOT}/OGBench/data`
 
 where `SCRATCH_ROOT` resolves to `${SCRATCH}` if available, else `/scratch/users/nus/${USER}`.
+
+The shared Slurm launchers still default to repo-local paths (`exp` and `.ogbench_data`) so they remain portable to non-NSCC clusters.
 
 ## Cluster Notes
 

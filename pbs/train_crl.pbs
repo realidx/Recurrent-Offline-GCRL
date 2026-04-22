@@ -17,7 +17,10 @@ export SLURM_JOB_ID="${PBS_JOBID:-}"
 export SLURM_JOB_NODELIST="$(hostname)"
 CONDA_MODULE_DEFAULT="${CONDA_MODULE:-none}"
 CONDA_EXE_DEFAULT="${CONDA_EXE:-/app/apps/miniforge3/25.3.1/bin/conda}"
+SCRATCH_ROOT_DEFAULT="${SCRATCH_ROOT:-${SCRATCH:-/scratch/users/nus/${USER}}}"
 export CONDA_EXE="${CONDA_EXE_DEFAULT}"
+export SAVE_DIR="${SAVE_DIR:-${SCRATCH_ROOT_DEFAULT}/OGBench/exp}"
+export DATASET_DIR="${DATASET_DIR:-${SCRATCH_ROOT_DEFAULT}/OGBench/data}"
 
 mkdir -p logs/phase_5
 
