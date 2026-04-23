@@ -271,28 +271,114 @@ Primary question answered by this section:
 Purpose:
 
 - explain why iterative refinement helps
-- connect the performance gain to critic signal quality
+- connect the performance gain to actor-usable critic/value signal quality
 - make the mechanism story reviewer-facing rather than a loose collection of diagnostics
+- define the exact mechanism-only experiment slate before running new jobs
 
-Required measurements:
+Mechanism-only thesis:
 
-- value margin
-- ranking quality
-- positive vs negative future-state separation
-- one horizon-sensitive analysis bucketed by distance or goal difficulty
-- refinement-step curves showing how the signal changes across iterations
+> Recurrent refinement helps when the offline dataset contains weak but usable stitching signal. It improves the local preference signal used by the actor, especially on hard state-goal pairs. It does not necessarily learn a uniformly better global geometry, and it helps less when the data is too sparse or underdetermined.
 
 This section must directly answer:
 
 > What critic pathology does the MLP have, and what does iterative refinement fix?
 
+The answer should be:
+
+> The MLP critic/value network can produce weak or ambiguous local preferences on hard goal-conditioned pairs. Recurrent refinement makes this signal more actor-usable through repeated correction, not simply by learning a better global maze-distance metric or by adding more parameters.
+
 Mechanism claims to support:
 
-- the baseline critic can learn a coarse global value structure while still producing one-shot judgments that are too blunt or brittle for long-horizon actor extraction
-- iterative refinement progressively disambiguates hard state-goal pairs rather than merely producing a deeper one-shot predictor
-- the first major gain is not only sharper final margins, but a critic signal that the actor can use more safely
-- the gain is selective to hard medium/long-horizon stitching decisions rather than uniform across all cases
-- iterative refinement makes the critic more operationally useful for control, not necessarily more globally metric-like
+- the baseline critic/value network can learn coarse structure while still producing one-shot judgments that are too blunt or brittle for actor extraction
+- iterative refinement progressively disambiguates hard state-goal pairs rather than merely acting as a deeper one-shot predictor
+- the first major gain is not only sharper final margins, but a signal that changes actor extraction in the right direction
+- the gain is selective to stitchable hard pairs rather than uniform across all cases
+- iterative refinement makes the signal more operationally useful for control, not necessarily more globally metric-like
+
+What not to claim:
+
+- do not claim recurrence is always better than feedforward models
+- do not claim the model solves sparse long-horizon exploration or all offline GCRL bottlenecks
+- do not claim the mechanism is better global maze geometry unless graph-distance metrics support it
+- do not reduce the story to "margin goes up"
+- do not make input injection or output soft mixture part of the final mechanism because current evidence does not show benefit
+
+Final recurrent model for the mechanism story:
+
+- tied iterative refinement over a critic/value hidden state
+- SwiGLU update block
+- step embedding or step conditioning
+- FiLM modulation when enabled by the chosen config
+- LayerScale stabilization
+- pre-LN recurrent update
+- fixed iteration count, with `iter4` as the current default final model
+
+The final model does not include:
+
+- repeated input injection into every recurrent step
+- output soft mixture over all recurrent steps
+
+Those variants can remain in appendix or design-search notes, but they should not be central mechanism figures.
+
+Algorithm roles for mechanism:
+
+- `CRL` should be the main mechanism microscope because it exposes a clean contrastive state-action-goal critic.
+- `IQL` / `GCIQL` should be the value-network validation algorithm because actor extraction is mediated by learned value/advantage estimates.
+- `HIQL` should not be central for this mechanism section because its high-level and low-level actors make the causal value-network story less clean.
+- `SAW` and other methods can be future work or appendix breadth after the CRL/IQL mechanism is stable.
+
+Be precise about IQL:
+
+- do not say IQL uses only a value network
+- say that IQL/GCIQL represents a value-learning and advantage-weighted actor-extraction setting
+- say that IQL/GCIQL checks whether the same recurrent-refinement mechanism appears outside the contrastive CRL critic
+
+Mechanism environment slate:
+
+| Role | Environment | Reason |
+| --- | --- | --- |
+| Clean positive case | `antmaze-medium-stitch-v0` | Best for showing iteration-depth and early actor-usability effects clearly. |
+| Main hard positive case | `antmaze-large-stitch-v0` | Stronger long-horizon stitching task for capacity controls and headline mechanism plots. |
+| Boundary case | `antmaze-giant-navigate-v0` | Tests whether the method still helps when stitching signal is sparse or underdetermined. |
+
+A manipulation task is optional for the mechanism section. Add it only if the paper later needs evidence that the mechanism is not maze-specific.
+
+Seed protocol:
+
+- minimum acceptable mechanism evidence: 3 seeds
+- preferred headline mechanism evidence: 5 seeds
+- qualitative plots such as critic fields or per-step trajectory visualizations: 1 representative seed is fine, but must be backed by multi-seed quantitative plots
+- recommended seed set: start with `0,1,2`; add `3,4` for final figures
+
+Required CRL mechanism experiments:
+
+| Environment | Variants | Purpose |
+| --- | --- | --- |
+| `antmaze-medium-stitch-v0` | MLP, iter1, iter2, iter4 | Clean iteration-depth mechanism and early learning. |
+| `antmaze-large-stitch-v0` | MLP, wider MLP, deeper MLP, iter1, iter2, iter4 | Main hard case and capacity control. |
+| `antmaze-giant-navigate-v0` | MLP, iter4, optionally iter2 | Boundary case where recurrence may help less. |
+
+Required IQL/GCIQL mechanism experiments:
+
+| Environment | Variants | Purpose |
+| --- | --- | --- |
+| `antmaze-large-stitch-v0` | MLP value, iter4 value, optionally iter2 | Validate that recurrent value refinement improves actor extraction. |
+| `antmaze-giant-navigate-v0` | MLP value, iter4 value | Check whether the value mechanism weakens in sparse navigate setting. |
+
+If compute is tight, skip IQL on `medium-stitch`; CRL already covers the clean mechanism case.
+
+Feedforward controls:
+
+- standard MLP baseline
+- parameter-matched or near-parameter-matched wider MLP
+- parameter-matched or near-parameter-matched deeper MLP
+- one-step recurrent/SwiGLU model if available
+- iterative recurrent model at `iter2` and `iter4`
+
+The key comparison is not only `MLP` versus `iter4`.
+The key comparison is:
+
+> Does multi-step tied refinement outperform comparable one-shot feedforward capacity?
 
 Core empirical story from current CRL results on `antmaze-medium-stitch-v0`:
 
@@ -312,29 +398,40 @@ Recommended section structure:
 3. Show that refinement itself matters:
    `iter1` is not enough; the main gain appears once the critic can revise its estimate multiple times.
 4. Show selectivity:
-   the improvement is strongest on medium-horizon and path-sensitive buckets and on the hardest stitch subtasks.
+   the improvement is strongest on stitchable hard pairs, medium-horizon/path-sensitive buckets, and the hardest stitch subtasks.
 5. State the geometry caveat:
    the recurrent critic is more useful for control even when it is not a uniformly better global maze-distance surrogate.
+6. State the boundary:
+   the mechanism should help less on sparse navigate settings where the offline data lacks enough stitchable signal.
 
 Recommended figures:
 
-1. Qualitative critic-field figure.
-   Compare baseline vs `iter1` vs `iter4` on antmaze.
+1. Baseline-pathology figure.
+   Compare MLP and recurrent models on success plus fixed-probe hard-pair signal metrics.
    Goal:
-   if visible in the field plots, show specific local shortcut or support-mismatch failures in the baseline and more control-useful critic fields in the recurrent model, without claiming that recurrent must be globally more geometry-faithful.
-   This figure should support the opening failure-mode paragraph and the final geometry-caveat paragraph.
+   show that the baseline is not merely lower reward; its learned signal is less useful on the pairs that require stitching.
 
 2. Iteration-depth mechanism figure.
-   Plot margin or separation versus refinement depth on a fixed probe set, broken out by difficulty buckets such as:
-   `traj_short`, `traj_medium`, `maze_path_medium`.
+   Plot fixed-probe signal metrics for `iter1`, `iter2`, and `iter4`, plus per-recurrent-step metrics from the same trained model.
    Goal:
-   show that later refinement steps do real corrective work and that the effect concentrates on hard buckets.
+   show that later refinement steps do real corrective work and that the effect concentrates on hard or stitchable buckets.
    This figure is the main evidence that iterative refinement itself matters.
 
 3. Actor-extraction figure.
-   Plot `q_delta_mean` and policy-behavior drift versus refinement depth or versus model variant (`baseline`, `iter1`, `iter2`, `iter3`, `iter4`).
+   For CRL, plot actor-action score minus behavior-action score and the fraction where the actor action scores higher.
+   For IQL/GCIQL, plot advantage distribution, positive-advantage fraction, AWR weight mean/max, and AWR effective sample size.
    Goal:
-   show that the critic becomes progressively more usable by the actor, which is especially important in the offline setting.
+   show that the critic/value signal becomes more usable for actor extraction.
+
+4. Recurrence-versus-capacity figure.
+   Compare MLP, wider MLP, deeper MLP, iter1, iter2, and iter4.
+   Goal:
+   show that the effect is not explained only by parameter count or a stronger feedforward block.
+
+5. Regime-boundary figure.
+   Compare `antmaze-large-stitch-v0` and `antmaze-giant-navigate-v0`.
+   Goal:
+   show that recurrence helps when the dataset has stitchable signal and helps less when information is sparse or underdetermined.
 
 How the figures and narrative should connect:
 
@@ -344,6 +441,10 @@ How the figures and narrative should connect:
   what do extra refinement steps actually change?
 - Figure 3 answers:
   why does that matter for offline policy extraction?
+- Figure 4 answers:
+  why is this not just parameter count?
+- Figure 5 answers:
+  where does the mechanism stop helping?
 
 The mechanism subsection should not read as three disjoint diagnostics.
 It should read as one argument:
@@ -352,6 +453,7 @@ It should read as one argument:
 - refinement progressively corrects it
 - this correction first appears as improved actor usability
 - and later appears as stronger medium-horizon discrimination and better stitching success
+- the effect weakens when the dataset does not contain enough stitchable signal
 
 Most valuable quantitative points to emphasize:
 
@@ -360,16 +462,62 @@ Most valuable quantitative points to emphasize:
 - the `iter1` to `iter2` jump is more important than the `iter3` to `iter4` gap
 - `task3` and `task4` or similarly hard stitch subtasks carry a disproportionate share of the gain
 - medium-horizon buckets are more diagnostic than global averages alone
+- CRL actor-usability metrics should move in the same direction as success
+- IQL/GCIQL advantage and AWR-weight diagnostics should show the same qualitative trend on at least one hard stitch task
+
+Mechanism logging to track during training and evaluation:
+
+- outcome metrics: `evaluation/overall_success`, `evaluation/best_so_far_success`, per-task success, and return as secondary
+- fairness metrics: critic/value parameter count, actor parameter count, wall-clock hours, updates per second, number of gradient updates, and recurrent iteration count
+- fixed-probe CRL metrics: `evaluation/probe/critic_signal/margin_mean`, `margin_std`, `positive_score_mean`, `negative_score_mean`, `rank_accuracy`, and `hard_margin_mean`
+- fixed-probe IQL/GCIQL metrics: `evaluation/probe/value_signal/margin_mean`, `margin_std`, `rank_accuracy`, and `hard_margin_mean`
+- CRL actor-usability metrics: `evaluation/probe/actor_critic/q_actor_mean`, `q_behavior_mean`, `q_delta_mean`, and `prefer_actor_frac`
+- IQL/GCIQL actor-usability metrics: `evaluation/probe/actor_value/adv_mean`, `adv_std`, `positive_adv_frac`, `awr_weight_mean`, `awr_weight_max`, and `awr_weight_ess_frac`
+- policy-behavior metrics when available: `evaluation/probe/policy_behavior/mse_mean`, `l2_mean`, and `evaluation/probe/actor_behavior_log_prob`
+- recurrent-step metrics: `evaluation/refine/critic_step_k_signal/*`, `evaluation/refine/value_step_k_signal/*`, final-minus-initial deltas, hidden-state norm, and hidden-state drift
+- geometry controls: graph-distance correlation and hard-pair graph-distance correlation
+- training health metrics: critic/value loss, actor loss, critic/value gradient norm, actor gradient norm, CRL contrastive score margin, and IQL/GCIQL advantage/AWR-weight statistics
+- dataset sanity metrics: goal-source composition, horizon or temporal-distance buckets, easy/medium/hard probe-pair fractions, and task ID distribution
+
+Metrics to demote:
+
+- input-injection ratios
+- soft-mixture weights or entropy
+- absolute Q/value magnitude without paired ranking or margin interpretation
+- duplicate percentiles for every metric
+- per-ensemble min/max debug metrics unless diagnosing instability
+- wall-clock-only comparisons without parameter and update counts
+
+Decision rules:
+
+- strong enough: `iter4` beats MLP and matched feedforward controls on a stitch task
+- strong enough: `iter2` or `iter4` improves fixed-probe hard-pair signal over MLP
+- strong enough: recurrent-step metrics show signal improvement from early to final refinement steps
+- strong enough: actor-usability metrics improve in the same direction as success
+- strong enough: IQL/GCIQL shows the same qualitative value/actor-extraction trend on at least one hard stitch task
+- strong enough: the navigate boundary case shows smaller or less consistent gains
+- needs revision: success improves but actor-usability metrics do not move
+- needs revision: fixed-probe signal improves only on easy pairs
+- needs revision: wider or deeper MLP matches recurrence at similar compute
+- needs revision: IQL/GCIQL shows the opposite trend from CRL on the same task
 
 What not to claim:
 
 - do not claim that iterative refinement simply learns a uniformly better maze metric
 - do not claim that every geometry statistic must improve
 - do not reduce the mechanism story to "margin goes up"
+- do not claim that input injection or output soft mixture are part of the final mechanism
 
 Preferred conclusion of this section:
 
-> Iterative refinement helps because long-horizon offline goal-conditioned value estimation is a sequential disambiguation problem in disguise. The recurrent critic repeatedly corrects an initially coarse state-goal judgment, reduces actor-facing brittleness early in training, and ultimately sharpens medium-horizon supported-vs-unsupported decisions that are critical for stitching.
+> Recurrent refinement helps because long-horizon offline goal-conditioned value estimation contains a sequential disambiguation problem. The recurrent critic/value network repeatedly corrects an initially coarse judgment and makes the resulting signal more useful for actor extraction. This improvement appears most clearly on stitchable hard pairs and does not require the model to become a uniformly better global maze-distance predictor.
+
+Immediate mechanism experiment order:
+
+1. Smoke-test the logging on one short CRL run on `antmaze-medium-stitch-v0`.
+2. Run CRL `MLP`, `iter1`, `iter2`, and `iter4` on `antmaze-medium-stitch-v0` for 3 seeds.
+3. Run CRL capacity controls on `antmaze-large-stitch-v0` for 3 seeds.
+4. Run CRL `MLP` and `iter4` on `antmaze-giant-navigate-v0` for the boundary case.
 
 ### C. Component ablation
 

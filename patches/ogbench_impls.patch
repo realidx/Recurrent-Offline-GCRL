@@ -972,6 +972,154 @@ index 53109ab..dc94c52 100644
          )
      )
      return config
+diff --git a/impls/agents/gciql.py b/impls/agents/gciql.py
+index 559df71..b51d35a 100644
+--- a/impls/agents/gciql.py
++++ b/impls/agents/gciql.py
+@@ -8,7 +8,7 @@ import ml_collections
+ import optax
+ from utils.encoders import GCEncoder, encoder_modules
+ from utils.flax_utils import ModuleDict, TrainState, nonpytree_field
+-from utils.networks import GCActor, GCDiscreteActor, GCDiscreteCritic, GCValue
++from utils.networks import GCActor, GCDiscreteActor, GCDiscreteCritic, GCRecurrentValue, GCValue
+ 
+ 
+ class GCIQLAgent(flax.struct.PyTreeNode):
+@@ -74,10 +74,22 @@ class GCIQLAgent(flax.struct.PyTreeNode):
+             log_prob = dist.log_prob(batch['actions'])
+ 
+             actor_loss = -(exp_a * log_prob).mean()
++            weight_sum = jnp.sum(exp_a)
++            weight_ess = (weight_sum**2) / (jnp.sum(exp_a**2) + 1e-8)
++            weight_ess_frac = weight_ess / batch['observations'].shape[0]
+ 
+             actor_info = {
+                 'actor_loss': actor_loss,
+                 'adv': adv.mean(),
++                'adv_mean': adv.mean(),
++                'adv_std': adv.std(),
++                'adv_p10': jnp.quantile(adv, 0.10),
++                'adv_p50': jnp.quantile(adv, 0.50),
++                'adv_p90': jnp.quantile(adv, 0.90),
++                'positive_adv_frac': jnp.mean((adv > 0).astype(jnp.float32)),
++                'awr_weight_mean': exp_a.mean(),
++                'awr_weight_max': exp_a.max(),
++                'awr_weight_ess_frac': weight_ess_frac,
+                 'bc_log_prob': log_prob.mean(),
+             }
+             if not self.config['discrete']:
+@@ -214,15 +226,47 @@ class GCIQLAgent(flax.struct.PyTreeNode):
+             encoders['critic'] = GCEncoder(concat_encoder=encoder_module())
+             encoders['actor'] = GCEncoder(concat_encoder=encoder_module())
+ 
++        def make_scalar_value_module(module_name, *, ensemble, gc_encoder):
++            backbone = str(config.get(f'{module_name}_backbone', 'mlp'))
++            if backbone == 'mlp':
++                return GCValue(
++                    hidden_dims=config['value_hidden_dims'],
++                    layer_norm=config['layer_norm'],
++                    ensemble=ensemble,
++                    gc_encoder=gc_encoder,
++                )
++            if backbone == 'recur_tied':
++                return GCRecurrentValue(
++                    hidden_dims=config['value_hidden_dims'],
++                    layer_norm=config['layer_norm'],
++                    ensemble=ensemble,
++                    gc_encoder=gc_encoder,
++                    recur_num_iters=int(config.get(f'{module_name}_recur_iters', 4)),
++                    recur_num_dense_layers=int(config.get(f'{module_name}_recur_num_dense_layers', 2)),
++                    recur_block_type=str(config.get(f'{module_name}_recur_block_type', 'dense')),
++                    recur_max_iters=int(config.get(f'{module_name}_recur_max_iters', 16)),
++                    recur_ln_mode=str(config.get(f'{module_name}_recur_ln_mode', 'per_layer_final')),
++                    recur_use_step_info=bool(config.get(f'{module_name}_recur_use_step_info', False)),
++                    recur_sinusoidal=bool(config.get(f'{module_name}_recur_sinusoidal', False)),
++                    recur_use_film=bool(config.get(f'{module_name}_recur_use_film', True)),
++                    recur_film_mode=str(config.get(f'{module_name}_recur_film_mode', 'hidden')),
++                    recur_use_input_injection=bool(config.get(f'{module_name}_recur_use_input_injection', False)),
++                    recur_use_soft_mixture=bool(config.get(f'{module_name}_recur_use_soft_mixture', False)),
++                    recur_use_layerscale=bool(config.get(f'{module_name}_recur_use_layerscale', True)),
++                    recur_swiglu_pre_ln=bool(config.get(f'{module_name}_recur_swiglu_pre_ln', True)),
++                    recur_use_act=bool(config.get(f'{module_name}_recur_use_act', False)),
++                    recur_act_epsilon=float(config.get(f'{module_name}_recur_act_epsilon', 0.01)),
++                    recur_act_min_iters=int(config.get(f'{module_name}_recur_act_min_iters', 1)),
++                    layerscale_init=float(config.get(f'{module_name}_layerscale_init', 1e-2)),
++                )
++            raise ValueError(f"Unsupported {module_name}_backbone={backbone!r}. Use 'mlp' or 'recur_tied'.")
++
+         # Define value and actor networks.
+-        value_def = GCValue(
+-            hidden_dims=config['value_hidden_dims'],
+-            layer_norm=config['layer_norm'],
+-            ensemble=False,
+-            gc_encoder=encoders.get('value'),
+-        )
++        value_def = make_scalar_value_module('value', ensemble=False, gc_encoder=encoders.get('value'))
+ 
+         if config['discrete']:
++            if str(config.get('critic_backbone', 'mlp')) != 'mlp':
++                raise ValueError('GCIQL recurrent critic is only wired for continuous actions.')
+             critic_def = GCDiscreteCritic(
+                 hidden_dims=config['value_hidden_dims'],
+                 layer_norm=config['layer_norm'],
+@@ -231,12 +275,7 @@ class GCIQLAgent(flax.struct.PyTreeNode):
+                 action_dim=action_dim,
+             )
+         else:
+-            critic_def = GCValue(
+-                hidden_dims=config['value_hidden_dims'],
+-                layer_norm=config['layer_norm'],
+-                ensemble=True,
+-                gc_encoder=encoders.get('critic'),
+-            )
++            critic_def = make_scalar_value_module('critic', ensemble=True, gc_encoder=encoders.get('critic'))
+ 
+         if config['discrete']:
+             actor_def = GCDiscreteActor(
+@@ -291,6 +330,43 @@ def get_config():
+             const_std=True,  # Whether to use constant standard deviation for the actor.
+             discrete=False,  # Whether the action space is discrete.
+             encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
++            # Value/critic backbone hyperparameters (mlp baseline or tied recurrent scalar value).
++            value_backbone='mlp',  # 'mlp' | 'recur_tied'.
++            value_recur_iters=4,
++            value_recur_num_dense_layers=2,
++            value_recur_block_type='dense',
++            value_recur_max_iters=16,
++            value_recur_ln_mode='per_layer_final',
++            value_recur_use_step_info=False,
++            value_recur_sinusoidal=False,
++            value_recur_use_film=True,
++            value_recur_film_mode='hidden',
++            value_recur_use_input_injection=False,
++            value_recur_use_soft_mixture=False,
++            value_recur_use_layerscale=True,
++            value_recur_swiglu_pre_ln=True,
++            value_recur_use_act=False,
++            value_recur_act_epsilon=0.01,
++            value_recur_act_min_iters=1,
++            value_layerscale_init=1e-2,
++            critic_backbone='mlp',  # 'mlp' | 'recur_tied'.
++            critic_recur_iters=4,
++            critic_recur_num_dense_layers=2,
++            critic_recur_block_type='dense',
++            critic_recur_max_iters=16,
++            critic_recur_ln_mode='per_layer_final',
++            critic_recur_use_step_info=False,
++            critic_recur_sinusoidal=False,
++            critic_recur_use_film=True,
++            critic_recur_film_mode='hidden',
++            critic_recur_use_input_injection=False,
++            critic_recur_use_soft_mixture=False,
++            critic_recur_use_layerscale=True,
++            critic_recur_swiglu_pre_ln=True,
++            critic_recur_use_act=False,
++            critic_recur_act_epsilon=0.01,
++            critic_recur_act_min_iters=1,
++            critic_layerscale_init=1e-2,
+             # Dataset hyperparameters.
+             dataset_class='GCDataset',  # Dataset class name.
+             value_p_curgoal=0.2,  # Probability of using the current state as the value goal.
 diff --git a/impls/agents/hiql.py b/impls/agents/hiql.py
 index 63e5dee..b1eaeb3 100644
 --- a/impls/agents/hiql.py
@@ -3401,7 +3549,7 @@ index 0000000..60716d2
 +if __name__ == '__main__':
 +    main()
 diff --git a/impls/main.py b/impls/main.py
-index 3660e03..5f952a2 100644
+index 3660e03..9164c80 100644
 --- a/impls/main.py
 +++ b/impls/main.py
 @@ -1,17 +1,27 @@
@@ -3691,7 +3839,7 @@ index 3660e03..5f952a2 100644
  
      FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, FLAGS.run_group, exp_name)
      os.makedirs(FLAGS.save_dir, exist_ok=True)
-@@ -53,108 +289,1588 @@ def main(_):
+@@ -53,108 +289,1771 @@ def main(_):
      with open(os.path.join(FLAGS.save_dir, 'flags.json'), 'w') as f:
          json.dump(flag_dict, f)
  
@@ -3877,6 +4025,11 @@ index 3660e03..5f952a2 100644
 +                'evaluation/32_',
 +                'evaluation/33_',
 +                'evaluation/34_',
++                'evaluation/40_',
++                'evaluation/41_',
++                'evaluation/42_',
++                'evaluation/43_',
++                'evaluation/44_',
 +            )
 +            filtered = {}
 +            for key, value in metrics.items():
@@ -3910,6 +4063,17 @@ index 3660e03..5f952a2 100644
 +                'training/actor/bc_loss',
 +                'training/actor/q_loss',
 +                'training/actor/q_mean',
++                'training/actor/adv_mean',
++                'training/actor/adv_std',
++                'training/actor/adv_p10',
++                'training/actor/adv_p50',
++                'training/actor/adv_p90',
++                'training/actor/positive_adv_frac',
++                'training/actor/awr_weight_mean',
++                'training/actor/awr_weight_max',
++                'training/actor/awr_weight_ess_frac',
++                'training/actor/bc_log_prob',
++                'training/actor/mse',
 +                'action/policy_behavior_mse',
 +                'params/critic_abs_mean',
 +                'time/sps',
@@ -4486,6 +4650,167 @@ index 3660e03..5f952a2 100644
 +        probe_idxs_cache = np.asarray(probe_idxs)
 +        return probe_batch_cache, probe_idxs_cache
 +
++    def _maybe_log_fixed_probe_metrics(eval_metrics, eval_agent):
++        """Log comparable fixed-probe diagnostics for both MLP and recurrent models."""
++        probe_batch, _ = _get_probe_batch()
++        probe_goals = probe_batch.get('value_goals', probe_batch.get('goals'))
++        if probe_goals is None:
++            return
++        probe_negative_goals = _negative_goal_batch(probe_batch, goal_key='value_goals')
++        behavior_actions = np.asarray(probe_batch['actions']) if 'actions' in probe_batch else None
++
++        has_probe_critic = critic_module_name is not None
++        if has_probe_critic and behavior_actions is not None:
++            critic_values = _critic_forward(
++                eval_agent,
++                probe_batch['observations'],
++                probe_goals,
++                behavior_actions,
++            )
++            critic_values = np.asarray(critic_values)
++            q_pos = _reduced_scores(critic_values, 'critic')
++            eval_metrics['evaluation/probe/critic_mean'] = float(np.mean(critic_values))
++            eval_metrics['evaluation/probe/critic_std'] = float(np.std(critic_values))
++            if probe_negative_goals is not None:
++                q_neg = _score_critic_batch(
++                    eval_agent,
++                    probe_batch['observations'],
++                    probe_negative_goals,
++                    behavior_actions,
++                )
++                _log_signal_metrics(
++                    eval_metrics,
++                    'evaluation/probe/critic_signal',
++                    q_pos,
++                    q_neg,
++                    batch=probe_batch,
++                    goal_prefix='value',
++                )
++            _log_path_geometry_metrics(
++                eval_metrics,
++                'evaluation/probe/critic_geometry',
++                q_pos,
++                probe_batch,
++                goal_prefix='value',
++            )
++
++        if has_value:
++            value_values = eval_agent.network.select('value')(
++                probe_batch['observations'],
++                probe_goals,
++            )
++            value_values = np.asarray(value_values)
++            v_pos = _reduced_scores(value_values, 'value')
++            eval_metrics['evaluation/probe/value_mean'] = float(np.mean(value_values))
++            eval_metrics['evaluation/probe/value_std'] = float(np.std(value_values))
++            if probe_negative_goals is not None:
++                v_neg = _score_value_batch(eval_agent, probe_batch['observations'], probe_negative_goals)
++                _log_signal_metrics(
++                    eval_metrics,
++                    'evaluation/probe/value_signal',
++                    v_pos,
++                    v_neg,
++                    batch=probe_batch,
++                    goal_prefix='value',
++                )
++            _log_path_geometry_metrics(
++                eval_metrics,
++                'evaluation/probe/value_geometry',
++                v_pos,
++                probe_batch,
++                goal_prefix='value',
++            )
++
++        if config.get('discrete', False) or behavior_actions is None or 'actor' not in actor_module_names:
++            return
++
++        actor_goals = probe_batch.get('actor_goals', probe_goals)
++        if actor_goals is None:
++            return
++        try:
++            dist = eval_agent.network.select('actor')(probe_batch['observations'], actor_goals)
++            actor_actions = np.asarray(dist.mode())
++            diff = actor_actions - behavior_actions
++            _log_scalar_metrics(
++                eval_metrics,
++                'evaluation/probe/policy_behavior/mse',
++                np.mean(diff**2, axis=-1),
++                batch=probe_batch,
++                goal_prefix='actor' if 'actor_goal_source' in probe_batch else 'value',
++            )
++            _log_scalar_metrics(
++                eval_metrics,
++                'evaluation/probe/policy_behavior/l2',
++                np.linalg.norm(diff, axis=-1),
++                batch=probe_batch,
++                goal_prefix='actor' if 'actor_goal_source' in probe_batch else 'value',
++            )
++            eval_metrics['evaluation/probe/actor_behavior_log_prob'] = float(
++                np.mean(np.asarray(dist.log_prob(probe_batch['actions'])))
++            )
++        except Exception:
++            return
++
++        actor_goal_prefix = 'actor' if 'actor_goal_source' in probe_batch else 'value'
++        if has_probe_critic:
++            q_actor = _score_critic_batch(
++                eval_agent,
++                probe_batch['observations'],
++                actor_goals,
++                actor_actions,
++            )
++            q_behavior = _score_critic_batch(
++                eval_agent,
++                probe_batch['observations'],
++                actor_goals,
++                behavior_actions,
++            )
++            _log_pair_preference_metrics(
++                eval_metrics,
++                'evaluation/probe/actor_critic',
++                q_actor,
++                q_behavior,
++                batch=probe_batch,
++                goal_prefix=actor_goal_prefix,
++                preferred_name='q_actor',
++                reference_name='q_behavior',
++                delta_name='q_delta',
++                prefer_name='prefer_actor_frac',
++            )
++
++        if has_value and has_probe_critic:
++            # IQL-style actor extraction uses behavior-action advantages to weight BC.
++            v_actor_goal = _score_value_batch(eval_agent, probe_batch['observations'], actor_goals)
++            q_behavior = _score_critic_batch(
++                eval_agent,
++                probe_batch['observations'],
++                actor_goals,
++                behavior_actions,
++            )
++            adv = q_behavior - v_actor_goal
++            scaled_adv = np.minimum(float(config.get('alpha', 1.0)) * adv, np.log(100.0))
++            awr_weight = np.exp(scaled_adv)
++            weight_sum = np.sum(awr_weight)
++            ess = (weight_sum**2) / (np.sum(awr_weight**2) + 1e-8)
++            _log_scalar_metrics(
++                eval_metrics,
++                'evaluation/probe/actor_value/adv',
++                adv,
++                batch=probe_batch,
++                goal_prefix=actor_goal_prefix,
++            )
++            _log_scalar_metrics(
++                eval_metrics,
++                'evaluation/probe/actor_value/awr_weight',
++                awr_weight,
++                batch=probe_batch,
++                goal_prefix=actor_goal_prefix,
++            )
++            eval_metrics['evaluation/probe/actor_value/positive_adv_frac'] = float(np.mean(adv > 0))
++            eval_metrics['evaluation/probe/actor_value/awr_weight_ess_frac'] = float(
++                ess / max(1, len(awr_weight))
++            )
++
 +    def _maybe_log_recurrent_refinement(eval_metrics, eval_agent, *, step: int):
 +        has_recurrent_value = value_module_name is not None and value_backbone == 'recur_tied'
 +        has_recurrent_critic = critic_module_name is not None and critic_backbone == 'recur_tied'
@@ -5001,6 +5326,7 @@ index 3660e03..5f952a2 100644
 +            pass
 +
 +        _maybe_log_actor_quality(eval_metrics, eval_agent, eval_batch)
++        _maybe_log_fixed_probe_metrics(eval_metrics, eval_agent)
 +        _maybe_log_recurrent_refinement(eval_metrics, eval_agent, step=step)
 +
 +        final_critic_refine_step = int(config.get('critic_recur_iters', 1))
@@ -5025,6 +5351,11 @@ index 3660e03..5f952a2 100644
 +            'evaluation/32_refine_critic_step3_margin_mean': 'evaluation/refine/critic_step_3_signal/margin_mean',
 +            'evaluation/33_refine_critic_step4_margin_mean': 'evaluation/refine/critic_step_4_signal/margin_mean',
 +            'evaluation/34_refine_final_actor_q_delta_mean': f'evaluation/refine/critic_step_{final_critic_refine_step}_actor_critic/q_delta_mean',
++            'evaluation/40_probe_critic_margin_mean': 'evaluation/probe/critic_signal/margin_mean',
++            'evaluation/41_probe_value_margin_mean': 'evaluation/probe/value_signal/margin_mean',
++            'evaluation/42_probe_actor_q_delta_mean': 'evaluation/probe/actor_critic/q_delta_mean',
++            'evaluation/43_probe_actor_value_adv_mean': 'evaluation/probe/actor_value/adv_mean',
++            'evaluation/44_probe_policy_behavior_mse_mean': 'evaluation/probe/policy_behavior/mse_mean',
 +        }
 +        for alias_key, source_key in top_eval_aliases.items():
 +            if source_key in eval_metrics:

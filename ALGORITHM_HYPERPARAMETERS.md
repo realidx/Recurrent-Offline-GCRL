@@ -14,7 +14,7 @@ Excluded:
 
 Source policy:
 
-- `CRL` and `HIQL` task rows are derived from OGBench third-party benchmark entries in [third_party/ogbench/impls/hyperparameters.sh](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/hyperparameters.sh), plus the corresponding agent defaults in [third_party/ogbench/impls/agents/crl.py](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/agents/crl.py) and [third_party/ogbench/impls/agents/hiql.py](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/agents/hiql.py).
+- `CRL`, `GCIQL`, and `HIQL` task rows are derived from OGBench third-party benchmark entries in [third_party/ogbench/impls/hyperparameters.sh](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/hyperparameters.sh), plus the corresponding agent defaults in [third_party/ogbench/impls/agents/crl.py](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/agents/crl.py), [third_party/ogbench/impls/agents/gciql.py](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/agents/gciql.py), and [third_party/ogbench/impls/agents/hiql.py](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/agents/hiql.py).
 - `CGIVL` / `CGCIVL` values below are taken from the paper appendix in [references/CGCIVL.pdf](/Users/bruce/Recurrent-Offline-RL/references/CGCIVL.pdf), the authors' README example in [third_party/CGCIVL/readme.md](/Users/bruce/Recurrent-Offline-RL/third_party/CGCIVL/readme.md), and the authors' agent defaults in [third_party/CGCIVL/impls/agents/cgivl.py](/Users/bruce/Recurrent-Offline-RL/third_party/CGCIVL/impls/agents/cgivl.py). Where the paper gives only task-family rules rather than per-task commands, those rows are marked as default-backed or inferred from the published rule.
 - `SAW` is not part of the OGBench third-party benchmark table in this repo. Its values below are taken from the SAW paper appendix in [references/SAW.pdf](/Users/bruce/Recurrent-Offline-RL/references/SAW.pdf), plus local worktree defaults from [slurm/train_saw.slurm](/Users/bruce/Recurrent-Offline-RL/slurm/train_saw.slurm) and [third_party/ogbench/impls/agents/saw.py](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/agents/saw.py).
 
@@ -87,6 +87,74 @@ Pattern from OGBench:
 - `play` state-manipulation CRL tasks use `alpha=3.0`
 - `noisy` state-manipulation CRL tasks use `alpha=0.1`
 - those rows do not override `discount` or goal-sampling probabilities, so they inherit the shared CRL defaults
+
+## GCIQL
+
+Shared non-model defaults from [gciql.py](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/agents/gciql.py#L292):
+
+- `lr=3e-4`
+- `batch_size=1024`
+- `tau=0.005`
+- `expectile=0.9`
+- `actor_loss=ddpgbc`
+- `const_std=True`
+- `value_p_curgoal=0.2`
+- `value_p_trajgoal=0.5`
+- `value_p_randomgoal=0.3`
+- `value_geom_sample=True`
+- `actor_p_curgoal=0.0`
+- `actor_geom_sample=False`
+- `gc_negative=True`
+- `p_aug=0.0`
+
+The local launcher [slurm/train_gciql.slurm](/Users/bruce/Recurrent-Offline-RL/slurm/train_gciql.slurm) follows the OGBench command table below by default. It also exposes optional `VALUE_BACKBONE` and `CRITIC_BACKBONE` switches for local recurrent-value experiments; these are architecture knobs and are not part of the published OGBench non-model hyperparameter grid.
+
+Effective antmaze locomotion hyperparameters:
+
+| Task family | Tasks covered | alpha | discount | actor_p_curgoal | actor_p_trajgoal | actor_p_randomgoal | value_p_curgoal | value_p_trajgoal | value_p_randomgoal |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| navigate | `antmaze-medium-navigate-v0`, `antmaze-large-navigate-v0`, `antmaze-teleport-navigate-v0` | `0.3` | `0.99` | `0.0` | `1.0` | `0.0` | `0.2` | `0.5` | `0.3` |
+| giant navigate | `antmaze-giant-navigate-v0` | `0.3` | `0.995` | `0.0` | `1.0` | `0.0` | `0.2` | `0.5` | `0.3` |
+| stitch | `antmaze-medium-stitch-v0`, `antmaze-large-stitch-v0`, `antmaze-teleport-stitch-v0` | `0.3` | `0.99` | `0.0` | `0.5` | `0.5` | `0.2` | `0.5` | `0.3` |
+| giant stitch | `antmaze-giant-stitch-v0` | `0.3` | `0.995` | `0.0` | `0.5` | `0.5` | `0.2` | `0.5` | `0.3` |
+| explore | `antmaze-medium-explore-v0`, `antmaze-large-explore-v0`, `antmaze-teleport-explore-v0` | `0.01` | `0.99` | `0.0` | `0.0` | `1.0` | `0.2` | `0.5` | `0.3` |
+
+Effective pointmaze locomotion hyperparameters:
+
+| Task family | Tasks covered | alpha | discount | actor_p_curgoal | actor_p_trajgoal | actor_p_randomgoal | value_p_curgoal | value_p_trajgoal | value_p_randomgoal |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| navigate | `pointmaze-medium-navigate-v0`, `pointmaze-large-navigate-v0`, `pointmaze-teleport-navigate-v0` | `0.003` | `0.99` | `0.0` | `1.0` | `0.0` | `0.2` | `0.5` | `0.3` |
+| giant navigate | `pointmaze-giant-navigate-v0` | `0.003` | `0.995` | `0.0` | `1.0` | `0.0` | `0.2` | `0.5` | `0.3` |
+| stitch | `pointmaze-medium-stitch-v0`, `pointmaze-large-stitch-v0`, `pointmaze-teleport-stitch-v0` | `0.003` | `0.99` | `0.0` | `0.5` | `0.5` | `0.2` | `0.5` | `0.3` |
+| giant stitch | `pointmaze-giant-stitch-v0` | `0.003` | `0.995` | `0.0` | `0.5` | `0.5` | `0.2` | `0.5` | `0.3` |
+
+Effective humanoidmaze and antsoccer hyperparameters:
+
+| Task family | Tasks covered | alpha | discount | actor_p_curgoal | actor_p_trajgoal | actor_p_randomgoal | value_p_curgoal | value_p_trajgoal | value_p_randomgoal |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| humanoidmaze navigate | `humanoidmaze-medium-navigate-v0`, `humanoidmaze-large-navigate-v0`, `humanoidmaze-giant-navigate-v0` | `0.1` | `0.995` | `0.0` | `1.0` | `0.0` | `0.2` | `0.5` | `0.3` |
+| humanoidmaze stitch | `humanoidmaze-medium-stitch-v0`, `humanoidmaze-large-stitch-v0`, `humanoidmaze-giant-stitch-v0` | `0.1` | `0.995` | `0.0` | `0.5` | `0.5` | `0.2` | `0.5` | `0.3` |
+| antsoccer navigate | `antsoccer-arena-navigate-v0`, `antsoccer-medium-navigate-v0` | `0.1` | `0.99` | `0.0` | `1.0` | `0.0` | `0.2` | `0.5` | `0.3` |
+| antsoccer stitch | `antsoccer-arena-stitch-v0`, `antsoccer-medium-stitch-v0` | `0.1` | `0.99` | `0.0` | `0.5` | `0.5` | `0.2` | `0.5` | `0.3` |
+
+Effective state-manipulation hyperparameters:
+
+| Task family | Tasks covered | alpha | discount | actor_p_curgoal | actor_p_trajgoal | actor_p_randomgoal | value_p_curgoal | value_p_trajgoal | value_p_randomgoal |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `cube` play | `cube-single-play-v0`, `cube-double-play-v0`, `cube-triple-play-v0`, `cube-quadruple-play-v0` | `1.0` | `0.99` | `0.0` | `1.0` | `0.0` | `0.2` | `0.5` | `0.3` |
+| `cube` noisy | `cube-single-noisy-v0`, `cube-double-noisy-v0`, `cube-triple-noisy-v0`, `cube-quadruple-noisy-v0` | `0.03` | `0.99` | `0.0` | `1.0` | `0.0` | `0.2` | `0.5` | `0.3` |
+| `scene` play | `scene-play-v0` | `1.0` | `0.99` | `0.0` | `1.0` | `0.0` | `0.2` | `0.5` | `0.3` |
+| `scene` noisy | `scene-noisy-v0` | `0.03` | `0.99` | `0.0` | `1.0` | `0.0` | `0.2` | `0.5` | `0.3` |
+| `puzzle` play | `puzzle-3x3-play-v0`, `puzzle-4x4-play-v0`, `puzzle-4x5-play-v0`, `puzzle-4x6-play-v0` | `1.0` | `0.99` | `0.0` | `1.0` | `0.0` | `0.2` | `0.5` | `0.3` |
+| `puzzle` noisy | `puzzle-3x3-noisy-v0`, `puzzle-4x4-noisy-v0`, `puzzle-4x5-noisy-v0`, `puzzle-4x6-noisy-v0` | `0.03` | `0.99` | `0.0` | `1.0` | `0.0` | `0.2` | `0.5` | `0.3` |
+
+Visual-task overrides from OGBench:
+
+- visual locomotion and manipulation tasks use `train_steps=500000`, `batch_size=256`, and `encoder=impala_small`
+- visual antmaze keeps the corresponding state antmaze `alpha`, `discount`, and actor goal mix
+- visual humanoidmaze keeps `alpha=0.1`, `discount=0.995`, and the corresponding navigate/stitch actor goal mix
+- visual cube/scene/puzzle tasks use `p_aug=0.5`
+- powderworld tasks use `train_steps=500000`, `batch_size=256`, `encoder=impala_small`, `discrete=True`, `actor_loss=awr`, `alpha=3.0`, and `eval_temperature=0.3`
 
 ## CGIVL / CGCIVL
 
