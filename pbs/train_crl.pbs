@@ -3,7 +3,7 @@
 #PBS -q normal
 #PBS -l select=1:ncpus=16:ngpus=1:mem=110G
 #PBS -l walltime=10:00:00
-#PBS -J 0-2
+#PBS -J 0
 #PBS -o /dev/null
 #PBS -e /dev/null
 

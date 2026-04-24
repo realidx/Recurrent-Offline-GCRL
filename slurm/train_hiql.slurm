@@ -62,14 +62,21 @@ REP_DIM="${REP_DIM:-10}"
 CONST_STD="${CONST_STD:-1}"
 DISCRETE="${DISCRETE:-0}"
 ENCODER="${ENCODER:-}"
+ACTOR_CONFIDENCE_GATE="${ACTOR_CONFIDENCE_GATE:-0}"
+ACTOR_CONFIDENCE_NUM_NEGATIVES="${ACTOR_CONFIDENCE_NUM_NEGATIVES:-4}"
+ACTOR_CONFIDENCE_TAU="${ACTOR_CONFIDENCE_TAU:-0.0}"
+ACTOR_CONFIDENCE_TEMPERATURE="${ACTOR_CONFIDENCE_TEMPERATURE:-1.0}"
+ACTOR_CONFIDENCE_MIN="${ACTOR_CONFIDENCE_MIN:-0.1}"
+ACTOR_CONFIDENCE_WEIGHT_CLIP="${ACTOR_CONFIDENCE_WEIGHT_CLIP:-100.0}"
 
 VALUE_BACKBONE="${VALUE_BACKBONE:-recur_tied}"
 VALUE_RECUR_ITERS="${VALUE_RECUR_ITERS:-6}"
-VALUE_RECUR_NUM_DENSE_LAYERS="${VALUE_RECUR_NUM_DENSE_LAYERS:-4}"
+VALUE_RECUR_NUM_DENSE_LAYERS="${VALUE_RECUR_NUM_DENSE_LAYERS:-2}"
+VALUE_RECUR_BLOCK_TYPE="${VALUE_RECUR_BLOCK_TYPE:-swiglu}"
 VALUE_RECUR_MAX_ITERS="${VALUE_RECUR_MAX_ITERS:-6}"
-VALUE_RECUR_LN_MODE="${VALUE_RECUR_LN_MODE:-per_layer_final}"
-VALUE_RECUR_USE_STEP_INFO="${VALUE_RECUR_USE_STEP_INFO:-0}"
-VALUE_RECUR_USE_FILM="${VALUE_RECUR_USE_FILM:-1}"
+VALUE_RECUR_LN_MODE="${VALUE_RECUR_LN_MODE:-pre_loop}"
+VALUE_RECUR_USE_STEP_INFO="${VALUE_RECUR_USE_STEP_INFO:-1}"
+VALUE_RECUR_USE_FILM="${VALUE_RECUR_USE_FILM:-0}"
 VALUE_RECUR_FILM_MODE="${VALUE_RECUR_FILM_MODE:-hidden}"
 VALUE_RECUR_USE_INPUT_INJECTION="${VALUE_RECUR_USE_INPUT_INJECTION:-0}"
 VALUE_RECUR_USE_SOFT_MIXTURE="${VALUE_RECUR_USE_SOFT_MIXTURE:-0}"
@@ -157,6 +164,12 @@ AGENT_FLAGS=(
   "--agent.rep_dim=${REP_DIM}"
   "--agent.const_std=${CONST_STD}"
   "--agent.discrete=${DISCRETE}"
+  "--agent.actor_confidence_gate=${ACTOR_CONFIDENCE_GATE}"
+  "--agent.actor_confidence_num_negatives=${ACTOR_CONFIDENCE_NUM_NEGATIVES}"
+  "--agent.actor_confidence_tau=${ACTOR_CONFIDENCE_TAU}"
+  "--agent.actor_confidence_temperature=${ACTOR_CONFIDENCE_TEMPERATURE}"
+  "--agent.actor_confidence_min=${ACTOR_CONFIDENCE_MIN}"
+  "--agent.actor_confidence_weight_clip=${ACTOR_CONFIDENCE_WEIGHT_CLIP}"
   "--agent.value_backbone=${VALUE_BACKBONE}"
   "--agent.value_p_curgoal=${VALUE_P_CURGOAL}"
   "--agent.value_p_trajgoal=${VALUE_P_TRAJGOAL}"
@@ -181,11 +194,11 @@ case "${VALUE_BACKBONE}" in
       echo "Error: VALUE_RECUR_LN_MODE='${VALUE_RECUR_LN_MODE}' is invalid. Use pre_loop, per_layer, per_layer_final, or pre_loop_per_layer." >&2
       exit 2
     fi
-    if [[ ! "${VALUE_RECUR_BLOCK_TYPE:-dense}" =~ ^(dense|swiglu)$ ]]; then
+    if [[ ! "${VALUE_RECUR_BLOCK_TYPE}" =~ ^(dense|swiglu)$ ]]; then
       echo "Error: VALUE_RECUR_BLOCK_TYPE='${VALUE_RECUR_BLOCK_TYPE}' is invalid. Use dense or swiglu." >&2
       exit 2
     fi
-    if [[ "${VALUE_RECUR_BLOCK_TYPE:-dense}" == "swiglu" && "${VALUE_RECUR_NUM_DENSE_LAYERS}" != "2" ]]; then
+    if [[ "${VALUE_RECUR_BLOCK_TYPE}" == "swiglu" && "${VALUE_RECUR_NUM_DENSE_LAYERS}" != "2" ]]; then
       echo "Error: VALUE_RECUR_BLOCK_TYPE=swiglu requires VALUE_RECUR_NUM_DENSE_LAYERS=2." >&2
       exit 2
     fi
@@ -196,7 +209,7 @@ case "${VALUE_BACKBONE}" in
     AGENT_FLAGS+=(
       "--agent.value_recur_iters=${VALUE_RECUR_ITERS}"
       "--agent.value_recur_num_dense_layers=${VALUE_RECUR_NUM_DENSE_LAYERS}"
-      "--agent.value_recur_block_type=${VALUE_RECUR_BLOCK_TYPE:-dense}"
+      "--agent.value_recur_block_type=${VALUE_RECUR_BLOCK_TYPE}"
       "--agent.value_recur_max_iters=${VALUE_RECUR_MAX_ITERS}"
       "--agent.value_recur_ln_mode=${VALUE_RECUR_LN_MODE}"
       "--agent.value_recur_use_step_info=${VALUE_RECUR_USE_STEP_INFO}"

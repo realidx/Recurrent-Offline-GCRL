@@ -1121,7 +1121,7 @@ index 559df71..b51d35a 100644
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.2,  # Probability of using the current state as the value goal.
 diff --git a/impls/agents/hiql.py b/impls/agents/hiql.py
-index 63e5dee..b1eaeb3 100644
+index 63e5dee..8cc11e2 100644
 --- a/impls/agents/hiql.py
 +++ b/impls/agents/hiql.py
 @@ -8,7 +8,7 @@ import ml_collections
@@ -1133,7 +1133,68 @@ index 63e5dee..b1eaeb3 100644
  
  
  class HIQLAgent(flax.struct.PyTreeNode):
-@@ -43,19 +43,51 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -24,6 +24,60 @@ class HIQLAgent(flax.struct.PyTreeNode):
+         weight = jnp.where(adv >= 0, expectile, (1 - expectile))
+         return weight * (diff**2)
+ 
++    @staticmethod
++    def _summarize_vector(values, prefix):
++        """Return compact scalar summaries for a batch vector."""
++        return {
++            f'{prefix}_mean': values.mean(),
++            f'{prefix}_std': values.std(),
++            f'{prefix}_p10': jnp.quantile(values, 0.10),
++            f'{prefix}_p50': jnp.quantile(values, 0.50),
++            f'{prefix}_p90': jnp.quantile(values, 0.90),
++        }
++
++    @staticmethod
++    def _repeat_batch(tree, repeats):
++        """Repeat a batch-shaped pytree along a new axis then flatten it back."""
++        return jax.tree_util.tree_map(
++            lambda x: jnp.repeat(x[:, None, ...], repeats, axis=1).reshape((x.shape[0] * repeats,) + x.shape[1:]),
++            tree,
++        )
++
++    def _mean_value(self, observations, goals):
++        """Return the ensemble-averaged value prediction."""
++        v1, v2 = self.network.select('value')(observations, goals)
++        return (v1 + v2) / 2
++
++    def _compute_actor_confidence(self, observations, goals):
++        """Compute a stop-gradient confidence score from positive-vs-negative goal separation."""
++        num_negatives = max(1, int(self.config.get('actor_confidence_num_negatives', 4)))
++        negative_goals = jnp.stack([jnp.roll(goals, shift=offset, axis=0) for offset in range(1, num_negatives + 1)], axis=1)
++
++        pos_v = self._mean_value(observations, goals)
++        flat_observations = self._repeat_batch(observations, num_negatives)
++        flat_negative_goals = negative_goals.reshape((goals.shape[0] * num_negatives,) + goals.shape[1:])
++        neg_v = self._mean_value(flat_observations, flat_negative_goals).reshape(goals.shape[0], num_negatives)
++        neg_lse = jax.scipy.special.logsumexp(neg_v, axis=1)
++
++        margin = pos_v - neg_lse
++        margin_norm = (margin - margin.mean()) / (margin.std() + 1e-6)
++        confidence = float(self.config.get('actor_confidence_min', 0.1)) + (
++            1.0 - float(self.config.get('actor_confidence_min', 0.1))
++        ) * jax.nn.sigmoid(
++            (margin_norm - float(self.config.get('actor_confidence_tau', 0.0)))
++            / float(self.config.get('actor_confidence_temperature', 1.0))
++        )
++
++        confidence_info = {}
++        confidence_info.update(self._summarize_vector(margin, 'margin'))
++        confidence_info.update(self._summarize_vector(margin_norm, 'margin_norm'))
++        confidence_info.update(self._summarize_vector(confidence, 'confidence'))
++        confidence_info['confidence_low_saturation_frac'] = jnp.mean((confidence <= 0.15).astype(jnp.float32))
++        confidence_info['confidence_high_saturation_frac'] = jnp.mean((confidence >= 0.95).astype(jnp.float32))
++        confidence_info['pos_value_mean'] = pos_v.mean()
++        confidence_info['neg_lse_mean'] = neg_lse.mean()
++        return jax.lax.stop_gradient(confidence), confidence_info
++
+     def value_loss(self, batch, grad_params):
+         """Compute the IVL value loss.
+ 
+@@ -43,30 +97,67 @@ class HIQLAgent(flax.struct.PyTreeNode):
  
          q1 = batch['rewards'] + self.config['discount'] * batch['masks'] * next_v1_t
          q2 = batch['rewards'] + self.config['discount'] * batch['masks'] * next_v2_t
@@ -1187,7 +1248,111 @@ index 63e5dee..b1eaeb3 100644
  
      def low_actor_loss(self, batch, grad_params):
          """Compute the low-level actor loss."""
-@@ -259,18 +291,42 @@ class HIQLAgent(flax.struct.PyTreeNode):
+-        v1, v2 = self.network.select('value')(batch['observations'], batch['low_actor_goals'])
+-        nv1, nv2 = self.network.select('value')(batch['next_observations'], batch['low_actor_goals'])
+-        v = (v1 + v2) / 2
+-        nv = (nv1 + nv2) / 2
++        v = self._mean_value(batch['observations'], batch['low_actor_goals'])
++        nv = self._mean_value(batch['next_observations'], batch['low_actor_goals'])
+         adv = nv - v
+ 
+-        exp_a = jnp.exp(adv * self.config['low_alpha'])
+-        exp_a = jnp.minimum(exp_a, 100.0)
++        confidence = jnp.ones_like(adv)
++        confidence_info = {}
++        if self.config.get('actor_confidence_gate', False):
++            confidence, confidence_info = self._compute_actor_confidence(
++                batch['observations'], batch['low_actor_goals']
++            )
++
++        exp_a = jnp.exp(adv * self.config['low_alpha'] * confidence)
++        exp_a = jnp.minimum(exp_a, float(self.config.get('actor_confidence_weight_clip', 100.0)))
+ 
+         # Compute the goal representations of the subgoals.
+         goal_reps = self.network.select('goal_rep')(
+@@ -80,12 +171,25 @@ class HIQLAgent(flax.struct.PyTreeNode):
+         log_prob = dist.log_prob(batch['actions'])
+ 
+         actor_loss = -(exp_a * log_prob).mean()
++        weight_sum = jnp.sum(exp_a)
++        weight_ess = (weight_sum**2) / (jnp.sum(exp_a**2) + 1e-8)
++        weight_ess_frac = weight_ess / batch['observations'].shape[0]
+ 
+         actor_info = {
+             'actor_loss': actor_loss,
+             'adv': adv.mean(),
++            'adv_mean': adv.mean(),
++            'adv_std': adv.std(),
++            'adv_p10': jnp.quantile(adv, 0.10),
++            'adv_p50': jnp.quantile(adv, 0.50),
++            'adv_p90': jnp.quantile(adv, 0.90),
++            'positive_adv_frac': jnp.mean((adv > 0).astype(jnp.float32)),
++            'awr_weight_mean': exp_a.mean(),
++            'awr_weight_max': exp_a.max(),
++            'awr_weight_ess_frac': weight_ess_frac,
+             'bc_log_prob': log_prob.mean(),
+         }
++        actor_info.update(confidence_info)
+         if not self.config['discrete']:
+             actor_info.update(
+                 {
+@@ -98,14 +202,19 @@ class HIQLAgent(flax.struct.PyTreeNode):
+ 
+     def high_actor_loss(self, batch, grad_params):
+         """Compute the high-level actor loss."""
+-        v1, v2 = self.network.select('value')(batch['observations'], batch['high_actor_goals'])
+-        nv1, nv2 = self.network.select('value')(batch['high_actor_targets'], batch['high_actor_goals'])
+-        v = (v1 + v2) / 2
+-        nv = (nv1 + nv2) / 2
++        v = self._mean_value(batch['observations'], batch['high_actor_goals'])
++        nv = self._mean_value(batch['high_actor_targets'], batch['high_actor_goals'])
+         adv = nv - v
+ 
+-        exp_a = jnp.exp(adv * self.config['high_alpha'])
+-        exp_a = jnp.minimum(exp_a, 100.0)
++        confidence = jnp.ones_like(adv)
++        confidence_info = {}
++        if self.config.get('actor_confidence_gate', False):
++            confidence, confidence_info = self._compute_actor_confidence(
++                batch['observations'], batch['high_actor_goals']
++            )
++
++        exp_a = jnp.exp(adv * self.config['high_alpha'] * confidence)
++        exp_a = jnp.minimum(exp_a, float(self.config.get('actor_confidence_weight_clip', 100.0)))
+ 
+         dist = self.network.select('high_actor')(batch['observations'], batch['high_actor_goals'], params=grad_params)
+         target = self.network.select('goal_rep')(
+@@ -114,14 +223,28 @@ class HIQLAgent(flax.struct.PyTreeNode):
+         log_prob = dist.log_prob(target)
+ 
+         actor_loss = -(exp_a * log_prob).mean()
++        weight_sum = jnp.sum(exp_a)
++        weight_ess = (weight_sum**2) / (jnp.sum(exp_a**2) + 1e-8)
++        weight_ess_frac = weight_ess / batch['observations'].shape[0]
+ 
+-        return actor_loss, {
++        actor_info = {
+             'actor_loss': actor_loss,
+             'adv': adv.mean(),
++            'adv_mean': adv.mean(),
++            'adv_std': adv.std(),
++            'adv_p10': jnp.quantile(adv, 0.10),
++            'adv_p50': jnp.quantile(adv, 0.50),
++            'adv_p90': jnp.quantile(adv, 0.90),
++            'positive_adv_frac': jnp.mean((adv > 0).astype(jnp.float32)),
++            'awr_weight_mean': exp_a.mean(),
++            'awr_weight_max': exp_a.max(),
++            'awr_weight_ess_frac': weight_ess_frac,
+             'bc_log_prob': log_prob.mean(),
+             'mse': jnp.mean((dist.mode() - target) ** 2),
+             'std': jnp.mean(dist.scale_diag),
+         }
++        actor_info.update(confidence_info)
++        return actor_loss, actor_info
+ 
+     @jax.jit
+     def total_loss(self, batch, grad_params, rng=None):
+@@ -259,18 +382,42 @@ class HIQLAgent(flax.struct.PyTreeNode):
              high_actor_encoder_def = None
  
          # Define value and actor networks.
@@ -1242,7 +1407,7 @@ index 63e5dee..b1eaeb3 100644
  
          if config['discrete']:
              low_actor_def = GCDiscreteActor(
-@@ -306,7 +362,15 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -306,7 +453,15 @@ class HIQLAgent(flax.struct.PyTreeNode):
          network_args = {k: v[1] for k, v in network_info.items()}
  
          network_def = ModuleDict(networks)
@@ -1259,7 +1424,7 @@ index 63e5dee..b1eaeb3 100644
          network_params = network_def.init(init_rng, **network_args)['params']
          network = TrainState.create(network_def, network_params, tx=network_tx)
  
-@@ -322,9 +386,12 @@ def get_config():
+@@ -322,9 +477,12 @@ def get_config():
              # Agent hyperparameters.
              agent_name='hiql',  # Agent name.
              lr=3e-4,  # Learning rate.
@@ -1272,7 +1437,7 @@ index 63e5dee..b1eaeb3 100644
              layer_norm=True,  # Whether to use layer normalization.
              discount=0.99,  # Discount factor.
              tau=0.005,  # Target network update rate.
-@@ -333,6 +400,23 @@ def get_config():
+@@ -333,6 +491,29 @@ def get_config():
              high_alpha=3.0,  # High-level AWR temperature.
              subgoal_steps=25,  # Subgoal steps.
              rep_dim=10,  # Goal representation dimension.
@@ -1293,6 +1458,12 @@ index 63e5dee..b1eaeb3 100644
 +            value_recur_act_min_iters=1,  # Minimum recurrent updates before HIQL value may halt.
 +            value_recur_act_ponder_weight=0.0,  # Ponder-cost weight for recurrent HIQL value ACT.
 +            value_layerscale_init=1e-2,  # LayerScale init for recurrent HIQL value.
++            actor_confidence_gate=False,  # Whether to confidence-scale HIQL AWR weights.
++            actor_confidence_num_negatives=4,  # Number of in-batch rolled negatives for the confidence margin.
++            actor_confidence_tau=0.0,  # Confidence gate threshold in normalized-margin space.
++            actor_confidence_temperature=1.0,  # Confidence gate temperature in normalized-margin space.
++            actor_confidence_min=0.1,  # Minimum confidence floor to preserve some policy improvement signal.
++            actor_confidence_weight_clip=100.0,  # Clip for confidence-scaled AWR weights.
              low_actor_rep_grad=False,  # Whether low-actor gradients flow to goal representation (use True for pixels).
              const_std=True,  # Whether to use constant standard deviation for the actors.
              discrete=False,  # Whether the action space is discrete.
@@ -3549,7 +3720,7 @@ index 0000000..60716d2
 +if __name__ == '__main__':
 +    main()
 diff --git a/impls/main.py b/impls/main.py
-index 3660e03..9164c80 100644
+index 3660e03..948cdde 100644
 --- a/impls/main.py
 +++ b/impls/main.py
 @@ -1,17 +1,27 @@
@@ -3839,7 +4010,7 @@ index 3660e03..9164c80 100644
  
      FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, FLAGS.run_group, exp_name)
      os.makedirs(FLAGS.save_dir, exist_ok=True)
-@@ -53,108 +289,1771 @@ def main(_):
+@@ -53,108 +289,1834 @@ def main(_):
      with open(os.path.join(FLAGS.save_dir, 'flags.json'), 'w') as f:
          json.dump(flag_dict, f)
  
@@ -4074,6 +4245,34 @@ index 3660e03..9164c80 100644
 +                'training/actor/awr_weight_ess_frac',
 +                'training/actor/bc_log_prob',
 +                'training/actor/mse',
++                'training/low_actor/adv_mean',
++                'training/low_actor/adv_std',
++                'training/low_actor/positive_adv_frac',
++                'training/low_actor/awr_weight_mean',
++                'training/low_actor/awr_weight_max',
++                'training/low_actor/awr_weight_ess_frac',
++                'training/low_actor/confidence_mean',
++                'training/low_actor/confidence_std',
++                'training/low_actor/margin_mean',
++                'training/low_actor/margin_std',
++                'training/low_actor/bc_log_prob',
++                'training/low_actor/mse',
++                'training/high_actor/adv_mean',
++                'training/high_actor/adv_std',
++                'training/high_actor/positive_adv_frac',
++                'training/high_actor/awr_weight_mean',
++                'training/high_actor/awr_weight_max',
++                'training/high_actor/awr_weight_ess_frac',
++                'training/high_actor/confidence_mean',
++                'training/high_actor/confidence_std',
++                'training/high_actor/margin_mean',
++                'training/high_actor/margin_std',
++                'training/high_actor/bc_log_prob',
++                'training/high_actor/mse',
++                'training/grad/global_norm',
++                'training/grad/critic_global_norm',
++                'training/grad/value_global_norm',
++                'training/grad/actor_global_norm',
 +                'action/policy_behavior_mse',
 +                'params/critic_abs_mean',
 +                'time/sps',
@@ -4393,6 +4592,40 @@ index 3660e03..9164c80 100644
 +            }
 +        )
 +        return masks
++
++    def _log_task_distribution(metrics, batch, prefix='batch'):
++        candidate_keys = (
++            'task_id',
++            'task_ids',
++            'value_task_id',
++            'value_task_ids',
++            'dataset_task_id',
++            'dataset_task_ids',
++        )
++        task_ids = None
++        for key in candidate_keys:
++            if key in batch:
++                task_ids = np.asarray(batch[key]).reshape(-1)
++                break
++        if task_ids is None or task_ids.size == 0:
++            return
++
++        try:
++            valid_mask = np.isfinite(task_ids)
++        except Exception:
++            valid_mask = np.ones(task_ids.shape, dtype=bool)
++        task_ids = task_ids[valid_mask]
++        if task_ids.size == 0:
++            return
++
++        unique_task_ids = np.unique(task_ids)
++        metrics[f'{prefix}/task_id_unique_count'] = int(unique_task_ids.size)
++        for task_id in unique_task_ids:
++            try:
++                task_label = int(task_id)
++            except Exception:
++                continue
++            metrics[f'{prefix}/task_id_{task_label}_frac'] = float(np.mean(task_ids == task_id))
 +
 +    def _log_scalar_metrics(metrics, prefix, values, batch=None, goal_prefix='value'):
 +        values = np.asarray(values, dtype=np.float64)
@@ -5562,6 +5795,7 @@ index 3660e03..9164c80 100644
 +                            np.mean((path_len[finite_path] >= 4) & (path_len[finite_path] <= 8))
 +                        )
 +                        train_metrics['batch/value_goal_maze_path_long_frac'] = float(np.mean(path_len[finite_path] >= 9))
++            _log_task_distribution(train_metrics, batch, prefix='batch')
 +
 +            # Policy vs behavior action divergence (offline RL sanity).
 +            if not config.get('discrete'):
@@ -6353,10 +6587,15 @@ index 48d8b11..4187a64 100644
  
      return agent
 diff --git a/impls/utils/log_utils.py b/impls/utils/log_utils.py
-index 9c421dd..3da1eab 100644
+index 9c421dd..bd55171 100644
 --- a/impls/utils/log_utils.py
 +++ b/impls/utils/log_utils.py
-@@ -17,6 +17,21 @@ class CsvLogger:
+@@ -1,3 +1,4 @@
++import csv
+ import os
+ import tempfile
+ from datetime import datetime
+@@ -17,19 +18,65 @@ class CsvLogger:
          self.header = None
          self.file = None
          self.disallowed_types = (wandb.Image, wandb.Video, wandb.Histogram)
@@ -6375,10 +6614,60 @@ index 9c421dd..3da1eab 100644
 +            # Fall back to fresh logging.
 +            self.header = None
 +            self.file = None
++
++    @staticmethod
++    def _encode_csv_value(value):
++        text = '' if value is None else str(value)
++        if any(ch in text for ch in [',', '"', '\n', '\r']):
++            text = '"' + text.replace('"', '""') + '"'
++        return text
++
++    def _filtered_row(self, row):
++        return {k: v for k, v in row.items() if not isinstance(v, self.disallowed_types)}
++
++    def _rewrite_with_new_header(self, new_header):
++        old_header = list(self.header or [])
++        existing_rows = []
++        if os.path.exists(self.path) and os.path.getsize(self.path) > 0:
++            with open(self.path, 'r', newline='') as f:
++                reader = csv.DictReader(f)
++                for row in reader:
++                    existing_rows.append(row)
++
++        with open(self.path, 'w', newline='') as f:
++            writer = csv.DictWriter(f, fieldnames=new_header, extrasaction='ignore')
++            writer.writeheader()
++            for row in existing_rows:
++                writer.writerow({k: row.get(k, '') for k in new_header})
++
++        if self.file is not None:
++            self.file.close()
++        self.file = open(self.path, 'a')
++        self.header = new_header
  
      def log(self, row, step):
          row['step'] = step
-@@ -64,9 +79,15 @@ def setup_wandb(
++        filtered_row = self._filtered_row(row)
+         if self.file is None:
+             self.file = open(self.path, 'w')
+             if self.header is None:
+-                self.header = [k for k, v in row.items() if not isinstance(v, self.disallowed_types)]
++                self.header = list(filtered_row.keys())
+                 self.file.write(','.join(self.header) + '\n')
+-            filtered_row = {k: v for k, v in row.items() if not isinstance(v, self.disallowed_types)}
+-            self.file.write(','.join([str(filtered_row.get(k, '')) for k in self.header]) + '\n')
+-        else:
+-            filtered_row = {k: v for k, v in row.items() if not isinstance(v, self.disallowed_types)}
+-            self.file.write(','.join([str(filtered_row.get(k, '')) for k in self.header]) + '\n')
++        new_keys = [k for k in filtered_row.keys() if k not in self.header]
++        if new_keys:
++            self._rewrite_with_new_header(self.header + new_keys)
++
++        self.file.write(','.join([self._encode_csv_value(filtered_row.get(k, '')) for k in self.header]) + '\n')
+         self.file.flush()
+ 
+     def close(self):
+@@ -64,9 +111,15 @@ def setup_wandb(
      project='project',
      group=None,
      name=None,
@@ -6395,7 +6684,7 @@ index 9c421dd..3da1eab 100644
      wandb_output_dir = tempfile.mkdtemp()
      tags = [group] if group is not None else None
  
-@@ -86,6 +107,12 @@ def setup_wandb(
+@@ -86,6 +139,12 @@ def setup_wandb(
          save_code=True,
      )
  

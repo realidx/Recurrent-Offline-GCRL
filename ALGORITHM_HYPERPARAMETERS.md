@@ -264,6 +264,24 @@ Pattern from OGBench:
 - `giant`: `discount=0.995`
 - other listed antmaze locomotion tasks: `discount=0.99`
 
+Effective humanoidmaze locomotion hyperparameters:
+
+| Task | low_alpha | high_alpha | discount | subgoal_steps | actor_p_curgoal | actor_p_trajgoal | actor_p_randomgoal | value_p_curgoal | value_p_trajgoal | value_p_randomgoal |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `humanoidmaze-medium-navigate-v0` | `3.0` | `3.0` | `0.995` | `100` | `0.0` | `1.0` | `0.0` | `0.2` | `0.5` | `0.3` |
+| `humanoidmaze-large-navigate-v0` | `3.0` | `3.0` | `0.995` | `100` | `0.0` | `1.0` | `0.0` | `0.2` | `0.5` | `0.3` |
+| `humanoidmaze-giant-navigate-v0` | `3.0` | `3.0` | `0.995` | `100` | `0.0` | `1.0` | `0.0` | `0.2` | `0.5` | `0.3` |
+| `humanoidmaze-medium-stitch-v0` | `3.0` | `3.0` | `0.995` | `100` | `0.0` | `0.5` | `0.5` | `0.2` | `0.5` | `0.3` |
+| `humanoidmaze-large-stitch-v0` | `3.0` | `3.0` | `0.995` | `100` | `0.0` | `0.5` | `0.5` | `0.2` | `0.5` | `0.3` |
+| `humanoidmaze-giant-stitch-v0` | `3.0` | `3.0` | `0.995` | `100` | `0.0` | `0.5` | `0.5` | `0.2` | `0.5` | `0.3` |
+
+Additional OGBench pattern for humanoidmaze:
+
+- all listed humanoidmaze HIQL tasks use `discount=0.995`
+- all listed humanoidmaze HIQL tasks use `subgoal_steps=100`
+- `navigate`: actor goal mix is `1.0 / 0.0`
+- `stitch`: actor goal mix is `0.5 / 0.5`
+
 ## SAW
 
 `SAW` does not appear in the OGBench third-party benchmark table in [third_party/ogbench/impls/hyperparameters.sh](/Users/bruce/Recurrent-Offline-RL/third_party/ogbench/impls/hyperparameters.sh), so there is no repo-provided task-specific benchmark grid analogous to `CRL` or `HIQL`.
