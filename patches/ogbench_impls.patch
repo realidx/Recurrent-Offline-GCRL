@@ -3720,7 +3720,7 @@ index 0000000..60716d2
 +if __name__ == '__main__':
 +    main()
 diff --git a/impls/main.py b/impls/main.py
-index 3660e03..948cdde 100644
+index 3660e03..9874e07 100644
 --- a/impls/main.py
 +++ b/impls/main.py
 @@ -1,17 +1,27 @@
@@ -4010,7 +4010,7 @@ index 3660e03..948cdde 100644
  
      FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, FLAGS.run_group, exp_name)
      os.makedirs(FLAGS.save_dir, exist_ok=True)
-@@ -53,108 +289,1834 @@ def main(_):
+@@ -53,108 +289,1865 @@ def main(_):
      with open(os.path.join(FLAGS.save_dir, 'flags.json'), 'w') as f:
          json.dump(flag_dict, f)
  
@@ -4045,13 +4045,13 @@ index 3660e03..948cdde 100644
 +                min_d=config.get('min_d', 0),
 +            )
 +        return {}
-+
+ 
+-    example_batch = train_dataset.sample(1)
 +    def _sample_dataset(dataset, batch_size, *, idxs=None, evaluation=False):
 +        sample_kwargs = dict(idxs=idxs, evaluation=evaluation)
 +        sample_kwargs.update(_dataset_sample_kwargs())
 +        return dataset.sample(batch_size, **sample_kwargs)
- 
--    example_batch = train_dataset.sample(1)
++
 +    # Initialize agent.
 +    example_batch = _sample_dataset(train_dataset, 1)
      if config['discrete']:
@@ -4149,6 +4149,8 @@ index 3660e03..948cdde 100644
 +    device_summary = _device_summary()
 +    value_module_name = 'value' if _extract_module_params(agent.network.params, 'value') is not None else None
 +    critic_module_name = 'critic' if _extract_module_params(agent.network.params, 'critic') is not None else None
++    target_value_module_name = 'target_value' if _extract_module_params(agent.network.params, 'target_value') is not None else None
++    target_critic_module_name = 'target_critic' if _extract_module_params(agent.network.params, 'target_critic') is not None else None
 +    actor_module_names = _actor_module_names()
 +    has_goal_rep_module = _extract_module_params(agent.network.params, 'goal_rep') is not None
 +
@@ -4315,7 +4317,7 @@ index 3660e03..948cdde 100644
 +            {
 +                k: v
 +                for k, v in agent.network.params.items()
-+                if k != 'modules_target_value'
++                if k not in ('modules_target_value', 'modules_target_critic')
 +            }
 +        ),
 +        'params/value_count': _count_params(_extract_module_params(agent.network.params, value_module_name))
@@ -4323,7 +4325,12 @@ index 3660e03..948cdde 100644
 +        else 0,
 +        'params/actor_count': sum(_count_params(_extract_module_params(agent.network.params, name)) for name in actor_module_names),
 +        'params/critic_count': _count_params(_extract_module_params(agent.network.params, 'critic')),
-+        'params/target_value_count': _count_params(_extract_module_params(agent.network.params, 'target_value')),
++        'params/target_value_count': _count_params(_extract_module_params(agent.network.params, 'target_value'))
++        if target_value_module_name is not None
++        else 0,
++        'params/target_critic_count': _count_params(_extract_module_params(agent.network.params, 'target_critic'))
++        if target_critic_module_name is not None
++        else 0,
 +    }
 +    maze_env = getattr(env, 'unwrapped', env)
 +    maze_distance_cache = {}
@@ -5069,6 +5076,8 @@ index 3660e03..948cdde 100644
 +
 +        if has_recurrent_value:
 +            total_iters = int(config.get('value_recur_iters', 1))
++            target_values = None
++            target_value_dump_key = None
 +            for k in range(1, total_iters + 1):
 +                values_k, aux_k = eval_agent.network.select('value')(
 +                    probe_batch['observations'],
@@ -5111,18 +5120,39 @@ index 3660e03..948cdde 100644
 +                    delta_k = np.asarray(value_steps[-1] - value_steps[-2])
 +                    eval_metrics[f'evaluation/refine/value_delta_step_{k}_mean_abs'] = float(np.mean(np.abs(delta_k)))
 +
-+            target_values = np.asarray(
-+                eval_agent.network.select('target_value')(
-+                    probe_batch['observations'],
-+                    probe_goals,
-+                )
-+            )
 +            final_values = value_steps[-1]
-+            eval_metrics['evaluation/refine/target_value_mean'] = float(target_values.mean())
-+            eval_metrics['evaluation/refine/target_value_std'] = float(target_values.std())
-+            eval_metrics['evaluation/refine/final_target_mse'] = float(np.mean((final_values - target_values) ** 2))
++            if target_value_module_name is not None:
++                target_values = np.asarray(
++                    eval_agent.network.select('target_value')(
++                        probe_batch['observations'],
++                        probe_goals,
++                    )
++                )
++                target_value_dump_key = 'target_value'
++                eval_metrics['evaluation/refine/target_value_mean'] = float(target_values.mean())
++                eval_metrics['evaluation/refine/target_value_std'] = float(target_values.std())
++                eval_metrics['evaluation/refine/final_target_mse'] = float(np.mean((final_values - target_values) ** 2))
 +
-+            if 'rewards' in probe_batch and 'masks' in probe_batch and 'next_observations' in probe_batch:
++            elif target_critic_module_name is not None and 'actions' in probe_batch:
++                target_q = np.asarray(
++                    eval_agent.network.select('target_critic')(
++                        probe_batch['observations'],
++                        probe_goals,
++                        probe_batch['actions'],
++                    )
++                )
++                target_values = _reduced_scores(target_q, 'critic')
++                target_value_dump_key = 'target_critic_on_data'
++                eval_metrics['evaluation/refine/target_critic_mean'] = float(target_values.mean())
++                eval_metrics['evaluation/refine/target_critic_std'] = float(target_values.std())
++                eval_metrics['evaluation/refine/final_target_critic_mse'] = float(np.mean((final_values - target_values) ** 2))
++
++            if (
++                target_value_module_name is not None
++                and 'rewards' in probe_batch
++                and 'masks' in probe_batch
++                and 'next_observations' in probe_batch
++            ):
 +                next_target_values = np.asarray(
 +                    eval_agent.network.select('target_value')(
 +                        probe_batch['next_observations'],
@@ -5342,7 +5372,8 @@ index 3660e03..948cdde 100644
 +            dump_dict['actor_goal_maze_xy_distance'] = np.asarray(maze_meta_actor['euclidean'])
 +            dump_dict['actor_goal_maze_path_len'] = np.asarray(maze_meta_actor['path_len'])
 +        if has_recurrent_value and value_steps:
-+            dump_dict['target_value'] = target_values
++            if target_values is not None and target_value_dump_key is not None:
++                dump_dict[target_value_dump_key] = target_values
 +            for idx, values_k in enumerate(value_steps, start=1):
 +                dump_dict[f'value_step_{idx}'] = values_k
 +                if idx > 1:
