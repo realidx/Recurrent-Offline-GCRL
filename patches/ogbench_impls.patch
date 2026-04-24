@@ -3720,7 +3720,7 @@ index 0000000..60716d2
 +if __name__ == '__main__':
 +    main()
 diff --git a/impls/main.py b/impls/main.py
-index 3660e03..9874e07 100644
+index 3660e03..4be640c 100644
 --- a/impls/main.py
 +++ b/impls/main.py
 @@ -1,17 +1,27 @@
@@ -4010,7 +4010,7 @@ index 3660e03..9874e07 100644
  
      FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, FLAGS.run_group, exp_name)
      os.makedirs(FLAGS.save_dir, exist_ok=True)
-@@ -53,108 +289,1865 @@ def main(_):
+@@ -53,108 +289,1872 @@ def main(_):
      with open(os.path.join(FLAGS.save_dir, 'flags.json'), 'w') as f:
          json.dump(flag_dict, f)
  
@@ -4716,13 +4716,19 @@ index 3660e03..9874e07 100644
 +
 +    def _critic_forward(eval_agent, observations, goals, actions, *, num_iters=None, return_aux=False):
 +        critic_num_iters = config.get('critic_eval_num_iters', None) if num_iters is None else num_iters
-+        return eval_agent.network.select('critic')(
-+            observations,
-+            goals,
-+            actions,
-+            num_iters=critic_num_iters,
-+            return_aux=return_aux,
-+        )
++        critic_call = eval_agent.network.select('critic')
++        if critic_backbone == 'recur_tied':
++            return critic_call(
++                observations,
++                goals,
++                actions,
++                num_iters=critic_num_iters,
++                return_aux=return_aux,
++            )
++        if return_aux:
++            values = critic_call(observations, goals, actions)
++            return values, {}
++        return critic_call(observations, goals, actions)
 +
 +    def _score_critic_batch(eval_agent, observations, goals, actions, *, num_iters=None):
 +        values = _critic_forward(eval_agent, observations, goals, actions, num_iters=num_iters)
@@ -5505,7 +5511,8 @@ index 3660e03..9874e07 100644
 +        q_vals = None
 +        if has_critic:
 +            critic_eval_num_iters = config.get('critic_eval_num_iters', None)
-+            q_vals = eval_agent.network.select('critic')(
++            q_vals = _critic_forward(
++                eval_agent,
 +                eval_batch['observations'],
 +                eval_batch['value_goals'],
 +                eval_batch['actions'],
