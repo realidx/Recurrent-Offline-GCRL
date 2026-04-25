@@ -1468,7 +1468,7 @@ index 63e5dee..8cc11e2 100644
              const_std=True,  # Whether to use constant standard deviation for the actors.
              discrete=False,  # Whether the action space is discrete.
 diff --git a/impls/agents/qrl.py b/impls/agents/qrl.py
-index 79852cb..9df6b86 100644
+index 79852cb..cc4fa11 100644
 --- a/impls/agents/qrl.py
 +++ b/impls/agents/qrl.py
 @@ -234,6 +234,29 @@ class QRLAgent(flax.struct.PyTreeNode):
@@ -1531,7 +1531,7 @@ index 79852cb..9df6b86 100644
              )
          else:
              raise ValueError(f'Unsupported quasimetric type: {config["quasimetric_type"]}')
-@@ -310,6 +356,27 @@ def get_config():
+@@ -310,6 +356,28 @@ def get_config():
              const_std=True,  # Whether to use constant standard deviation for the actor.
              discrete=False,  # Whether the action space is discrete.
              encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
@@ -1556,6 +1556,7 @@ index 79852cb..9df6b86 100644
 +            critic_recur_use_act=False,  # Enable ACT halting for recur_tied quasimetric value backbones.
 +            critic_recur_act_epsilon=0.01,  # ACT halting threshold slack for recur_tied quasimetric value backbones.
 +            critic_recur_act_min_iters=1,  # Minimum recurrent value updates before ACT may halt.
++            critic_recur_act_ponder_weight=0.0,  # Accepted for launcher compatibility; QRL currently does not add a ponder-cost term.
              # Dataset hyperparameters.
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
