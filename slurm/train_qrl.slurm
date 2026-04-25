@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=p4_crl_generic
+#SBATCH --job-name=p4_qrl_generic
 #SBATCH --partition=gpu-long
 #SBATCH --time=10:00:00
 #SBATCH --cpus-per-task=8
@@ -9,24 +9,20 @@
 #SBATCH --error=logs/phase_5/slurm-%x-%A_%a.err
 #SBATCH --array=0
 
-# Generic OGBench GCRL trainer (array by seed).
+# Generic OGBench QRL trainer (array by seed).
 #
 # Examples:
-# 1) CRL-MLP baseline on humanoidmaze-large-navigate (seed 0 only):
-#    sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=humanoidmaze-large-navigate-v0,RUN_GROUP=P4_HumanoidLargeNav_MLP,CRITIC_BACKBONE=mlp,ALPHA=0.1,DISCOUNT=0.995,ACTOR_P_TRAJGOAL=1.0,ACTOR_P_RANDOMGOAL=0.0,WANDB_MODE=online" \
-#      slurm/phase4_train_crl_generic_array.slurm
+# 1) QRL-MLP baseline on antmaze-large-stitch (seed 0 only):
+#    sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=P4_QRL_AntLargeStitch_MLP,CRITIC_BACKBONE=mlp,ALPHA=0.003,DISCOUNT=0.99,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online" \
+#      slurm/train_qrl.slurm
 #
-# 2) CRL recurrent 2x4 on humanoidmaze-large-stitch (2 dense layers per recurrent update, 4 iterations):
-#    sbatch --array=0-2 --export="ALL,SEEDS='0 1 2',ENV_NAME=humanoidmaze-large-stitch-v0,RUN_GROUP=P4_HumanoidLargeStitch_Recur3x4,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=3,RECUR_MAX_ITERS=24,SINUSOIDAL=1,TIED_LN=1,ALPHA=0.1,DISCOUNT=0.995,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online" \
-#      slurm/phase4_train_crl_generic_array.slurm
+# 2) QRL recurrent quasimetric value on antmaze-large-stitch:
+#    sbatch --array=0-2 --export="ALL,SEEDS='0 1 2',ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=P4_QRL_AntLargeStitch_Recur,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=4,RECUR_USE_STEP_INFO=1,CRITIC_RECUR_USE_FILM=0,ALPHA=0.003,DISCOUNT=0.99,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online" \
+#      slurm/train_qrl.slurm
 #
-# 3) CRL recurrent with an 8-dense-layer tied residual branch repeated 4 times:
-#    sbatch --array=0-2 --export="ALL,SEEDS='0 1 2',ENV_NAME=humanoidmaze-large-stitch-v0,RUN_GROUP=P4_HumanoidLargeStitch_Recur6x4,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=6,RECUR_MAX_ITERS=24,SINUSOIDAL=1,TIED_LN=1,ALPHA=0.1,DISCOUNT=0.995,WANDB_MODE=online" \
-#      slurm/phase4_train_crl_generic_array.slurm
-#
-# 4) MLP critic + 32-layer actor without typing 32 copies of 512:
-#    sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=P4_AntMaze_MLP_Actor32L,CRITIC_BACKBONE=mlp,ACTOR_NUM_LAYERS=32,ACTOR_LAYER_WIDTH=512,ALPHA=0.1,DISCOUNT=0.99,WANDB_MODE=online" \
-#      slurm/phase4_train_crl_generic_array.slurm
+# 3) Same recurrent QRL run with deeper test-time compute:
+#    sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=P4_QRL_AntLargeStitch_RecurEval8,CRITIC_BACKBONE=recur_tied,KTRAIN=4,CRITIC_EVAL_NUM_ITERS=8,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=8,RECUR_USE_STEP_INFO=1,CRITIC_RECUR_USE_FILM=0,ALPHA=0.003,DISCOUNT=0.99,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online" \
+#      slurm/train_qrl.slurm
 #
 # Explicit x-separated dims still work and take precedence if both forms are set.
 
@@ -40,15 +36,9 @@ if [[ ! -f "third_party/ogbench/impls/main.py" ]]; then
 fi
 
 IMPL_DIR="${SLURM_SUBMIT_DIR}/third_party/ogbench/impls"
-AGENT_PATH="${AGENT_PATH:-agents/crl.py}"
+AGENT_PATH="agents/qrl.py"
 if [[ ! -f "${IMPL_DIR}/${AGENT_PATH}" ]]; then
   echo "Error: missing ${IMPL_DIR}/${AGENT_PATH}." >&2
-  exit 2
-fi
-
-AGENT_NAME="$(basename "${AGENT_PATH}" .py)"
-if [[ "${AGENT_NAME}" != "crl" ]]; then
-  echo "Error: AGENT_PATH='${AGENT_PATH}' is unsupported here. Use slurm/train_qrl.slurm for QRL." >&2
   exit 2
 fi
 
@@ -57,7 +47,7 @@ CONDA_EXE="${CONDA_EXE:-/app/apps/miniforge3/25.3.1/bin/conda}"
 WANDB_MODE="${WANDB_MODE:-online}"
 
 ENV_NAME="${ENV_NAME:-antmaze-large-stitch-v0}"
-RUN_GROUP="${RUN_GROUP:-P4_GenericCRL}"
+RUN_GROUP="${RUN_GROUP:-P4_GenericQRL}"
 SAVE_DIR="${SAVE_DIR:-${SLURM_SUBMIT_DIR}/exp}"
 DATASET_DIR="${DATASET_DIR:-${SLURM_SUBMIT_DIR}/.ogbench_data}"
 AUTO_RESUME="${AUTO_RESUME:-1}"
@@ -77,39 +67,38 @@ SAVE_INTERVAL="${SAVE_INTERVAL:-0}"
 SAVE_STEPS="${SAVE_STEPS:-600000:800000:900000:1000000}"
 DISABLE_TQDM="${DISABLE_TQDM:-1}"
 
-# Core CRL defaults.
+# Core QRL defaults.
 LR="${LR:-3e-4}"
-ALPHA="${ALPHA:-0.1}"
+ALPHA="${ALPHA:-0.003}"
 DISCOUNT="${DISCOUNT:-0.99}"
 BATCH_SIZE="${BATCH_SIZE:-1024}"
-ACTOR_HIDDEN_DIMS="${ACTOR_HIDDEN_DIMS:-}"   # Safe format for sbatch --export: e.g., 512x512x512x512
-VALUE_HIDDEN_DIMS="${VALUE_HIDDEN_DIMS:-}"   # Safe format for critic/value MLP dims: e.g., 512x512x512x512x512
-ACTOR_NUM_LAYERS="${ACTOR_NUM_LAYERS:-}"     # Shortcut: e.g., 32
+ACTOR_HIDDEN_DIMS="${ACTOR_HIDDEN_DIMS:-}"    # Safe format for sbatch --export: e.g., 512x512x512x512
+VALUE_HIDDEN_DIMS="${VALUE_HIDDEN_DIMS:-}"    # Safe format for critic/value MLP dims: e.g., 512x512x512x512x512
+ACTOR_NUM_LAYERS="${ACTOR_NUM_LAYERS:-}"      # Shortcut: e.g., 32
 ACTOR_LAYER_WIDTH="${ACTOR_LAYER_WIDTH:-512}" # Shortcut width used with ACTOR_NUM_LAYERS
-VALUE_NUM_LAYERS="${VALUE_NUM_LAYERS:-}"     # Shortcut: e.g., 32
+VALUE_NUM_LAYERS="${VALUE_NUM_LAYERS:-}"      # Shortcut: e.g., 32
 VALUE_LAYER_WIDTH="${VALUE_LAYER_WIDTH:-512}" # Shortcut width used with VALUE_NUM_LAYERS
-ACTOR_BACKBONE="${ACTOR_BACKBONE:-mlp}"      # mlp | recur_tied
 ACTOR_P_CURGOAL="${ACTOR_P_CURGOAL:-0.0}"
 ACTOR_P_TRAJGOAL="${ACTOR_P_TRAJGOAL:-1.0}"
 ACTOR_P_RANDOMGOAL="${ACTOR_P_RANDOMGOAL:-0.0}"
 ACTOR_GEOM_SAMPLE="${ACTOR_GEOM_SAMPLE:-}"
-LR_DECAY_STEPS="${LR_DECAY_STEPS:-${TRAIN_STEPS}}"
-LR_MIN="${LR_MIN:-1e-5}"
 LAYER_NORM="${LAYER_NORM:-1}"
 LATENT_DIM="${LATENT_DIM:-512}"
 ACTOR_LOSS="${ACTOR_LOSS:-}"
 CONST_STD="${CONST_STD:-1}"
 DISCRETE="${DISCRETE:-0}"
 ENCODER="${ENCODER:-}"
+QUASIMETRIC_TYPE="${QUASIMETRIC_TYPE:-iqe}"
 
-# Critic backbone selection.
-CRITIC_BACKBONE="${CRITIC_BACKBONE:-mlp}"   # mlp | recur_tied
+# Critic/value backbone selection.
+CRITIC_BACKBONE="${CRITIC_BACKBONE:-mlp}"     # mlp | recur_tied
+CRITIC_EVAL_NUM_ITERS="${CRITIC_EVAL_NUM_ITERS:-}" # Optional K_test override for evaluation/refinement.
 LAYERSCALE_INIT="${LAYERSCALE_INIT:-1e-2}"
 
 # recurrent tied options.
 KTRAIN="${KTRAIN:-4}"
 RECUR_NUM_DENSE_LAYERS="${RECUR_NUM_DENSE_LAYERS:-2}" # User-facing N in NxK: dense layers inside each tied recurrent residual update.
-RECUR_NUM_BLOCKS="${RECUR_NUM_BLOCKS:-1}"   # Deprecated fallback: number of 2-layer pairs inside each tied recurrent residual update.
+RECUR_NUM_BLOCKS="${RECUR_NUM_BLOCKS:-1}"    # Deprecated fallback: number of 2-layer pairs inside each tied recurrent residual update.
 RECUR_MAX_ITERS="${RECUR_MAX_ITERS:-4}"
 CRITIC_RECUR_LN_MODE="${CRITIC_RECUR_LN_MODE:-per_layer_final}"
 RECUR_USE_STEP_INFO="${RECUR_USE_STEP_INFO:-1}"
@@ -124,10 +113,6 @@ RECUR_USE_ACT="${RECUR_USE_ACT:-0}"
 RECUR_ACT_EPSILON="${RECUR_ACT_EPSILON:-0.01}"
 RECUR_ACT_MIN_ITERS="${RECUR_ACT_MIN_ITERS:-1}"
 RECUR_ACT_PONDER_WEIGHT="${RECUR_ACT_PONDER_WEIGHT:-0.0}"
-
-# actor recurrent tied options.
-ACTOR_RECUR_ITERS="${ACTOR_RECUR_ITERS:-${KTRAIN}}"
-ACTOR_RECUR_MAX_ITERS="${ACTOR_RECUR_MAX_ITERS:-${RECUR_MAX_ITERS}}"
 
 # Seeds controlled via env var: SEEDS="0 1 2"
 SEEDS="${SEEDS:-0 1 2}"
@@ -177,15 +162,8 @@ AGENT_FLAGS=(
   "--agent.latent_dim=${LATENT_DIM}"
   "--agent.const_std=${CONST_STD}"
   "--agent.discrete=${DISCRETE}"
+  "--agent.quasimetric_type=${QUASIMETRIC_TYPE}"
 )
-
-if [[ "${AGENT_NAME}" == "crl" ]]; then
-  AGENT_FLAGS+=(
-    "--agent.lr_decay_steps=${LR_DECAY_STEPS}"
-    "--agent.lr_min=${LR_MIN}"
-    "--agent.actor_backbone=${ACTOR_BACKBONE}"
-  )
-fi
 
 if [[ -n "${ACTOR_LOSS}" ]]; then
   AGENT_FLAGS+=("--agent.actor_loss=${ACTOR_LOSS}")
@@ -193,6 +171,14 @@ fi
 
 if [[ -n "${ENCODER}" ]]; then
   AGENT_FLAGS+=("--agent.encoder=${ENCODER}")
+fi
+
+if [[ -n "${CRITIC_EVAL_NUM_ITERS}" ]]; then
+  if [[ ! "${CRITIC_EVAL_NUM_ITERS}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: CRITIC_EVAL_NUM_ITERS='${CRITIC_EVAL_NUM_ITERS}' is not a positive integer." >&2
+    exit 2
+  fi
+  AGENT_FLAGS+=("--agent.critic_eval_num_iters=${CRITIC_EVAL_NUM_ITERS}")
 fi
 
 if [[ -n "${ACTOR_NUM_LAYERS}" && ! "${ACTOR_NUM_LAYERS}" =~ ^[1-9][0-9]*$ ]]; then
@@ -272,31 +258,6 @@ fi
 
 if [[ -n "${ACTOR_GEOM_SAMPLE}" ]]; then
   AGENT_FLAGS+=("--agent.actor_geom_sample=${ACTOR_GEOM_SAMPLE}")
-fi
-
-if [[ "${AGENT_NAME}" == "crl" ]]; then
-  case "${ACTOR_BACKBONE}" in
-    mlp)
-      ;;
-    recur_tied)
-      if [[ ! "${ACTOR_RECUR_ITERS}" =~ ^[1-9][0-9]*$ ]]; then
-        echo "Error: ACTOR_RECUR_ITERS='${ACTOR_RECUR_ITERS}' is not a positive integer." >&2
-        exit 2
-      fi
-      if [[ ! "${ACTOR_RECUR_MAX_ITERS}" =~ ^[1-9][0-9]*$ ]]; then
-        echo "Error: ACTOR_RECUR_MAX_ITERS='${ACTOR_RECUR_MAX_ITERS}' is not a positive integer." >&2
-        exit 2
-      fi
-      AGENT_FLAGS+=(
-        "--agent.actor_recur_iters=${ACTOR_RECUR_ITERS}"
-        "--agent.actor_recur_max_iters=${ACTOR_RECUR_MAX_ITERS}"
-      )
-      ;;
-    *)
-      echo "Error: unsupported ACTOR_BACKBONE='${ACTOR_BACKBONE}'." >&2
-      exit 2
-      ;;
-  esac
 fi
 
 if [[ -n "${RECUR_NUM_DENSE_LAYERS}" ]]; then
@@ -419,7 +380,7 @@ if [[ -n "${RESTORE_EPOCH}" ]]; then
   cmd+=("--restore_epoch=${RESTORE_EPOCH}")
 fi
 
-echo "GENERIC ${AGENT_NAME^^}: env=${ENV_NAME} seed=${SEED} critic_backbone=${CRITIC_BACKBONE} actor_backbone=${ACTOR_BACKBONE} alpha=${ALPHA} discount=${DISCOUNT} run_group=${RUN_GROUP} exp=${EXP_NAME}"
+echo "QRL: env=${ENV_NAME} seed=${SEED} critic_backbone=${CRITIC_BACKBONE} alpha=${ALPHA} discount=${DISCOUNT} run_group=${RUN_GROUP} exp=${EXP_NAME}"
 echo "${cmd[*]}"
 
 if ! command -v "${CONDA_EXE}" >/dev/null 2>&1; then
