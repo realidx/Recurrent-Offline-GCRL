@@ -88,7 +88,7 @@ ACTOR_NUM_LAYERS="${ACTOR_NUM_LAYERS:-}"     # Shortcut: e.g., 32
 ACTOR_LAYER_WIDTH="${ACTOR_LAYER_WIDTH:-512}" # Shortcut width used with ACTOR_NUM_LAYERS
 VALUE_NUM_LAYERS="${VALUE_NUM_LAYERS:-}"     # Shortcut: e.g., 32
 VALUE_LAYER_WIDTH="${VALUE_LAYER_WIDTH:-512}" # Shortcut width used with VALUE_NUM_LAYERS
-ACTOR_BACKBONE="${ACTOR_BACKBONE:-mlp}"      # mlp | recur_tied
+ACTOR_BACKBONE="${ACTOR_BACKBONE:-mlp}"      # mlp | recur_tied | residual_mlp
 ACTOR_P_CURGOAL="${ACTOR_P_CURGOAL:-0.0}"
 ACTOR_P_TRAJGOAL="${ACTOR_P_TRAJGOAL:-1.0}"
 ACTOR_P_RANDOMGOAL="${ACTOR_P_RANDOMGOAL:-0.0}"
@@ -277,6 +277,8 @@ fi
 if [[ "${AGENT_NAME}" == "crl" ]]; then
   case "${ACTOR_BACKBONE}" in
     mlp)
+      ;;
+    residual_mlp)
       ;;
     recur_tied)
       if [[ ! "${ACTOR_RECUR_ITERS}" =~ ^[1-9][0-9]*$ ]]; then

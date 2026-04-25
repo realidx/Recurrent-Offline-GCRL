@@ -568,7 +568,7 @@ index 0000000..441bfaf
 +    )
 +    return config
 diff --git a/impls/agents/crl.py b/impls/agents/crl.py
-index 53109ab..dc94c52 100644
+index 53109ab..b7feb12 100644
 --- a/impls/agents/crl.py
 +++ b/impls/agents/crl.py
 @@ -22,51 +22,178 @@ class CRLAgent(flax.struct.PyTreeNode):
@@ -927,7 +927,7 @@ index 53109ab..dc94c52 100644
 +            lr_min=1e-5,  # Minimum LR at end of cosine decay.
              batch_size=1024,  # Batch size.
              actor_hidden_dims=(512, 512, 512),  # Actor network hidden dimensions.
-+            actor_backbone='mlp',  # 'mlp' | 'recur_tied'
++            actor_backbone='mlp',  # 'mlp' | 'recur_tied' | 'residual_mlp'
 +            actor_recur_iters=4,  # Tied iterations for actor_backbone='recur_tied'.
 +            actor_recur_max_iters=16,  # Max actor step embedding table size.
              value_hidden_dims=(512, 512, 512),  # Value network hidden dimensions.
@@ -6760,7 +6760,7 @@ index 9c421dd..bd55171 100644
  
      return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..dafe11a 100644
+index 4ee2b26..055c1b4 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
 @@ -6,6 +6,8 @@ import flax.linen as nn
@@ -6772,7 +6772,7 @@ index 4ee2b26..dafe11a 100644
  
  def default_init(scale=1.0):
      """Default kernel initializer."""
-@@ -60,6 +62,435 @@ class MLP(nn.Module):
+@@ -60,6 +62,475 @@ class MLP(nn.Module):
          return x
  
  
@@ -6892,6 +6892,46 @@ index 4ee2b26..dafe11a 100644
 +                name=f'prenorm_resblock_{block_index + 1}',
 +            )(h)
 +        return nn.Dense(self.out_dim, name='output_proj')(h)
++
++
++class ResidualMLPBackbone(nn.Module):
++    """Residual MLP with Dense -> GeLU -> LayerNorm and a skip every 4 layers."""
++
++    hidden_dims: Sequence[int]
++    activations: Any = nn.gelu
++    kernel_init: Any = default_init()
++    layer_norm: bool = True
++    residual_stride: int = 4
++
++    @nn.compact
++    def __call__(self, x):
++        if len(self.hidden_dims) == 0:
++            return x
++
++        stride = int(self.residual_stride)
++        if stride <= 0:
++            raise ValueError(f'residual_stride must be positive. Got {stride}.')
++
++        h = x
++        block_input = h
++        for layer_index, size in enumerate(self.hidden_dims):
++            if layer_index % stride == 0:
++                block_input = h
++
++            h = nn.Dense(size, kernel_init=self.kernel_init, name=f'fc_{layer_index + 1}')(h)
++            h = self.activations(h)
++            if self.layer_norm:
++                h = nn.LayerNorm(name=f'ln_{layer_index + 1}')(h)
++
++            if (layer_index + 1) % stride == 0:
++                residual = block_input
++                if residual.shape[-1] != size:
++                    residual = nn.Dense(size, kernel_init=self.kernel_init, name=f'resid_proj_{(layer_index + 1) // stride}')(
++                        residual
++                    )
++                h = residual + h
++
++        return h
 +
 +
 +class RecurTiedBackbone(nn.Module):
@@ -7208,12 +7248,12 @@ index 4ee2b26..dafe11a 100644
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -164,9 +595,37 @@ class GCActor(nn.Module):
+@@ -164,9 +635,43 @@ class GCActor(nn.Module):
      const_std: bool = True
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
 +    layer_norm: bool = True
-+    backbone: str = 'mlp'  # 'mlp' | 'recur_tied'
++    backbone: str = 'mlp'  # 'mlp' | 'recur_tied' | 'residual_mlp'
 +    recur_num_iters: int = 4
 +    recur_max_iters: int = 16
  
@@ -7222,6 +7262,12 @@ index 4ee2b26..dafe11a 100644
 +        backbone = str(self.backbone)
 +        if backbone == 'mlp':
 +            self.actor_net = MLP(self.hidden_dims, activate_final=True)
++        elif backbone == 'residual_mlp':
++            self.actor_net = ResidualMLPBackbone(
++                hidden_dims=self.hidden_dims,
++                layer_norm=self.layer_norm,
++                activations=nn.gelu,
++            )
 +        elif backbone == 'recur_tied':
 +            hidden_dim = int(self.hidden_dims[-1])
 +            self.actor_net = RecurTiedBackbone(
@@ -7247,7 +7293,7 @@ index 4ee2b26..dafe11a 100644
          self.mean_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
          if self.state_dependent_std:
              self.log_std_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
-@@ -196,7 +655,10 @@ class GCActor(nn.Module):
+@@ -196,7 +701,10 @@ class GCActor(nn.Module):
              if goals is not None:
                  inputs.append(goals)
              inputs = jnp.concatenate(inputs, axis=-1)
@@ -7259,12 +7305,12 @@ index 4ee2b26..dafe11a 100644
  
          means = self.mean_net(outputs)
          if self.state_dependent_std:
-@@ -230,9 +692,37 @@ class GCDiscreteActor(nn.Module):
+@@ -230,9 +738,43 @@ class GCDiscreteActor(nn.Module):
      action_dim: int
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
 +    layer_norm: bool = True
-+    backbone: str = 'mlp'  # 'mlp' | 'recur_tied'
++    backbone: str = 'mlp'  # 'mlp' | 'recur_tied' | 'residual_mlp'
 +    recur_num_iters: int = 4
 +    recur_max_iters: int = 16
  
@@ -7273,6 +7319,12 @@ index 4ee2b26..dafe11a 100644
 +        backbone = str(self.backbone)
 +        if backbone == 'mlp':
 +            self.actor_net = MLP(self.hidden_dims, activate_final=True)
++        elif backbone == 'residual_mlp':
++            self.actor_net = ResidualMLPBackbone(
++                hidden_dims=self.hidden_dims,
++                layer_norm=self.layer_norm,
++                activations=nn.gelu,
++            )
 +        elif backbone == 'recur_tied':
 +            hidden_dim = int(self.hidden_dims[-1])
 +            self.actor_net = RecurTiedBackbone(
@@ -7298,7 +7350,7 @@ index 4ee2b26..dafe11a 100644
          self.logit_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
  
      def __call__(
-@@ -257,7 +747,10 @@ class GCDiscreteActor(nn.Module):
+@@ -257,7 +799,10 @@ class GCDiscreteActor(nn.Module):
              if goals is not None:
                  inputs.append(goals)
              inputs = jnp.concatenate(inputs, axis=-1)
@@ -7310,7 +7362,7 @@ index 4ee2b26..dafe11a 100644
  
          logits = self.logit_net(outputs)
  
-@@ -282,14 +775,22 @@ class GCValue(nn.Module):
+@@ -282,14 +827,22 @@ class GCValue(nn.Module):
      layer_norm: bool = True
      ensemble: bool = True
      gc_encoder: nn.Module = None
@@ -7338,7 +7390,7 @@ index 4ee2b26..dafe11a 100644
  
      def __call__(self, observations, goals=None, actions=None):
          """Return the value/critic function.
-@@ -314,6 +815,77 @@ class GCValue(nn.Module):
+@@ -314,6 +867,77 @@ class GCValue(nn.Module):
          return v
  
  
@@ -7416,7 +7468,7 @@ index 4ee2b26..dafe11a 100644
  class GCDiscreteCritic(GCValue):
      """Goal-conditioned critic for discrete actions."""
  
-@@ -347,16 +919,91 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +971,91 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
@@ -7513,7 +7565,7 @@ index 4ee2b26..dafe11a 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +1011,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +1063,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -7521,7 +7573,7 @@ index 4ee2b26..dafe11a 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,16 +1023,127 @@ class GCBilinearValue(nn.Module):
+@@ -375,16 +1075,127 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
@@ -7651,7 +7703,7 @@ index 4ee2b26..dafe11a 100644
          else:
              return v
  
-@@ -394,9 +1153,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+@@ -394,9 +1205,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
  
      action_dim: int = None
  
@@ -7663,7 +7715,7 @@ index 4ee2b26..dafe11a 100644
  
  
  class GCMRNValue(nn.Module):
-@@ -416,11 +1175,66 @@ class GCMRNValue(nn.Module):
+@@ -416,11 +1227,66 @@ class GCMRNValue(nn.Module):
      latent_dim: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -7724,15 +7776,15 @@ index 4ee2b26..dafe11a 100644
 +            )
 +        else:
 +            raise ValueError(f'Unsupported backbone: {backbone}')
-+
-+        self.phi = module_cls(**phi_kwargs)
  
 -    def __call__(self, observations, goals, is_phi=False, info=False):
++        self.phi = module_cls(**phi_kwargs)
++
 +    def __call__(self, observations, goals, is_phi=False, info=False, *, num_iters=None):
          """Return the MRN value function.
  
          Args:
-@@ -436,8 +1250,12 @@ class GCMRNValue(nn.Module):
+@@ -436,8 +1302,12 @@ class GCMRNValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)
@@ -7747,7 +7799,7 @@ index 4ee2b26..dafe11a 100644
  
          sym_s = phi_s[..., : self.latent_dim // 2]
          sym_g = phi_g[..., : self.latent_dim // 2]
-@@ -471,12 +1289,67 @@ class GCIQEValue(nn.Module):
+@@ -471,12 +1341,67 @@ class GCIQEValue(nn.Module):
      dim_per_component: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -7817,7 +7869,7 @@ index 4ee2b26..dafe11a 100644
          """Return the IQE value function.
  
          Args:
-@@ -493,8 +1366,12 @@ class GCIQEValue(nn.Module):
+@@ -493,8 +1418,12 @@ class GCIQEValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)

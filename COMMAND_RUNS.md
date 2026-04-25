@@ -20,13 +20,13 @@ The new launcher env vars exposed for this ablation are:
 `QRL` now has its own launcher in [slurm/train_qrl.slurm](/Users/bruce/Recurrent-Offline-RL/slurm/train_qrl.slurm). It exposes the same recurrent quasimetric-value controls as the old shared path, including the optional evaluation-time iteration override `CRITIC_EVAL_NUM_ITERS`.
 
 ```bash
-# QRL baseline on antmaze-large-stitch-v0 (OGBench task defaults).
-sbatch --array=0 --gpus=a100-40 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=QRL_AntLargeStitch_MLP,EXP_NAME=sd000_ALS_QRL_mlp,CRITIC_BACKBONE=mlp,ALPHA=0.003,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_qrl.slurm
+# QRL baseline on antmaze-medium-stitch-v0 (OGBench task defaults).
+sbatch --array=0 --gpus=a100-40 --export="ALL,SEEDS=0,ENV_NAME=antmaze-medium-stitch-v0,RUN_GROUP=QRL_AntMediumStitch,EXP_NAME=sd000_ALS_QRL_mlp,CRITIC_BACKBONE=mlp,ALPHA=0.003,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_qrl.slurm
 
 # QRL recurrent critic/value on the same task, mirroring the CRL recur_tied setup.
 sbatch --array=0 --gpus=a100-40 --export="ALL,SEEDS=0,ENV_NAME=antmaze-medium-stitch-v0,RUN_GROUP=QRL_AntMediumStitch,EXP_NAME=sd000_AMS_QRL,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=4,ALPHA=0.003,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_qrl.slurm
 
-sbatch --array=0 --gpus=a100-40 --export="ALL,SEEDS=0,ENV_NAME=antmaze-Large-stitch-v0,RUN_GROUP=QRL_AntLargetitch,EXP_NAME=sd000_ALS_QRL,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=4,ALPHA=0.003,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_qrl.slurm
+sbatch --array=0 --gpus=a100-40 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=QRL_AntLargetitch,EXP_NAME=sd000_ALS_QRL,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=4,ALPHA=0.003,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_qrl.slurm
 
 
 ```
@@ -51,6 +51,49 @@ sbatch --array=0 --gpus=h100-47 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-sti
 # CRL full model on antmaze-giant-navigate-v0
 sbatch --array=0 --gpus=h100-47 --export="ALL,SEEDS=0,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=CRL_AntGiantNavigate,EXP_NAME=sd000_AGN_Swi_in,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=4,RECUR_USE_STEP_INFO=1,CRITIC_RECUR_USE_FILM=0,CRITIC_RECUR_USE_INPUT_INJECTION=1,CRITIC_RECUR_USE_SOFT_MIXTURE=0,RECUR_USE_ACT=0,ALPHA=0.1,DISCOUNT=0.995,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=1.0,ACTOR_P_RANDOMGOAL=0.0,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_crl.slurm
 
+# CRL full model on antmaze-medium-explore-v0
+# OGBench uses different non-model hyperparameters here than antmaze navigate/stitch:
+# alpha=0.003, discount=0.99, actor goal mix = (cur=0.0, traj=0.0, random=1.0).
+sbatch --array=0 --gpus=h100-47 --export="ALL,SEEDS=0,ENV_NAME=antmaze-medium-explore-v0,RUN_GROUP=CRL_AntMediumExplore,EXP_NAME=sd000_AME_Swi_in,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=4,RECUR_USE_STEP_INFO=1,CRITIC_RECUR_USE_FILM=0,CRITIC_RECUR_USE_INPUT_INJECTION=1,CRITIC_RECUR_USE_SOFT_MIXTURE=0,RECUR_USE_ACT=0,ALPHA=0.003,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.0,ACTOR_P_RANDOMGOAL=1.0,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_crl.slurm
+
+qsub -P personal -q normal -v SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_AntLargeStitch,EXP_NAME=sd000_ALS_baseline,CRITIC_BACKBONE=mlp,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,EVAL_ON_CPU=0 pbs/train_crl.pbs
+
+qsub -P personal -q normal -v SEEDS=0,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=CRL_AntGiantNavigate,EXP_NAME=sd000_AGN_baseline,CRITIC_BACKBONE=mlp,ALPHA=0.1,DISCOUNT=0.995,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=1.0,ACTOR_P_RANDOMGOAL=0.0,EVAL_ON_CPU=0 pbs/train_crl.pbs
+
+```
+
+## CRL actor-scaling interaction grid on `antmaze-large-stitch-v0` (`seed=0`)
+
+These four `CRL` runs are the minimal interaction test for the hypothesis:
+does actor scaling become useful only when the critic is iterative?
+
+The grid is:
+- baseline actor + baseline critic
+- baseline actor + iterative critic
+- scaled actor + baseline critic
+- scaled actor + iterative critic
+
+All four runs use the standard `antmaze-large-stitch-v0` CRL task defaults:
+- `alpha=0.1`
+- `discount=0.99`
+- `actor_p_curgoal=0.0`
+- `actor_p_trajgoal=0.5`
+- `actor_p_randomgoal=0.5`
+
+The scaled actor here uses the new `residual_mlp` backbone, while the iterative critic uses `recur_tied` with the SwiGLU cell.
+
+```bash
+# 1. Baseline: MLP actor + MLP critic
+sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_ALS_ActorScaleInteraction,EXP_NAME=sd000_ALS_actorint_mlp_mlp,CRITIC_BACKBONE=mlp,ACTOR_BACKBONE=mlp,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online" slurm/train_crl.slurm
+
+# 2. Critic-only scaling: MLP actor + iterative critic
+sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_ALS_ActorScaleInteraction,EXP_NAME=sd000_ALS_actorint_mlp_recurcritic,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=4,ACTOR_BACKBONE=mlp,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online" slurm/train_crl.slurm
+
+# 3. Actor-only scaling: residual actor + MLP critic
+sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_ALS_ActorScaleInteraction,EXP_NAME=sd000_ALS_actorint_resactor_mlpcritic,CRITIC_BACKBONE=mlp,ACTOR_BACKBONE=residual_mlp,ACTOR_NUM_LAYERS=32,ACTOR_LAYER_WIDTH=512,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online" slurm/train_crl.slurm
+
+# 4. Full interaction: residual actor + iterative critic
+sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_ALS_ActorScaleInteraction,EXP_NAME=sd000_ALS_actorint_resactor_recurcritic,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=4,ACTOR_BACKBONE=residual_mlp,ACTOR_NUM_LAYERS=32,ACTOR_LAYER_WIDTH=512,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online" slurm/train_crl.slurm
 ```
 
 ## CRL parameter-matched MLP comparisons on `antmaze-medium-stitch-v0`
@@ -161,3 +204,5 @@ sbatch --array=0 --gpus=a100-40 --export="ALL,SEEDS=0,ENV_NAME=antmaze-medium-st
 
 sbatch --array=0 --gpus=a100-40 --export="ALL,SEEDS=0,ENV_NAME=antmaze-medium-stitch-v0,RUN_GROUP=GCIQL_AntMediumStitch,EXP_NAME=sd000_AMS_GCIQL_baseline,VALUE_BACKBONE=mlp,CRITIC_BACKBONE=mlp,DISCOUNT=0.99,ALPHA=0.3,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online" slurm/train_gciql.slurm
 ```
+
+qsub -P personal -q normal -v SEEDS=0,ENV_NAME=antmaze-medium-explore-v0,RUN_GROUP=CRL_AntMediumExplore,EXP_NAME=sd000_AME_Swi_in,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=4,RECUR_USE_ACT=0,ALPHA=0.003,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.0,ACTOR_P_RANDOMGOAL=1.0,EVAL_ON_CPU=0 pbs/train_crl.pbs

@@ -11,6 +11,7 @@
 \usepackage{hyperref}
 \usepackage{url}
 \usepackage{booktabs}
+\usepackage{amsmath}
 \usepackage{amsfonts}
 \usepackage{nicefrac}
 \usepackage{microtype}
@@ -30,69 +31,268 @@
 \maketitle
 
 \begin{abstract}
-This paper studies iterative refinement as an architectural prior for goal-conditioned value estimation in offline goal-conditioned reinforcement learning. The central claim is that iterative value inference is especially useful when the value function must solve hard compositional reasoning problems, such as stitching, long-horizon credit assignment, and off-support generalization. Our experimental plan is designed to test five questions: whether value networks are a bottleneck, whether iterative refinement improves value quality, whether the gains persist after controlling for parameter count and compute, whether the effect generalizes across several offline goal-conditioned RL algorithms, and whether the benefit is specific to value estimation rather than a universal improvement for every network in the pipeline. The benchmark therefore emphasizes value-side replacement, mechanism analysis, efficiency controls, and explicit failure modes.
+We study iterative refinement for goal-conditioned reinforcement learning through the lens of contrastive RL (CRL). Our central claim is deliberately narrow: recurrent refinement is most useful when the main bottleneck is the goal-conditioned critic, and CRL provides the cleanest setting in which to analyze this mechanism. In OGBench, recurrent critics yield the largest gains on stitching-style tasks, where the critic must resolve long-horizon reachability under limited offline coverage rather than make a simple one-shot geometric judgment. The paper therefore focuses first on CRL: we introduce a recurrent critic architecture, analyze how iterative refinement changes critic behavior, and test whether the gains survive parameter and wall-clock controls against stronger feedforward baselines. We then use weaker or negative results in other algorithms to clarify the scope of the claim, discuss why actor-side recurrence is less effective, and present an online CRL extension showing that the same critic-side mechanism is not purely offline-specific.
 \end{abstract}
 
 \section{Introduction}
-Offline goal-conditioned RL depends heavily on the quality of the learned value function. When value inference is easy, standard feedforward architectures can be sufficient. However, stitching tasks, long-horizon composition, and off-support evaluation expose a more demanding regime in which the value network must progressively organize sparse, ambiguous, or weakly supported evidence. This motivates an architectural question: should value estimation be treated as a one-shot feedforward prediction problem, or as an iterative inference problem?
+Iterative refinement has recently become an effective design principle in sequence modeling and supervised learning, where repeated tied computation can outperform purely one-shot feedforward processing when the prediction problem benefits from multi-step correction \citep{universal_transformer, act, hrm, trm, urm}. In reinforcement learning, however, this idea has not been systematically studied as a critic architecture for goal-conditioned control. Instead, most recent architectural progress in RL has focused on scaling depth, width, or residual feedforward blocks \citep{thousand_layers, bro, simba}. These scaling trends have been particularly visible in online settings, where stronger critic architectures can translate into clear return improvements \citep{thousand_layers, bro, simba}. By contrast, offline goal-conditioned RL has remained harder: benchmark studies show that long-horizon stitching, policy extraction, and test-time generalization remain challenging even for strong recent methods \citep{ogbench}.
 
-The paper is organized around the hypothesis that iterative refinement is a better architectural choice for goal-conditioned value estimation in precisely these hard regimes. The contribution is not only to report downstream performance gains, but to isolate why they occur and when they do not. The experiments are therefore built to support four kinds of evidence: strong main-task performance, direct evidence that refinement improves the value estimate itself, fairness controls against parameter and compute confounds, and selectivity analyses showing that the effect is stronger for value networks than for actors.
+This gap suggests that offline goal-conditioned RL may need a different architectural bias. In this setting, the agent must infer long-horizon goal reachability from a fixed dataset, often with incomplete coverage and no opportunity to repair errors through additional exploration. Recent analyses argue that policy extraction and generalization are major bottlenecks in offline goal-conditioned RL, while separate work in offline RL more broadly questions when imperfect value learning itself is also a limiting factor \citep{ogbench, value_bottleneck}. Our starting point is that these issues are not mutually exclusive. On hard stitching tasks, the critic is precisely the object that must decide whether geometric proximity corresponds to dataset-supported reachability, whether disconnected fragments can be composed into a valid path, and whether its score is reliable enough for the actor to optimize against. This is naturally an iterative inference problem rather than a purely local one-shot prediction problem.
 
-This framing implies a deliberate benchmark design. Rather than maximizing the number of tasks or algorithms, we use a compact but diverse suite chosen to stress value inference difficulty. The resulting paper should make a scientific claim about architecture, not merely report a broader benchmark sweep.
+Motivated by this view, we study iterative refinement on the critic side of offline goal-conditioned RL. We focus on Contrastive RL (CRL) because it provides the cleanest setting in which to isolate this mechanism: the learned object is a goal-conditioned critic score, and the actor is trained directly from that score. This makes CRL an unusually good microscope for testing whether iterative refinement improves the critic itself, whether the effect is strongest on stitching-heavy tasks, and whether the improvement survives parameter and wall-clock controls against stronger feedforward baselines. Our hypothesis is deliberately narrower than a broad ``recurrence helps RL'' claim: iterative refinement should help most when the main bottleneck lies in the goal-conditioned critic.
+
+The resulting paper is organized around three layers of evidence. First, we introduce a recurrent critic architecture for CRL and show that it yields the clearest gains on OGBench stitching tasks. Second, we analyze the mechanism of these gains through critic-side probes, iteration-depth studies, and capacity controls against wider and deeper MLPs. Third, we study the limits of the idea: other goal-conditioned algorithms often exhibit smaller gains, actor-side recurrence is much less compelling, and the benefit is therefore selective rather than universal. We also include an online CRL extension to test whether the same critic-side inductive bias remains useful outside the purely offline setting.
+
+Taken together, these results support a targeted architectural claim. Iterative refinement is not equally useful for every network in goal-conditioned RL. Its main value appears when the critic must repeatedly resolve ambiguous long-horizon judgments from limited data support. This is exactly the regime exposed by offline stitching tasks, and CRL is the setting in which that regime is easiest to study.
+
+\paragraph{Contributions.}
+The paper makes four contributions. First, it introduces a recurrent critic architecture for CRL that combines tied refinement, SwiGLU updates, pre-layer normalization, LayerScale, step embeddings, and learned input/output projections. Second, it argues that offline stitching tasks expose a critic-side inference bottleneck and uses CRL as the cleanest mechanism-analysis setting for that hypothesis. Third, it evaluates whether the gains remain after parameter-matched and wall-clock-aware controls against wider and deeper MLP critics. Fourth, it uses weaker results in other algorithms, actor-side replacements, and an online CRL extension to clarify the scope of the claim rather than to overstate generality.
 
 \section{Related Work}
-The paper sits at the intersection of offline goal-conditioned RL, architectural design for value functions, and iterative inference. Prior offline goal-conditioned methods mainly differ in objectives, value parameterizations, and actor training strategies, while most architecture choices remain conventional feedforward backbones. Our emphasis is instead on whether iterative computation should be allocated to the value function itself. This also connects to a broader line of work on recurrent refinement, test-time iterative computation, and structured prediction, but here the central object of study is the goal-conditioned value estimate rather than a generic sequence model or planner.
+This work sits at the intersection of offline goal-conditioned RL, critic architecture design, and iterative computation. Prior goal-conditioned RL methods differ substantially in objective design, critic parameterization, and actor training, but most still rely on conventional feedforward backbones for the main learned signal. Our focus is not to propose a new RL loss. It is to ask whether the critic architecture itself should allocate computation iteratively when the task requires long-horizon composition from partial offline coverage.
 
-The most relevant comparisons are therefore not only between algorithms, but also between architectural placements of refinement. In particular, the paper will compare value-only replacement, actor-only replacement, and replacing both, in order to determine whether the benefit is selective to value estimation.
+The paper also connects to a broader literature on recurrent refinement, test-time computation, and deep-network scaling. Those works motivate the possibility that repeated tied updates can be a better use of compute than a single larger feedforward stack. Our setting differs in two ways. First, the object being refined is a goal-conditioned critic used for policy extraction, not a generic latent state. Second, we use weaker or negative results as part of the scientific argument: recurrence appears most useful when the algorithm exposes a clean critic-side bottleneck.
 
-\section{Method}
-The method section will present iterative refinement as a drop-in replacement for the value network in offline goal-conditioned RL. The intended emphasis is architectural rather than algorithm-specific: the same refinement module should be inserted into several algorithms while keeping the surrounding training objective as unchanged as possible. This makes the paper a study of whether iterative inference improves value estimation across algorithm classes rather than a proposal tied to a single loss.
+\section{Preliminaries}
+\paragraph{Problem setup.}
+We consider offline goal-conditioned RL in a Markov decision process $\mathcal{M}=(\mathcal{S},\mathcal{A},P,\mu)$, where $\mathcal{S}$ is the state space, $\mathcal{A}$ is the action space, $P(s' \mid s,a)$ is the transition kernel, and $\mu$ is the initial-state distribution. We assume a goal space $\mathcal{G}$, and in the state-goal setting used throughout OGBench we take $\mathcal{G}=\mathcal{S}$. The agent is given only an offline dataset
+\begin{equation}
+\mathcal{D}=\{\tau^{(n)}\}_{n=1}^{N}, \qquad
+\tau^{(n)}=(s^{(n)}_0,a^{(n)}_0,s^{(n)}_1,\ldots,s^{(n)}_{T_n}),
+\end{equation}
+collected by one or more behavior policies, with no further environment interaction during training. The goal is to learn a goal-conditioned policy $\pi(a \mid s,g)$ that reaches a desired goal $g \in \mathcal{G}$.
 
-At a high level, the refinement module starts from an initial hidden representation and repeatedly updates it through tied recurrent computation before producing the final value prediction. The design space to be evaluated includes the number of dense layers per refinement update, the number of refinement steps, whether parameters are tied or untied, the conditioning design used for FiLM, the placement of normalization, and the choice of LayerScale. These choices are important because they determine whether the gains come from iterative correction itself or from incidental increases in capacity.
+For a goal distribution $p(g)$ and a goal-conditioned reward $r_g(s_t,a_t,s_{t+1})$, the objective is
+\begin{equation}
+J(\pi)=
+\mathbb{E}_{g \sim p(g),\, \tau \sim p^{\pi}(\tau \mid g)}
+\left[
+\sum_{t=0}^{T} \gamma^{t} r_g(s_t,a_t,s_{t+1})
+\right],
+\end{equation}
+where
+\begin{equation}
+p^{\pi}(\tau \mid g)
+=
+\mu(s_0)\prod_{t=0}^{T-1}\pi(a_t \mid s_t,g)\,P(s_{t+1} \mid s_t,a_t).
+\end{equation}
+In goal-reaching tasks, a common choice is a sparse reward such as $r_g(s_t,a_t,s_{t+1})=\mathbf{1}[s_{t+1}=g]$ or its observation-space analogue. In our offline setting, goals are sampled from the dataset itself. Following OGBench, training can pair each transition with either a future state from the same trajectory or a random state from the dataset. Future-trajectory goals provide positive reachability supervision, while random goals create hard negatives and off-support comparisons.
 
-The paper will therefore position the architecture as a value-side inductive bias: extra computation is allocated to repeated refinement of a single estimate, rather than to a deeper one-shot feedforward stack. This distinction drives the controls in the experimental section.
+\paragraph{CRL with BCE contrastive loss.}
+Our experiments use Contrastive Reinforcement Learning (CRL) to solve the goal-conditioned problem above. CRL is an actor-critic method, and it is the primary algorithm in this paper because it exposes the critic-side bottleneck most clearly. We write the critic as $f_{\phi,\psi}(s,a,g)$ and the policy as $\pi_{\theta}(a \mid s,g)$. For continuous control, the critic is parameterized by two neural networks that produce a state-action embedding $\phi(s,a)$ and a goal embedding $\psi(g)$. The critic score is their scaled inner product,
+\begin{equation}
+f_{\phi,\psi}(s,a,g)=\frac{\phi(s,a)^{\top}\psi(g)}{\sqrt{d}},
+\end{equation}
+where $d$ is the latent dimension. In our setting, each positive goal $g_i$ is sampled as a future state from the same trajectory as $(s_i,a_i)$, consistent with the reachability objective in the problem setup. Training is performed on minibatches $\mathcal{B}=\{(s_i,a_i,g_i)\}_{i=1}^{B}$, and the critic constructs in-batch logits
+\begin{equation}
+\ell_{ij}=f_{\phi,\psi}(s_i,a_i,g_j)=\frac{\phi(s_i,a_i)^{\top}\psi(g_j)}{\sqrt{d}}.
+\end{equation}
+The diagonal entry $\ell_{ii}$ is the positive pair, while the off-diagonal entries $\ell_{ij}$ with $j \neq i$ act as negatives drawn from other goals in the batch. Unlike the standard InfoNCE form of CRL, the version used in this paper adopts the sigmoid BCE objective implemented in OGBench. Each logit is trained independently against the identity-matrix target:
+\begin{equation}
+\mathcal{L}_{\mathrm{critic}}(\phi,\psi)
+=
+\frac{1}{B^2}\sum_{i=1}^{B}\sum_{j=1}^{B}
+\mathrm{BCE}\!\left(\ell_{ij}, \mathbf{1}[i=j]\right).
+\end{equation}
+This form is better aligned with our mechanism story. The critic is not asked to normalize one positive against a softmax over negatives; instead, it must learn an absolute goal-conditioned compatibility signal that separates reachable from non-matched goals across the batch. In the main experiments, we use the DDPG+BC actor variant of CRL, so the actor is trained to choose actions with high critic score while staying close to the offline behavior policy. As a result, improvements in the critic directly affect policy extraction, which is exactly why CRL provides a clean setting for studying recurrent refinement.
+
+\paragraph{Recurrent critic network learning.}
+Our recurrent CRL critic keeps the bilinear contrastive structure above, but replaces the feedforward backbones inside $\phi$ and $\psi$ with tied iterative refinement modules. Let $x$ denote the input to one tower: for $\phi$ this is the state-action pair $(s,a)$, and for $\psi$ this is the goal $g$. The tower first computes an input projection
+\begin{equation}
+h^{(0)} = W_{\mathrm{in}} x.
+\end{equation}
+It then performs $K$ recurrent refinement steps. At step $k$, we first apply pre-layer normalization and add a learned step embedding:
+\begin{equation}
+u^{(k)} = \mathrm{LN}(h^{(k)}) + E_k,
+\end{equation}
+where $E_k$ is the embedding for refinement step $k$. The update block is a tied two-layer SwiGLU cell,
+\begin{align}
+a^{(k)} &= W_a u^{(k)}, \\
+b^{(k)} &= W_b u^{(k)}, \\
+g^{(k)} &= \mathrm{SiLU}(a^{(k)}) \odot b^{(k)}, \\
+\Delta h^{(k)} &= W_o g^{(k)},
+\end{align}
+followed by a residual update with per-step LayerScale parameter $\alpha_k$:
+\begin{equation}
+h^{(k+1)} = h^{(k)} + \alpha_k \Delta h^{(k)}.
+\end{equation}
+After $K$ steps, an output projection produces the final latent representation
+\begin{equation}
+z = W_{\mathrm{out}} h^{(K)},
+\end{equation}
+which is used as either $\phi(s,a)$ or $\psi(g)$ in the bilinear critic score $f_{\phi,\psi}(s,a,g)$. The parameters $(W_{\mathrm{in}}, W_a, W_b, W_o, W_{\mathrm{out}})$ are shared across refinement steps, while the step embeddings $\{E_k\}$ and LayerScale coefficients $\{\alpha_k\}$ are step-specific. In the final model we do \emph{not} use FiLM, input injection, or output soft mixture, because those variants did not show reliable benefit in our ablations.
+
+\begin{figure}[t]
+\centering
+\fbox{%
+  \parbox[c][1.8in][c]{0.9\linewidth}{%
+    \centering
+    Placeholder for recurrent CRL critic diagram.\\
+    Show input projection, tied recurrent SwiGLU refinement steps,\\
+    step embeddings, LayerScale residual updates, and output projection\\
+    for both $\phi(s,a)$ and $\psi(g)$ towers.
+  }%
+}
+\caption{Placeholder for the recurrent CRL critic architecture. The final version will include a model diagram showing the tied iterative refinement block used inside the $\phi$ and $\psi$ towers.}
+\label{fig:recurrent-crl-critic}
+\end{figure}
+
+\section{Recurrent Critic Architecture}
+Our architecture section will build directly on the preliminaries above. The key modeling choice is to treat both $\phi_{\theta}$ and $\psi_{\theta}$ as iterative inference modules rather than one-shot MLPs. Within each tower, the recurrent update is tied across steps, so increasing the number of iterations changes the amount of refinement rather than simply appending untied depth. This is important for the interpretation of the mechanism results: if additional steps help, that evidence supports iterative correction rather than only larger parameter count.
+
+The feedforward baseline used throughout the paper is the default OGBench CRL MLP critic with three hidden layers, GELU activations, and layer normalization. The recurrent model is compared against this baseline as well as two stronger feedforward controls: a wider MLP and a deeper MLP chosen to match critic parameter count as closely as possible. These controls preserve the same basic MLP recipe and are meant to answer the most direct fairness question: does recurrent refinement help because it is recurrent, or only because it changes critic capacity?
 
 \section{Experiments}
-The experiment suite is designed to answer five reviewer-facing questions. First, does iterative refinement improve downstream performance? Second, does it improve the value estimate rather than merely the final policy score? Third, are the gains still present after controlling for parameter count and compute? Fourth, does the effect generalize across algorithm classes and task families? Fifth, is the benefit selective to value estimation rather than universal across all model components?
+The experiments are structured to support one main claim and several scope-defining side claims. The main claim concerns CRL: recurrent critics help most on stitching-heavy tasks and do so for critic-side reasons. The side claims are that this effect is not explained only by naive scaling, does not transfer equally to every algorithm, and is weaker when recurrence is moved to the actor instead of the critic.
 
-\subsection{Benchmark Scope}
-The main benchmark will use a small but representative subset of OGBench. The target is three tasks at minimum and four tasks if compute allows, with coverage including one stitching-heavy task, one locomotion task, one manipulation task, and optionally one additional hard task. The selection principle is diversity of value inference difficulty rather than benchmark size.
+\subsection{Experiment Setup}
+The main empirical setting is OGBench, with CRL as the primary algorithm. The core task suite should emphasize environments that stress long-horizon stitching rather than broad benchmark coverage for its own sake. The current priority is \texttt{antmaze-medium-stitch-v0} for mechanism development and \texttt{antmaze-large-stitch-v0} for the main capacity-control study, with \texttt{antmaze-giant-navigate-v0} serving as a boundary condition where gains are expected to be smaller. All primary plots should report mean and standard deviation over three seeds when feasible.
 
-On the algorithm side, the core matrix will use three offline goal-conditioned RL algorithms, with an optional fourth algorithm included specifically as a weak-gain or failure-mode case. All main comparisons should use three seeds. The resulting main matrix is therefore a reviewer-safe benchmark that is broad enough to support a general architectural claim without becoming computationally diffuse.
+The broader paper will still mention other algorithms, but their role is secondary. Rather than building a large benchmark table up front, we use them to explain why the CRL result is the cleanest and why the gains may shrink when the critic-side mechanism is more entangled with other design choices.
 
 \subsection{Main Results}
-The first experiment block studies plug-and-play value replacement. The goal is to show that replacing the value network with iterative refinement improves final performance and learning dynamics across multiple algorithms and task families. The main presentation should include final normalized score or return, learning curves, and mean plus standard deviation over seeds.
+The first result section should establish that recurrent critics materially improve CRL on stitching-heavy OGBench tasks. The presentation should prioritize both final success and learning speed. A good first figure is a learning-curve comparison between the default MLP critic and the recurrent critic on \texttt{antmaze-medium-stitch-v0} and \texttt{antmaze-large-stitch-v0}, with \texttt{antmaze-giant-navigate-v0} included as a lower-gain comparison. The point of this figure is not only that recurrence helps, but that the gains are concentrated in the regime predicted by the mechanism story.
 
-\subsection{Value-Versus-Actor Selectivity}
-The second block isolates where the architectural benefit comes from. For one or two algorithms on two tasks, the paper will compare a baseline model, value-only replacement, actor-only replacement, and replacing both. This section is central to the scientific contribution because it distinguishes a value-specific advantage from a generic “more expressive network helps” story.
+\subsection{Why and How Is the Recurrent Critic Better Than the Baseline?}
+We now ask what the recurrent critic changes inside CRL. This is the cleanest algorithmic setting for this question because the same learned score is both the object of contrastive training and the signal used for actor extraction. For a transition $(s,a)$ and goal $g$, CRL trains the critic score $f(s,a,g)$ to separate a matched future goal from non-matched goals. The DDPG+BC actor then chooses actions by trading off this critic score against behavior cloning. Thus, if recurrence helps CRL, we can inspect the critic directly, inspect how the actor uses the critic, and check whether the resulting signal remains tied to offline support.
 
-\subsection{Architecture Ablations}
-The third block studies which parts of the architecture matter. These ablations will be run on the strongest algorithm and on two tasks, ideally one hard stitching task and one non-stitching task. The ablation axes include the number of dense layers per loop, the number of refinement steps, tied versus untied designs, FiLM design, normalization placement, LayerScale design, a parameter-matched feedforward baseline, and a compute-matched feedforward baseline.
+The diagnostics below are designed for that purpose. For each evaluation batch, let $q^+=f(s,a,g)$ denote the critic score on the matched goal and let $q^-=f(s,a,g^-)$ denote the score on a non-matched goal. We report the mean margin $\mathbb{E}[q^+-q^-]$, the ranking accuracy $\Pr[q^+>q^-]$, and a normalized separation
+\begin{equation}
+z_{\mathrm{sep}} =
+\frac{\mathbb{E}[q^+-q^-]}
+{\sqrt{\mathrm{Var}(q^+) + \mathrm{Var}(q^-) + \epsilon}}.
+\end{equation}
+We also evaluate the actor-facing critic signal by comparing the critic score of the actor action to the score of the dataset action under the same state and goal. This gives \texttt{q\_delta}, the mean difference $f(s,\pi(s,g),g)-f(s,a_{\mathcal{D}},g)$, and \texttt{prefer\_actor\_frac}, the fraction of examples where the critic prefers the actor action. Finally, policy-behavior MSE and log probability measure how far the extracted actor moves from the behavior distribution. These actor-facing metrics are important because a larger critic preference for the actor is not automatically better in offline RL; an overconfident critic can encourage unsupported actions.
 
-\subsection{Mechanism Analysis}
-The fourth block asks whether iterative refinement performs meaningful correction over steps. This section will analyze per-step value trajectories, step-to-step update magnitudes, improvement over refinement depth, hard-versus-easy example behavior, and saturation. The key point is to show that later refinement steps do useful inferential work instead of merely adding depth.
+\begin{figure}[t]
+\centering
+\fbox{%
+  \parbox[c][1.55in][c]{0.92\linewidth}{%
+    \centering
+    Placeholder for mechanism summary.\\
+    Panels: success, critic separation, actor preference, behavior drift.\\
+    Tasks: AMS, ALS, AGN; methods: MLP and recurrent critic.
+  }%
+}
+\caption{Mechanism summary for CRL. The recurrent critic improves success while changing both critic separation and actor extraction. The key actor-facing pattern is not simply larger \texttt{q\_delta}: recurrent critics often produce smaller actor-over-behavior advantages together with substantially lower behavior drift, consistent with a more usable and less extrapolative critic signal.}
+\label{fig:mechanism-summary}
+\end{figure}
 
-The intended conclusion of this section is a concrete mechanistic one. In long-horizon offline goal-conditioned RL, the critic is not merely fitting a local regression target; it must resolve a compositional reachability problem under dataset support constraints. On stitching-heavy tasks, the network must distinguish geometric proximity from actual connectivity in the offline data, infer whether intermediate states make the goal reachable, and avoid assigning high value to paths the actor cannot realize. A one-shot MLP critic must compress that judgment into a single feedforward pass, which is precisely where long-horizon ambiguity can produce diffuse or brittle estimates. Iterative refinement instead revisits the same state-goal representation several times, allowing the critic to revise intermediate beliefs, sharpen hard positive-versus-negative comparisons, and accumulate evidence that is difficult to organize in one shot. This gives a natural explanation for why refinement should help most on stitching and medium-horizon composition rather than on trivially local tasks.
+\paragraph{The recurrent critic improves discriminative separation, but not by uniformly increasing all margins.}
+The first diagnostic is whether recurrence gives CRL a cleaner matched-versus-non-matched signal. On \texttt{antmaze-medium-stitch-v0} (AMS), the answer is direct: the recurrent critic raises final success from $0.608$ to $0.947\pm0.015$, while increasing the mean critic margin from $22.3$ to $27.6\pm0.6$, ranking accuracy from $0.988$ to $0.998\pm0.002$, and normalized separation from $1.85$ to $2.11\pm0.06$. This is the clean positive case: recurrent refinement produces a visibly sharper contrastive critic, and the actor converts that signal into much better control.
 
-The current CRL logs on \texttt{antmaze-medium-stitch-v0} already suggest this more specific story. The recurrent critic achieves much earlier policy success: at 100k updates, overall success is 0.692 for the recurrent model versus 0.084 for the baseline, and the recurrent model exceeds 0.9 success by 300k updates, whereas the baseline never reaches 0.7 and ends at 0.608 after 1M updates. Importantly, this early advantage is not explained by a dramatically larger evaluation margin at the same checkpoint. At 100k updates, \texttt{evaluation/critic\_signal/margin\_mean} is nearly identical for the two models (13.09 recurrent versus 13.20 baseline), while the recurrent model already shows better critic classification accuracy during training (\texttt{training/critic/categorical\_accuracy} 0.431 versus 0.231), better evaluation-time separation (\texttt{evaluation/critic\_signal/separation\_z} 2.36 versus 2.02), and a much more behavior-grounded actor signal (\texttt{evaluation/policy\_behavior\_mse} 0.102 versus 0.198, \texttt{evaluation/actor\_critic/q\_delta\_mean} 0.242 versus 1.245). This pattern suggests that the baseline critic can already produce some coarse ranking signal, but that signal is harder for the actor to use safely. The recurrent critic, by contrast, appears to produce a value signal that is easier to optimize against without inducing severe off-support policy drift.
+The larger and harder tasks show why the mechanism should not be reduced to ``margin goes up.'' On \texttt{antmaze-large-stitch-v0} (ALS), success improves from $0.184$ to $0.489\pm0.103$, and on \texttt{antmaze-giant-navigate-v0} (AGN), from $0.136$ to $0.322\pm0.083$. In both cases, normalized separation improves even though the raw mean margin does not: ALS separation rises from $2.18$ to $2.49\pm0.04$, and AGN separation rises from $1.45$ to $1.62\pm0.04$. This distinction matters. Raw CRL scores are not calibrated across architectures, and a larger absolute margin can coexist with broader score variance or less reliable actor extraction. The recurrent critic is therefore better described as improving the discriminative quality of the critic signal, especially after normalization, rather than simply amplifying logits.
 
-An iteration-count sweep makes this interpretation substantially sharper. Relative to the MLP baseline, a 1-step recurrent critic improves performance only modestly: its best success is 0.732, compared with 0.608 for the baseline, and at 100k updates it reaches only 0.176 success. The large gain appears only once the critic is allowed to revise its estimate multiple times. At 100k updates, success rises from 0.176 with one refinement step to 0.612 with two steps, 0.644 with three steps, and 0.692 with four steps. The same pattern appears in the actor-facing diagnostics: \texttt{evaluation/actor\_critic/q\_delta\_mean} decreases monotonically from 0.666 (1 step) to 0.415 (2 steps), 0.304 (3 steps), and 0.242 (4 steps), while \texttt{evaluation/policy\_behavior\_mse} drops from 0.151 to 0.118, 0.111, and 0.102. Training-time critic quality shows the same ordering: at 100k updates, \texttt{training/critic/categorical\_accuracy} is 0.223 for one step, 0.353 for two, 0.400 for three, and 0.431 for four. This is important because it rules out the weak explanation that the gain comes only from replacing the MLP with a stronger one-shot block. A single recurrent-style pass helps somewhat, but the dominant improvement appears when the model can repeatedly refine the same state-goal judgment.
+\paragraph{The main repair is actor-usable critic signal.}
+The strongest evidence for the mechanism comes from the actor-facing diagnostics. In offline CRL, a critic is useful only if optimizing it yields actions that improve goal-reaching without moving too far away from the dataset support. The recurrent critic changes this interface in the right direction. On AMS, the baseline critic gives the actor a much larger apparent advantage over the behavior action (\texttt{q\_delta} $=1.85$ and \texttt{prefer\_actor\_frac} $=0.734$), but the resulting policy is also much farther from the behavior data (policy-behavior MSE $=0.194$). The recurrent critic reaches substantially higher success with a smaller actor-over-behavior advantage (\texttt{q\_delta} $=0.265\pm0.049$, \texttt{prefer\_actor\_frac} $=0.557\pm0.017$) and much lower behavior drift (MSE $=0.082\pm0.001$).
 
-Later in training, the recurrent critic also becomes genuinely sharper on the horizons that matter most for stitching. By 1M updates, the recurrent model has larger overall separation (\texttt{evaluation/critic\_signal/margin\_mean} 27.51 versus 22.32) and especially stronger medium-horizon and path-based discrimination (\texttt{traj\_medium\_margin\_mean} 29.41 versus 23.35, \texttt{maze\_path\_medium\_margin\_mean} 21.59 versus 15.89, \texttt{maze\_xy\_medium\_margin\_mean} 23.49 versus 15.79). The task-level breakdown is consistent with this interpretation: the largest gains are concentrated on the harder subtasks, including \texttt{task3} (0.96 recurrent versus 0.36 baseline) and \texttt{task4} (0.98 recurrent versus 0.00 baseline). At the same time, the geometry diagnostics indicate that the recurrent model is not simply learning a uniformly cleaner global maze metric: late in training, \texttt{evaluation/critic\_geometry/graph\_corr} is often lower for the recurrent critic than for the baseline. This caveat is useful, because it sharpens the scientific claim. The recurrent mechanism does not appear to win by improving every notion of value structure equally. Rather, it wins by producing a more operationally useful critic: one that separates supported from unsupported long-horizon decisions more cleanly and provides a safer signal for downstream policy extraction.
+ALS shows the same qualitative pattern. The recurrent actor succeeds more often even though its critic does not prefer the actor action as aggressively as the MLP critic: \texttt{q\_delta} decreases from $0.522$ to $0.317\pm0.030$, while success nearly triples. This is exactly the behavior we would expect if the baseline critic sometimes creates an overly permissive optimization target: it can assign high relative value to actor actions, but those preferences are less useful for safe policy extraction. Recurrent refinement appears to make the critic more selective about when actor improvement is justified, which lets the actor extract a better policy while remaining closer to behavior support.
 
-\subsection{Better Value Analysis}
-The fifth block defines what it means for the value function to be better. Candidate analyses include correlation with realized return or success, separation between reachable and unreachable goals, calibration, Bellman residual behavior, reduction of pathological variance or overly extreme predictions, and smoother structure over nearby state-goal pairs. These analyses support the claim that the architecture improves value quality itself, not just end-task reward.
+\begin{figure}[t]
+\centering
+\fbox{%
+  \parbox[c][1.55in][c]{0.92\linewidth}{%
+    \centering
+    Placeholder for hard-case selectivity.\\
+    Suggested panels: medium/long trajectory buckets, maze path buckets,\\
+    and per-task success breakdown for AMS, ALS, and AGN.
+  }%
+}
+\caption{Selectivity of the recurrent gain. The figure should separate easy aggregate statistics from harder control-relevant buckets, such as medium or long trajectory goals and path-sensitive maze buckets. The intended message is selective improvement on difficult decisions, not a claim that every raw bucket margin increases on every task.}
+\label{fig:mechanism-selectivity}
+\end{figure}
 
-\subsection{Efficiency and Fairness Controls}
-The sixth block addresses the main confounds directly. Every main comparison should report parameter count, value-network parameter count, wall-clock training time, update throughput, and a clear notion of refinement-depth compute multiplier. Where possible, the paper should also include performance versus training steps and performance versus wall-clock time. This section is necessary to rule out the interpretation that iterative refinement wins only because it uses more parameters, more compute, or longer training.
+\paragraph{The gain is selective rather than uniform.}
+The per-task breakdown supports the same interpretation. On AMS, the MLP already solves some easier subtasks, but fails on the hardest one: final task success is $(0.92,0.94,0.36,0.00,0.82)$. The recurrent critic changes the profile to $(0.985,0.935,0.945,0.930,0.940)$ on average, with the largest gain on the previously unsolved subtask. ALS is similar: the recurrent critic improves tasks 1, 3, 4, and 5, while task 2 remains unsolved in this sweep. AGN is a boundary case rather than a clean uniform win; recurrent improves average success, but the task remains difficult and the diagnostic gains are smaller.
 
-\subsection{Failure Modes and Limitations}
-The final block will identify where refinement is weak, unnecessary, or inconsistent. Likely cases include actor-only replacement, simpler tasks, shorter-horizon settings, and algorithms whose value formulation may already reduce the need for iterative correction. This section is important because selective success makes the paper more credible than a uniformly positive story.
+Bucketed critic metrics tell a compatible but more nuanced story. In AMS, recurrent refinement raises margins not only in aggregate but also in longer-horizon and path-sensitive buckets, including trajectory-medium goals ($23.3$ to $29.0\pm1.4$), maze-path-medium goals ($15.9$ to $21.9\pm1.1$), and maze-XY-medium goals ($15.8$ to $22.9\pm1.0$). In ALS and AGN, these raw bucket margins do not uniformly increase, even though success improves. We therefore do not interpret recurrence as a blanket margin booster. Instead, the evidence points to a more operational form of selectivity: the recurrent critic changes the score distribution and the actor interface in ways that matter for the harder control decisions, while the exact raw margin movement depends on task scale and score calibration.
+
+\paragraph{The recurrent critic is not simply a better global geometry model.}
+A natural alternative explanation is that recurrence learns a better shortest-path surrogate over the maze, and that improved control follows from better global geometry. The geometry diagnostics do not support this stronger claim. We measure the correlation between critic score and negative graph distance to the goal, including a hard subset of longer graph distances. On AMS, graph correlation decreases from $0.516$ for the MLP to $0.427\pm0.021$ for the recurrent critic, and hard graph correlation decreases from $0.286$ to $0.209\pm0.039$. ALS shows the same direction, with graph correlation $0.535$ to $0.507\pm0.010$ and hard graph correlation $0.334$ to $0.317\pm0.020$. AGN has similar overall graph correlation but lower hard graph correlation for the recurrent critic.
+
+\begin{figure}[t]
+\centering
+\fbox{%
+  \parbox[c][1.35in][c]{0.92\linewidth}{%
+    \centering
+    Placeholder for geometry caveat.\\
+    Panels: graph correlation and hard graph correlation.\\
+    Show alongside success or normalized separation to avoid overclaiming.
+  }%
+}
+\caption{Geometry caveat. Recurrent refinement improves control without consistently improving correlation between critic score and negative maze graph distance. This rules out the simplest explanation that recurrence merely learns a uniformly better global shortest-path geometry.}
+\label{fig:mechanism-geometry}
+\end{figure}
+
+This caveat sharpens the mechanism claim. Recurrent refinement is not a generic replacement for distance regression, nor does it make every critic diagnostic better. Its benefit is more specific: in CRL, where the actor directly optimizes the learned goal-conditioned critic, recurrence produces a discriminative signal that is more compatible with offline actor extraction. AMS is the clean positive case, ALS is the main hard positive case, and AGN is the boundary case where the same trend exists but is weaker. The mechanism is therefore empirical and deliberately narrow: recurrent refinement improves CRL by making the critic more useful for control, not by proving a uniformly better model of maze geometry.
+
+\subsection{Iterative Depth Really Helps: Evidence for a Threshold Effect}
+This subsection should isolate iteration depth from the rest of the architecture. The key comparison is \texttt{iter1} versus \texttt{iter2} versus \texttt{iter4}, with the MLP baseline included as the one-shot control. The current \texttt{antmaze-medium-stitch-v0} results already suggest a threshold effect: \texttt{iter1} helps only modestly, while the major jump appears once the critic can revise its estimate multiple times. The final figure should therefore combine two views: a performance plot across iteration counts, and a probe-based plot showing how the actor-usable critic signal changes with depth. The target claim is:
+\begin{quote}
+multi-step refinement is not just a smooth scaling trend; there is a threshold beyond which iterative correction becomes meaningfully useful for control.
+\end{quote}
+
+\begin{figure}[t]
+\centering
+\fbox{%
+  \parbox[c][1.55in][c]{0.92\linewidth}{%
+    \centering
+    Placeholder for iteration-threshold figure.\\
+    Show performance curves and fixed-probe metrics for MLP, \texttt{iter1}, \texttt{iter2}, and \texttt{iter4}.
+  }%
+}
+\caption{Placeholder for the iteration-threshold figure. The final version should show that the main gain appears only once the critic is allowed to refine its estimate for multiple steps.}
+\label{fig:iteration-threshold}
+\end{figure}
+
+\subsection{Matched Parameter and Computation Comparison}
+Because the paper is architectural, fairness controls are mandatory. The cleanest capacity-control environment is \texttt{antmaze-large-stitch-v0}. The recurrent critic should be compared against the default MLP critic, a wider MLP, and a deeper MLP. The feedforward controls should preserve the same basic MLP recipe as CRL's default critic: GELU activations, layer normalization, and no residual connections. The wider and deeper controls are chosen by matching critic parameter count as closely as possible to the recurrent critic, rather than by arbitrary scaling.
+
+For the current recurrent target, parameter matching yields two reasonable controls: a wider MLP with hidden sizes \texttt{688-688-688} and a deeper MLP with hidden sizes \texttt{512-512-512-512-512}. The former is within 0.37\% of the recurrent critic's parameter count, and the latter is within 0.19\%. These should be the primary fairness baselines. Compute should be reported separately using measured wall-clock statistics such as \texttt{time/step\_time}. If exact compute matching would require pathological plain MLPs, the paper should instead present the nearest valid feedforward controls together with wall-clock or anytime performance curves.
+
+\begin{figure}[t]
+\centering
+\fbox{%
+  \parbox[c][1.55in][c]{0.92\linewidth}{%
+    \centering
+    Placeholder for parameter/computation matching figure.\\
+    Compare recurrent critic against baseline MLP, wider MLP, and deeper MLP\\
+    under matched parameter count and wall-clock-aware comparisons.
+  }%
+}
+\caption{Placeholder for the fairness-control figure. The final version should show that the recurrent gain is not explained only by feedforward capacity or by trivial compute differences.}
+\label{fig:param-compute-match}
+\end{figure}
+
+\subsection{Ablation on Model Components}
+This subsection should study which parts of the recurrent critic actually matter. The main target is the final CRL model, so the ablations should be centered on the recurrent critic itself rather than on a broad algorithm sweep. Relevant axes include the update block type, pre-LN versus alternative normalization placement, LayerScale, step embeddings, and other architectural components that remain plausible after design search. Variants that did not help, such as input injection and output soft mixture, should appear only as negative ablations rather than as part of the main model story. The goal is to show that the final design is not arbitrary and that the gains do not come from one accidental implementation detail.
+
+\begin{figure}[t]
+\centering
+\fbox{%
+  \parbox[c][1.55in][c]{0.92\linewidth}{%
+    \centering
+    Placeholder for model-component ablation figure.\\
+    Compare the final recurrent critic to component-removal variants.
+  }%
+}
+\caption{Placeholder for the model-component ablation figure. The final version should identify which architectural choices are necessary for stable and effective recurrent critic refinement.}
+\label{fig:model-ablation}
+\end{figure}
+
+\subsection{Actor-Side Recurrence for the Sake of Completeness}
+The actor-side story should be presented as a separate failure mode. If recurrent critics help because they refine the goal-conditioned learning signal, then moving recurrence to the actor need not help much and may even hurt. This is an important negative result because it argues against the generic claim that ``recurrent networks are better everywhere.'' The clean comparison here is baseline CRL, recurrent critic only, recurrent actor only, and critic-plus-actor recurrence on one stitching task and one lower-gain task. The expected result is that the critic-side replacement dominates, while actor-side recurrence produces smaller, inconsistent, or negative gains.
+
+\subsection{Online Extension}
+The final experiment block should show that the core mechanism is not purely an artifact of offline training. A compact online CRL experiment can ask whether the same recurrent critic still helps when the data distribution is no longer fixed. The claim should remain modest: not that recurrence solves online exploration in general, but that the same critic-side architectural bias continues to be useful when CRL is trained online. This section can be short, but it helps broaden the paper beyond a purely offline curiosity.
 
 \section{Discussion}
-The paper should ultimately argue for a specific architectural conclusion: iterative computation is most valuable when applied to hard value inference problems, and especially when placed on the value side of offline goal-conditioned RL. If the experiments confirm this pattern, the broader implication is that architectural improvements in offline RL should be targeted according to which component is the real inference bottleneck, rather than distributed uniformly across actor and critic.
+The paper should end with a narrow architectural conclusion. Iterative refinement is not uniformly helpful across every goal-conditioned RL component or every algorithm. Its clearest benefit appears when the critic itself is the main bottleneck, and CRL is the setting in which this bottleneck is both most severe and most analyzable. This is why the paper emphasizes CRL rather than attempting to force a broad but weak generalization story.
 
-At the same time, the paper is intentionally not framed as a claim of universal superiority. The experiment design explicitly anticipates weak-gain and failure-mode settings. That selectivity is a feature of the contribution, because it helps characterize when iterative refinement is worth its added complexity and when simpler feedforward designs remain sufficient.
+If the final experiments support the current draft evidence, the broader implication is that architectural work in RL should be targeted according to the hardest inference problem in the pipeline. On stitching-heavy goal-conditioned tasks, that problem can live in the critic rather than in the actor. Recurrent refinement is therefore best viewed not as a universal replacement for feedforward networks, but as a tool for components that must repeatedly resolve ambiguous long-horizon judgments from limited data support.
+
+\section{Limitations}
+The paper's scope is intentionally narrow. First, the strongest evidence comes from CRL, and the gains in other algorithms are smaller or less consistent. Second, the most compelling tasks are stitching-heavy OGBench domains; the effect may be weaker on tasks whose goal-conditioned structure is already easy for a one-shot critic. Third, recurrent critics incur extra compute and implementation complexity even when they are parameter efficient. Finally, some mechanism claims will still rely on indirect probes rather than exact causal interventions. These limitations should be stated explicitly rather than hidden, because they clarify the scientific meaning of the result.
 
 \begin{ack}
 Add acknowledgments and funding disclosures here for the final version only.
@@ -106,20 +306,22 @@ Add references here, or replace this block with your BibTeX workflow.
 \appendix
 
 \section{Concrete Experiment Matrix}
-The planned experimental budget is:
+The current paper plan is:
 \begin{itemize}
-\item Main matrix: three algorithms, four tasks if possible, and three seeds.
-\item Value-versus-actor study: one to two algorithms, two tasks, and three seeds.
-\item Architecture ablations: one algorithm, two tasks, and three seeds when budget allows.
-\item Mechanism and value analyses: primarily post hoc analyses built from saved logs and fixed prediction dumps rather than a large additional training budget.
+\item Main CRL result: recurrent critic versus MLP critic on \texttt{antmaze-medium-stitch-v0}, \texttt{antmaze-large-stitch-v0}, and \texttt{antmaze-giant-navigate-v0}, with three seeds when feasible.
+\item CRL mechanism study: iteration sweep (\texttt{iter1}, \texttt{iter2}, \texttt{iter3}, \texttt{iter4}) and fixed-probe critic diagnostics, primarily on \texttt{antmaze-medium-stitch-v0}.
+\item Capacity controls: recurrent critic versus baseline MLP, wider parameter-matched MLP, and deeper parameter-matched MLP on \texttt{antmaze-large-stitch-v0}.
+\item Scope analysis: compact comparisons on GCIQL, QRL, HIQL, and SAW to show smaller gains or failures.
+\item Actor-side study: baseline, recurrent critic only, recurrent actor only, and both on one stitching task and one lower-gain task.
+\item Online extension: a compact online CRL comparison with the same recurrent critic design.
 \end{itemize}
 
 \section{Logging Requirements}
-The logging plan is designed so that the same training runs can later support the main results, mechanism analysis, efficiency section, and limitations discussion. Every run should record metadata including algorithm, task, seed, full config, code version, and dataset version. At each evaluation checkpoint the run should log performance metrics such as normalized score, success rate when available, best-so-far score, and final score.
+The logging plan should be driven by the CRL mechanism story. Every run should record metadata including algorithm, task, seed, full config, code version, and dataset version. At each evaluation checkpoint the run should log performance metrics such as success rate, best-so-far success, and per-task success when available.
 
-Training logs should include value or critic loss, actor loss, target loss or Bellman residual when available, entropy or temperature terms, wall-clock time, step time, total update count, samples seen, evaluation count, hardware information, and model size including total parameters and value-network parameters. In addition, value statistics should be recorded, including predicted value mean, standard deviation, minimum, maximum, target statistics when available, and Bellman residual statistics.
+For CRL, the core mechanism logs are the critic and actor-usable signal diagnostics. These include \texttt{evaluation/probe/critic\_signal/*}, \texttt{evaluation/probe/actor\_critic/*}, policy-behavior drift metrics, geometry probes, and the recurrent step metrics \texttt{evaluation/refine/critic\_step\_k\_signal/*}. Training logs should include critic loss, actor loss, critic accuracy, score margins, gradient norms, wall-clock time, step time, samples seen, and parameter counts.
 
-The most important paper-specific logs are per-step refinement diagnostics on a fixed held-out subset. These should include value predictions at each refinement step, the final value, the target value, the change between successive steps, and optionally hidden-state norms. Dumps should be saved at early, middle, and late training so that the paper can analyze how iterative correction evolves during learning without requiring retraining.
+For the fairness section, each run should also report \texttt{params/critic\_count}, total parameter count, and measured wall-clock throughput. For the scope-analysis algorithms, lighter logging is acceptable as long as the paper can show final performance and explain whether the recurrent module attaches to a clean critic bottleneck or to a more entangled interface.
 
 \newpage
 \input{main_checklist.tex}

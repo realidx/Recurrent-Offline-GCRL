@@ -46,11 +46,15 @@ Effective antmaze locomotion hyperparameters:
 | `antmaze-large-stitch-v0` | `0.1` | `0.99` | `0.0` | `0.5` | `0.5` | `0.0` | `1.0` | `0.0` |
 | `antmaze-giant-stitch-v0` | `0.1` | `0.995` | `0.0` | `0.5` | `0.5` | `0.0` | `1.0` | `0.0` |
 | `antmaze-teleport-stitch-v0` | `0.1` | `0.99` | `0.0` | `0.5` | `0.5` | `0.0` | `1.0` | `0.0` |
+| `antmaze-medium-explore-v0` | `0.003` | `0.99` | `0.0` | `0.0` | `1.0` | `0.0` | `1.0` | `0.0` |
+| `antmaze-large-explore-v0` | `0.003` | `0.99` | `0.0` | `0.0` | `1.0` | `0.0` | `1.0` | `0.0` |
+| `antmaze-teleport-explore-v0` | `0.003` | `0.99` | `0.0` | `0.0` | `1.0` | `0.0` | `1.0` | `0.0` |
 
 Pattern from OGBench:
 
 - `navigate`: actor goal mix is `1.0 / 0.0`
 - `stitch`: actor goal mix is `0.5 / 0.5`
+- `explore`: actor goal mix is `0.0 / 1.0`, and antmaze `alpha` drops to `0.003`
 - `giant`: `discount=0.995`
 - other listed antmaze locomotion tasks: `discount=0.99`
 
