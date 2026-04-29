@@ -1121,7 +1121,7 @@ index 559df71..b51d35a 100644
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.2,  # Probability of using the current state as the value goal.
 diff --git a/impls/agents/hiql.py b/impls/agents/hiql.py
-index 63e5dee..8cc11e2 100644
+index 63e5dee..d54f045 100644
 --- a/impls/agents/hiql.py
 +++ b/impls/agents/hiql.py
 @@ -8,7 +8,7 @@ import ml_collections
@@ -1133,7 +1133,7 @@ index 63e5dee..8cc11e2 100644
  
  
  class HIQLAgent(flax.struct.PyTreeNode):
-@@ -24,6 +24,60 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -24,6 +24,72 @@ class HIQLAgent(flax.struct.PyTreeNode):
          weight = jnp.where(adv >= 0, expectile, (1 - expectile))
          return weight * (diff**2)
  
@@ -1156,10 +1156,22 @@ index 63e5dee..8cc11e2 100644
 +            tree,
 +        )
 +
-+    def _mean_value(self, observations, goals):
++    def _mean_value(self, observations, goals, num_iters=None):
 +        """Return the ensemble-averaged value prediction."""
-+        v1, v2 = self.network.select('value')(observations, goals)
++        if num_iters is None:
++            v1, v2 = self.network.select('value')(observations, goals)
++        else:
++            v1, v2 = self.network.select('value')(observations, goals, num_iters=num_iters)
 +        return (v1 + v2) / 2
++
++    def _actor_value_num_iters(self, actor_name):
++        """Return the fixed recurrent value depth used for actor AWR, or None for default final depth."""
++        if self.config.get('value_backbone') != 'recur_tied':
++            return None
++        specific = int(self.config.get(f'{actor_name}_actor_value_num_iters', 0))
++        shared = int(self.config.get('actor_value_num_iters', 0))
++        num_iters = specific if specific > 0 else shared
++        return num_iters if num_iters > 0 else None
 +
 +    def _compute_actor_confidence(self, observations, goals):
 +        """Compute a stop-gradient confidence score from positive-vs-negative goal separation."""
@@ -1194,7 +1206,7 @@ index 63e5dee..8cc11e2 100644
      def value_loss(self, batch, grad_params):
          """Compute the IVL value loss.
  
-@@ -43,30 +97,67 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -43,30 +109,110 @@ class HIQLAgent(flax.struct.PyTreeNode):
  
          q1 = batch['rewards'] + self.config['discount'] * batch['masks'] * next_v1_t
          q2 = batch['rewards'] + self.config['discount'] * batch['masks'] * next_v2_t
@@ -1204,6 +1216,7 @@ index 63e5dee..8cc11e2 100644
 +            and (
 +                self.config.get('value_recur_use_act', False)
 +                or self.config.get('value_recur_use_soft_mixture', False)
++                or self.config.get('value_recur_deep_supervision', False)
 +            )
 +        )
 +        value_aux = {}
@@ -1221,13 +1234,48 @@ index 63e5dee..8cc11e2 100644
          value_loss1 = self.expectile_loss(adv, q1 - v1, self.config['expectile']).mean()
          value_loss2 = self.expectile_loss(adv, q2 - v2, self.config['expectile']).mean()
          value_loss = value_loss1 + value_loss2
+-
+-        return value_loss, {
++        deep_supervision_loss = None
++        step_losses = None
++        if self.config.get('value_recur_deep_supervision', False):
++            step_values = value_aux.get('value_step_outputs')
++            if step_values is None:
++                raise ValueError('value_recur_deep_supervision=True requires recurrent value_step_outputs aux.')
++            step_values = jnp.squeeze(step_values, axis=-1)
++            step_v1 = step_values[0]
++            step_v2 = step_values[1]
++            num_steps = step_v1.shape[0]
++            include_final = bool(self.config.get('value_recur_deep_supervision_include_final', False))
++            num_supervised_steps = num_steps if include_final else max(num_steps - 1, 0)
++            if num_supervised_steps > 0:
++                step_v1 = step_v1[:num_supervised_steps]
++                step_v2 = step_v2[:num_supervised_steps]
++                step_loss1 = self.expectile_loss(
++                    adv[None, :], q1[None, :] - step_v1, self.config['expectile']
++                ).mean(axis=-1)
++                step_loss2 = self.expectile_loss(
++                    adv[None, :], q2[None, :] - step_v2, self.config['expectile']
++                ).mean(axis=-1)
++                step_losses = step_loss1 + step_loss2
++                scheme = str(self.config.get('value_recur_deep_supervision_scheme', 'linear'))
++                if scheme == 'uniform':
++                    step_weights = jnp.ones((num_supervised_steps,), dtype=step_losses.dtype)
++                elif scheme == 'linear':
++                    step_weights = jnp.arange(1, num_supervised_steps + 1, dtype=step_losses.dtype)
++                else:
++                    raise ValueError(
++                        f"Unsupported value_recur_deep_supervision_scheme={scheme!r}. Use 'uniform' or 'linear'."
++                    )
++                step_weights = step_weights / jnp.mean(step_weights)
++                deep_supervision_loss = jnp.mean(step_weights * step_losses)
++                value_loss = value_loss + float(self.config.get('value_recur_deep_supervision_weight', 1.0)) * deep_supervision_loss
 +        act_expected_steps = value_aux.get('act_expected_steps')
 +        ponder_loss = jnp.asarray(0.0, dtype=v.dtype)
 +        if act_expected_steps is not None:
 +            ponder_loss = float(self.config.get('value_recur_act_ponder_weight', 0.0)) * act_expected_steps.mean()
 +            value_loss = value_loss + ponder_loss
- 
--        return value_loss, {
++
 +        info = {
              'value_loss': value_loss,
              'v_mean': v.mean(),
@@ -1237,6 +1285,13 @@ index 63e5dee..8cc11e2 100644
 +        if act_expected_steps is not None:
 +            info['act_expected_steps_mean'] = act_expected_steps.mean()
 +            info['act_ponder_loss'] = ponder_loss
++        if deep_supervision_loss is not None:
++            info['deep_supervision_loss'] = deep_supervision_loss
++            info['deep_supervision_weighted_loss'] = (
++                float(self.config.get('value_recur_deep_supervision_weight', 1.0)) * deep_supervision_loss
++            )
++            for step_idx in range(step_losses.shape[0]):
++                info[f'deep_supervision_step_{step_idx + 1}_loss'] = step_losses[step_idx]
 +        softmix_expected_steps = value_aux.get('softmix_expected_steps')
 +        if softmix_expected_steps is not None:
 +            info['softmix_expected_steps_mean'] = softmix_expected_steps.mean()
@@ -1252,8 +1307,9 @@ index 63e5dee..8cc11e2 100644
 -        nv1, nv2 = self.network.select('value')(batch['next_observations'], batch['low_actor_goals'])
 -        v = (v1 + v2) / 2
 -        nv = (nv1 + nv2) / 2
-+        v = self._mean_value(batch['observations'], batch['low_actor_goals'])
-+        nv = self._mean_value(batch['next_observations'], batch['low_actor_goals'])
++        actor_value_num_iters = self._actor_value_num_iters('low')
++        v = self._mean_value(batch['observations'], batch['low_actor_goals'], num_iters=actor_value_num_iters)
++        nv = self._mean_value(batch['next_observations'], batch['low_actor_goals'], num_iters=actor_value_num_iters)
          adv = nv - v
  
 -        exp_a = jnp.exp(adv * self.config['low_alpha'])
@@ -1270,7 +1326,7 @@ index 63e5dee..8cc11e2 100644
  
          # Compute the goal representations of the subgoals.
          goal_reps = self.network.select('goal_rep')(
-@@ -80,12 +171,25 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -80,12 +226,26 @@ class HIQLAgent(flax.struct.PyTreeNode):
          log_prob = dist.log_prob(batch['actions'])
  
          actor_loss = -(exp_a * log_prob).mean()
@@ -1290,13 +1346,14 @@ index 63e5dee..8cc11e2 100644
 +            'awr_weight_mean': exp_a.mean(),
 +            'awr_weight_max': exp_a.max(),
 +            'awr_weight_ess_frac': weight_ess_frac,
++            'value_num_iters': 0 if actor_value_num_iters is None else actor_value_num_iters,
              'bc_log_prob': log_prob.mean(),
          }
 +        actor_info.update(confidence_info)
          if not self.config['discrete']:
              actor_info.update(
                  {
-@@ -98,14 +202,19 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -98,14 +258,20 @@ class HIQLAgent(flax.struct.PyTreeNode):
  
      def high_actor_loss(self, batch, grad_params):
          """Compute the high-level actor loss."""
@@ -1304,8 +1361,9 @@ index 63e5dee..8cc11e2 100644
 -        nv1, nv2 = self.network.select('value')(batch['high_actor_targets'], batch['high_actor_goals'])
 -        v = (v1 + v2) / 2
 -        nv = (nv1 + nv2) / 2
-+        v = self._mean_value(batch['observations'], batch['high_actor_goals'])
-+        nv = self._mean_value(batch['high_actor_targets'], batch['high_actor_goals'])
++        actor_value_num_iters = self._actor_value_num_iters('high')
++        v = self._mean_value(batch['observations'], batch['high_actor_goals'], num_iters=actor_value_num_iters)
++        nv = self._mean_value(batch['high_actor_targets'], batch['high_actor_goals'], num_iters=actor_value_num_iters)
          adv = nv - v
  
 -        exp_a = jnp.exp(adv * self.config['high_alpha'])
@@ -1322,7 +1380,7 @@ index 63e5dee..8cc11e2 100644
  
          dist = self.network.select('high_actor')(batch['observations'], batch['high_actor_goals'], params=grad_params)
          target = self.network.select('goal_rep')(
-@@ -114,14 +223,28 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -114,14 +280,29 @@ class HIQLAgent(flax.struct.PyTreeNode):
          log_prob = dist.log_prob(target)
  
          actor_loss = -(exp_a * log_prob).mean()
@@ -1343,6 +1401,7 @@ index 63e5dee..8cc11e2 100644
 +            'awr_weight_mean': exp_a.mean(),
 +            'awr_weight_max': exp_a.max(),
 +            'awr_weight_ess_frac': weight_ess_frac,
++            'value_num_iters': 0 if actor_value_num_iters is None else actor_value_num_iters,
              'bc_log_prob': log_prob.mean(),
              'mse': jnp.mean((dist.mode() - target) ** 2),
              'std': jnp.mean(dist.scale_diag),
@@ -1352,7 +1411,7 @@ index 63e5dee..8cc11e2 100644
  
      @jax.jit
      def total_loss(self, batch, grad_params, rng=None):
-@@ -259,18 +382,42 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -259,18 +440,42 @@ class HIQLAgent(flax.struct.PyTreeNode):
              high_actor_encoder_def = None
  
          # Define value and actor networks.
@@ -1407,7 +1466,7 @@ index 63e5dee..8cc11e2 100644
  
          if config['discrete']:
              low_actor_def = GCDiscreteActor(
-@@ -306,7 +453,15 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -306,7 +511,15 @@ class HIQLAgent(flax.struct.PyTreeNode):
          network_args = {k: v[1] for k, v in network_info.items()}
  
          network_def = ModuleDict(networks)
@@ -1424,7 +1483,7 @@ index 63e5dee..8cc11e2 100644
          network_params = network_def.init(init_rng, **network_args)['params']
          network = TrainState.create(network_def, network_params, tx=network_tx)
  
-@@ -322,9 +477,12 @@ def get_config():
+@@ -322,9 +535,12 @@ def get_config():
              # Agent hyperparameters.
              agent_name='hiql',  # Agent name.
              lr=3e-4,  # Learning rate.
@@ -1437,7 +1496,7 @@ index 63e5dee..8cc11e2 100644
              layer_norm=True,  # Whether to use layer normalization.
              discount=0.99,  # Discount factor.
              tau=0.005,  # Target network update rate.
-@@ -333,6 +491,29 @@ def get_config():
+@@ -333,6 +549,36 @@ def get_config():
              high_alpha=3.0,  # High-level AWR temperature.
              subgoal_steps=25,  # Subgoal steps.
              rep_dim=10,  # Goal representation dimension.
@@ -1457,6 +1516,13 @@ index 63e5dee..8cc11e2 100644
 +            value_recur_act_epsilon=0.01,  # ACT halting threshold slack for recurrent HIQL value.
 +            value_recur_act_min_iters=1,  # Minimum recurrent updates before HIQL value may halt.
 +            value_recur_act_ponder_weight=0.0,  # Ponder-cost weight for recurrent HIQL value ACT.
++            value_recur_deep_supervision=False,  # Add auxiliary expectile losses on recurrent value exits.
++            value_recur_deep_supervision_weight=1.0,  # Multiplier for auxiliary recurrent-exit value losses.
++            value_recur_deep_supervision_scheme='linear',  # 'uniform' | 'linear' weights over supervised exits.
++            value_recur_deep_supervision_include_final=False,  # Also supervise final exit in the auxiliary loss.
++            actor_value_num_iters=0,  # Recurrent value depth for both HIQL actor AWR weights (0 = final/default).
++            low_actor_value_num_iters=0,  # Optional low-actor AWR value-depth override (0 = shared/default).
++            high_actor_value_num_iters=0,  # Optional high-actor AWR value-depth override (0 = shared/default).
 +            value_layerscale_init=1e-2,  # LayerScale init for recurrent HIQL value.
 +            actor_confidence_gate=False,  # Whether to confidence-scale HIQL AWR weights.
 +            actor_confidence_num_negatives=4,  # Number of in-batch rolled negatives for the confidence margin.
@@ -6857,7 +6923,7 @@ index 9c421dd..bd55171 100644
  
      return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..055c1b4 100644
+index 4ee2b26..3460a59 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
 @@ -6,6 +6,8 @@ import flax.linen as nn
@@ -6869,7 +6935,7 @@ index 4ee2b26..055c1b4 100644
  
  def default_init(scale=1.0):
      """Default kernel initializer."""
-@@ -60,6 +62,475 @@ class MLP(nn.Module):
+@@ -60,6 +62,478 @@ class MLP(nn.Module):
          return x
  
  
@@ -7192,7 +7258,7 @@ index 4ee2b26..055c1b4 100644
 +            act_expected_steps = jnp.zeros(h.shape[:-1], dtype=h.dtype)
 +            act_accumulated = jnp.zeros(h.shape[:-1], dtype=h.dtype)
 +            act_weighted_h = jnp.zeros_like(h)
-+        hidden_steps = [] if self.use_soft_mixture else None
++        hidden_steps = [] if (self.use_soft_mixture or return_aux) else None
 +        hidden_drift_steps = []
 +        input_injection_ratio_steps = [] if input_anchor is not None else None
 +        anchor_alignment_steps = [] if input_anchor is not None else None
@@ -7325,6 +7391,9 @@ index 4ee2b26..055c1b4 100644
 +                aux['softmix_last_step_weight'] = softmix_last_step_weight
 +                aux['softmix_late_step_mass'] = softmix_late_step_mass
 +                aux['softmix_step_weights'] = softmix_step_weights
++            if hidden_steps is not None:
++                hidden_stack = jnp.stack(hidden_steps, axis=0)
++                aux['value_step_outputs'] = output_proj(hidden_stack)
 +            hidden_drift_steps = jnp.stack(hidden_drift_steps, axis=0)
 +            aux['hidden_drift_steps'] = hidden_drift_steps
 +            aux['hidden_drift'] = hidden_drift_steps[-1]
@@ -7345,7 +7414,7 @@ index 4ee2b26..055c1b4 100644
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -164,9 +635,43 @@ class GCActor(nn.Module):
+@@ -164,9 +638,43 @@ class GCActor(nn.Module):
      const_std: bool = True
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -7390,7 +7459,7 @@ index 4ee2b26..055c1b4 100644
          self.mean_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
          if self.state_dependent_std:
              self.log_std_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
-@@ -196,7 +701,10 @@ class GCActor(nn.Module):
+@@ -196,7 +704,10 @@ class GCActor(nn.Module):
              if goals is not None:
                  inputs.append(goals)
              inputs = jnp.concatenate(inputs, axis=-1)
@@ -7402,7 +7471,7 @@ index 4ee2b26..055c1b4 100644
  
          means = self.mean_net(outputs)
          if self.state_dependent_std:
-@@ -230,9 +738,43 @@ class GCDiscreteActor(nn.Module):
+@@ -230,9 +741,43 @@ class GCDiscreteActor(nn.Module):
      action_dim: int
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -7447,7 +7516,7 @@ index 4ee2b26..055c1b4 100644
          self.logit_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
  
      def __call__(
-@@ -257,7 +799,10 @@ class GCDiscreteActor(nn.Module):
+@@ -257,7 +802,10 @@ class GCDiscreteActor(nn.Module):
              if goals is not None:
                  inputs.append(goals)
              inputs = jnp.concatenate(inputs, axis=-1)
@@ -7459,7 +7528,7 @@ index 4ee2b26..055c1b4 100644
  
          logits = self.logit_net(outputs)
  
-@@ -282,14 +827,22 @@ class GCValue(nn.Module):
+@@ -282,14 +830,22 @@ class GCValue(nn.Module):
      layer_norm: bool = True
      ensemble: bool = True
      gc_encoder: nn.Module = None
@@ -7487,7 +7556,7 @@ index 4ee2b26..055c1b4 100644
  
      def __call__(self, observations, goals=None, actions=None):
          """Return the value/critic function.
-@@ -314,6 +867,77 @@ class GCValue(nn.Module):
+@@ -314,6 +870,77 @@ class GCValue(nn.Module):
          return v
  
  
@@ -7565,7 +7634,7 @@ index 4ee2b26..055c1b4 100644
  class GCDiscreteCritic(GCValue):
      """Goal-conditioned critic for discrete actions."""
  
-@@ -347,16 +971,91 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +974,91 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
@@ -7662,7 +7731,7 @@ index 4ee2b26..055c1b4 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +1063,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +1066,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -7670,7 +7739,7 @@ index 4ee2b26..055c1b4 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,16 +1075,127 @@ class GCBilinearValue(nn.Module):
+@@ -375,16 +1078,127 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
@@ -7800,7 +7869,7 @@ index 4ee2b26..055c1b4 100644
          else:
              return v
  
-@@ -394,9 +1205,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+@@ -394,9 +1208,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
  
      action_dim: int = None
  
@@ -7812,7 +7881,7 @@ index 4ee2b26..055c1b4 100644
  
  
  class GCMRNValue(nn.Module):
-@@ -416,11 +1227,66 @@ class GCMRNValue(nn.Module):
+@@ -416,11 +1230,66 @@ class GCMRNValue(nn.Module):
      latent_dim: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -7881,7 +7950,7 @@ index 4ee2b26..055c1b4 100644
          """Return the MRN value function.
  
          Args:
-@@ -436,8 +1302,12 @@ class GCMRNValue(nn.Module):
+@@ -436,8 +1305,12 @@ class GCMRNValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)
@@ -7896,7 +7965,7 @@ index 4ee2b26..055c1b4 100644
  
          sym_s = phi_s[..., : self.latent_dim // 2]
          sym_g = phi_g[..., : self.latent_dim // 2]
-@@ -471,12 +1341,67 @@ class GCIQEValue(nn.Module):
+@@ -471,12 +1344,67 @@ class GCIQEValue(nn.Module):
      dim_per_component: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -7966,7 +8035,7 @@ index 4ee2b26..055c1b4 100644
          """Return the IQE value function.
  
          Args:
-@@ -493,8 +1418,12 @@ class GCIQEValue(nn.Module):
+@@ -493,8 +1421,12 @@ class GCIQEValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)
