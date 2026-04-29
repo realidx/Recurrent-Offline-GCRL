@@ -90,10 +90,34 @@ sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROU
 sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_ALS_ActorScaleInteraction,EXP_NAME=sd000_ALS_actorint_mlp_recurcritic,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=4,ACTOR_BACKBONE=mlp,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online" slurm/train_crl.slurm
 
 # 3. Actor-only scaling: residual actor + MLP critic
-sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_ALS_ActorScaleInteraction,EXP_NAME=sd000_ALS_actorint_resactor_mlpcritic,CRITIC_BACKBONE=mlp,ACTOR_BACKBONE=residual_mlp,ACTOR_NUM_LAYERS=32,ACTOR_LAYER_WIDTH=512,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online" slurm/train_crl.slurm
+qsub -P personal -q normal -v SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_ALS_ActorScaleInteraction,EXP_NAME=sd000_ALS_actor8_resactor_mlpcritic,CRITIC_BACKBONE=mlp,ACTOR_BACKBONE=residual_mlp,ACTOR_NUM_LAYERS=8,ACTOR_LAYER_WIDTH=512,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online pbs/train_crl.pbs
 
 # 4. Full interaction: residual actor + iterative critic
-sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_ALS_ActorScaleInteraction,EXP_NAME=sd000_ALS_actorint_resactor_recurcritic,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=4,ACTOR_BACKBONE=residual_mlp,ACTOR_NUM_LAYERS=32,ACTOR_LAYER_WIDTH=512,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online" slurm/train_crl.slurm
+qsub -P personal -q normal -v SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_ALS_ActorScaleInteraction,EXP_NAME=sd000_ALS_actor8_resactor_recurcritic,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=4,ACTOR_BACKBONE=residual_mlp,ACTOR_NUM_LAYERS=8,ACTOR_LAYER_WIDTH=512,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online pbs/train_crl.pbs
+
+```
+
+## CRL InfoNCE comparison on `antmaze-large-stitch-v0` (`seed=0`)
+
+These runs are the cleanest first comparison against your existing `BCE` CRL results on ALS:
+- keep the same task, seed, batch size, actor loss, LR, LR decay, and critic architecture
+- change only `CONTRASTIVE_LOSS_TYPE` from `bce` to `infonce`
+- start with `INFONCE_TEMPERATURE=0.1`
+
+The most important matched comparison is the recurrent critic, since that is the core mechanism story. If `temp=0.1` is promising but clearly under-tuned, the next sweep should be temperature only, while keeping `BATCH_SIZE=1024` fixed.
+
+```bash
+# 1. Matched ALS baseline: MLP critic + InfoNCE
+sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_ALS_InfoNCE,EXP_NAME=sd000_ALS_mlp_infonce_t01,CRITIC_BACKBONE=mlp,CONTRASTIVE_LOSS_TYPE=infonce,INFONCE_TEMPERATURE=0.1,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,BATCH_SIZE=1024,WANDB_MODE=online" slurm/train_crl.slurm
+
+# 2. Matched ALS recurrent critic: SwiGLU recur_tied + InfoNCE
+sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_ALS_InfoNCE,EXP_NAME=sd000_ALS_recur_infonce_t01,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=4,CONTRASTIVE_LOSS_TYPE=infonce,INFONCE_TEMPERATURE=0.1,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,BATCH_SIZE=1024,WANDB_MODE=online" slurm/train_crl.slurm
+
+# 3. Recurrent critic temperature sweep: lower temperature
+sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_ALS_InfoNCE,EXP_NAME=sd000_ALS_recur_infonce_t003,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=4,CONTRASTIVE_LOSS_TYPE=infonce,INFONCE_TEMPERATURE=0.03,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,BATCH_SIZE=1024,WANDB_MODE=online" slurm/train_crl.slurm
+
+# 4. Recurrent critic temperature sweep: higher temperature
+sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_ALS_InfoNCE,EXP_NAME=sd000_ALS_recur_infonce_t03,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=4,CONTRASTIVE_LOSS_TYPE=infonce,INFONCE_TEMPERATURE=0.3,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,BATCH_SIZE=1024,WANDB_MODE=online" slurm/train_crl.slurm
 ```
 
 ## CRL parameter-matched MLP comparisons on `antmaze-medium-stitch-v0`
@@ -110,6 +134,25 @@ qsub -P personal -q normal -v SEEDS=3,ENV_NAME=antmaze-medium-stitch-v0,RUN_GROU
 sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-medium-stitch-v0,RUN_GROUP=CRL_AntMediumStitch_ParamMatch,EXP_NAME=sd000_AMS_MLP_widthmatch_3x688,CRITIC_BACKBONE=mlp,VALUE_HIDDEN_DIMS=688x688x688,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_crl.slurm
 
 qsub -P personal -q normal -v SEEDS=3,ENV_NAME=antmaze-medium-stitch-v0,RUN_GROUP=CRL_AntMediumStitch_ParamMatch,EXP_NAME=sd003_AMS_MLP_widthmatch_3x688,CRITIC_BACKBONE=mlp,VALUE_HIDDEN_DIMS=688x688x688,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,EVAL_ON_CPU=0 pbs/train_crl.pbs
+
+```
+
+## CRL recurrent critic on `scene-play-v0`
+
+This is the state-based `scene-play-v0` `CRL` run with the recurrent SwiGLU critic. It follows the OGBench CRL task defaults for scene-play:
+- `alpha=3.0`
+- `discount=0.99`
+- `actor_p_curgoal=0.0`
+- `actor_p_trajgoal=1.0`
+- `actor_p_randomgoal=0.0`
+
+```bash
+
+qsub -P personal -q normal -v SEEDS=0,ENV_NAME=scene-play-v0,RUN_GROUP=CRL_ScenePlay,EXP_NAME=sd000_SP_recur_actormlp,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=4,ALPHA=3.0,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=1.0,ACTOR_P_RANDOMGOAL=0.0,EVAL_ON_CPU=0,WANDB_MODE=online pbs/train_crl.pbs
+
+qsub -P personal -q normal -v SEEDS=0,ENV_NAME=scene-play-v0,RUN_GROUP=CRL_ScenePlay,EXP_NAME=sd000_SP_recur_resactor8,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=4,ACTOR_BACKBONE=residual_mlp,ACTOR_NUM_LAYERS=8,ACTOR_LAYER_WIDTH=512,ALPHA=3.0,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=1.0,ACTOR_P_RANDOMGOAL=0.0,EVAL_ON_CPU=0,WANDB_MODE=online pbs/train_crl.pbs
+
+qsub -P personal -q normal -v SEEDS=0,ENV_NAME=scene-play-v0,RUN_GROUP=CRL_ScenePlay,EXP_NAME=sd000_SP_recur_resactor16,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=4,ACTOR_BACKBONE=residual_mlp,ACTOR_NUM_LAYERS=16,ACTOR_LAYER_WIDTH=512,ALPHA=3.0,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=1.0,ACTOR_P_RANDOMGOAL=0.0,EVAL_ON_CPU=0,WANDB_MODE=online pbs/train_crl.pbs
 
 ```
 
@@ -146,11 +189,11 @@ From [references/SAW.pdf](/Users/bruce/Recurrent-Offline-RL/references/SAW.pdf),
 - `humanoidmaze-giant-navigate-v0`: `EXPECTILE=0.7`, `LOW_ALPHA=3.0`, `AWR_ALPHA=3.0`, `KL_ALPHA=3.0`, `SUBGOAL_STEPS=100`,`discount=0.995`
 
 ```bash
-sbatch --array=0 --gpus=h100-47 --export="ALL,SEEDS=2,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=SAW_AntGiantNav_SwiGLU,EXP_NAME=sd002_AGN_SAW,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=4,VALUE_RECUR_NUM_DENSE_LAYERS=2,VALUE_RECUR_BLOCK_TYPE=swiglu,VALUE_RECUR_MAX_ITERS=4,DISCOUNT=0.995,EXPECTILE=0.7,LOW_ALPHA=3.0,AWR_ALPHA=3.0,KL_ALPHA=3.0,SUBGOAL_STEPS=25,WANDB_MODE=online" slurm/train_saw.slurm
+sbatch --array=0 --gpus=h100-47 --export="ALL,SEEDS=3,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=SAW_AntGiantNav_SwiGLU,EXP_NAME=sd003_AGN_SAW,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=4,VALUE_RECUR_NUM_DENSE_LAYERS=2,VALUE_RECUR_BLOCK_TYPE=swiglu,VALUE_RECUR_MAX_ITERS=4,DISCOUNT=0.995,EXPECTILE=0.7,LOW_ALPHA=3.0,AWR_ALPHA=3.0,KL_ALPHA=3.0,SUBGOAL_STEPS=25,WANDB_MODE=online" slurm/train_saw.slurm
 
-sbatch --array=0 --gpus=h100-47 --export="ALL,SEEDS=2,ENV_NAME=humanoidmaze-giant-navigate-v0,RUN_GROUP=SAW_HumanoidGiantNav_SwiGLU,EXP_NAME=sd002_HGN_SAW,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=4,VALUE_RECUR_NUM_DENSE_LAYERS=2,VALUE_RECUR_BLOCK_TYPE=swiglu,VALUE_RECUR_MAX_ITERS=4,DISCOUNT=0.995,EXPECTILE=0.7,LOW_ALPHA=3.0,AWR_ALPHA=3.0,KL_ALPHA=3.0,SUBGOAL_STEPS=100,WANDB_MODE=online" slurm/train_saw.slurm
+sbatch --array=0 --gpus=h100-47 --export="ALL,SEEDS=3,ENV_NAME=humanoidmaze-giant-navigate-v0,RUN_GROUP=SAW_HumanoidGiantNav_SwiGLU,EXP_NAME=sd003_HGN_SAW,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=4,VALUE_RECUR_NUM_DENSE_LAYERS=2,VALUE_RECUR_BLOCK_TYPE=swiglu,VALUE_RECUR_MAX_ITERS=4,DISCOUNT=0.995,EXPECTILE=0.7,LOW_ALPHA=3.0,AWR_ALPHA=3.0,KL_ALPHA=3.0,SUBGOAL_STEPS=100,WANDB_MODE=online" slurm/train_saw.slurm
 
-sbatch --array=0 --gpus=h100-47 --export="ALL,SEEDS=2,ENV_NAME=cube-double-play-v0,RUN_GROUP=SAW_CubeDoublePlay_SwiGLU,EXP_NAME=sd002_CDP_SAW,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=4,VALUE_RECUR_NUM_DENSE_LAYERS=2,VALUE_RECUR_BLOCK_TYPE=swiglu,VALUE_RECUR_MAX_ITERS=4,DISCOUNT=0.99,EXPECTILE=0.7,LOW_ALPHA=3.0,AWR_ALPHA=3.0,KL_ALPHA=1.0,SUBGOAL_STEPS=10,WANDB_MODE=online" slurm/train_saw.slurm
+sbatch --array=0 --gpus=h100-47 --export="ALL,SEEDS=3,ENV_NAME=cube-double-play-v0,RUN_GROUP=SAW_CubeDoublePlay_SwiGLU,EXP_NAME=sd003_CDP_SAW,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=4,VALUE_RECUR_NUM_DENSE_LAYERS=2,VALUE_RECUR_BLOCK_TYPE=swiglu,VALUE_RECUR_MAX_ITERS=4,DISCOUNT=0.99,EXPECTILE=0.7,LOW_ALPHA=3.0,AWR_ALPHA=3.0,KL_ALPHA=1.0,SUBGOAL_STEPS=10,WANDB_MODE=online" slurm/train_saw.slurm
 
 sbatch --array=0 --gpus=h100-47 --export="ALL,SEEDS=2,ENV_NAME=scene-play-v0,RUN_GROUP=SAW_ScenePlay_SwiGLU,EXP_NAME=sd002_SP_SAW,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=4,VALUE_RECUR_NUM_DENSE_LAYERS=2,VALUE_RECUR_BLOCK_TYPE=swiglu,VALUE_RECUR_MAX_ITERS=4,DISCOUNT=0.99,EXPECTILE=0.7,LOW_ALPHA=3.0,AWR_ALPHA=3.0,KL_ALPHA=1.0,SUBGOAL_STEPS=10,WANDB_MODE=online" slurm/train_saw.slurm
 

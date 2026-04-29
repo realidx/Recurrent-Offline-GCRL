@@ -82,6 +82,8 @@ LR="${LR:-3e-4}"
 ALPHA="${ALPHA:-0.1}"
 DISCOUNT="${DISCOUNT:-0.99}"
 BATCH_SIZE="${BATCH_SIZE:-1024}"
+CONTRASTIVE_LOSS_TYPE="${CONTRASTIVE_LOSS_TYPE:-bce}" # bce | infonce
+INFONCE_TEMPERATURE="${INFONCE_TEMPERATURE:-0.1}"
 ACTOR_HIDDEN_DIMS="${ACTOR_HIDDEN_DIMS:-}"   # Safe format for sbatch --export: e.g., 512x512x512x512
 VALUE_HIDDEN_DIMS="${VALUE_HIDDEN_DIMS:-}"   # Safe format for critic/value MLP dims: e.g., 512x512x512x512x512
 ACTOR_NUM_LAYERS="${ACTOR_NUM_LAYERS:-}"     # Shortcut: e.g., 32
@@ -180,10 +182,20 @@ AGENT_FLAGS=(
 )
 
 if [[ "${AGENT_NAME}" == "crl" ]]; then
+  if [[ ! "${CONTRASTIVE_LOSS_TYPE}" =~ ^(bce|infonce)$ ]]; then
+    echo "Error: CONTRASTIVE_LOSS_TYPE='${CONTRASTIVE_LOSS_TYPE}' is invalid. Use bce or infonce." >&2
+    exit 2
+  fi
+  if ! [[ "${INFONCE_TEMPERATURE}" =~ ^[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$ ]]; then
+    echo "Error: INFONCE_TEMPERATURE='${INFONCE_TEMPERATURE}' is not a positive number." >&2
+    exit 2
+  fi
   AGENT_FLAGS+=(
     "--agent.lr_decay_steps=${LR_DECAY_STEPS}"
     "--agent.lr_min=${LR_MIN}"
     "--agent.actor_backbone=${ACTOR_BACKBONE}"
+    "--agent.contrastive_loss_type=${CONTRASTIVE_LOSS_TYPE}"
+    "--agent.infonce_temperature=${INFONCE_TEMPERATURE}"
   )
 fi
 
