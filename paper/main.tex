@@ -114,106 +114,83 @@
 \end{abstract}
 
 \section{Introduction}
-Iterative refinement has recently become an effective design principle in sequence modeling and supervised learning, where repeated tied computation can outperform purely one-shot feedforward processing when the prediction problem benefits from multi-step correction \citep{universal_transformer, act, hrm, trm, urm}. In reinforcement learning, however, this idea has not been systematically studied as a critic architecture for goal-conditioned control. Instead, most recent architectural progress in RL has focused on scaling depth, width, or flow, diffusion model.\citep{thousand_layers, bro, simba}. These scaling trends have been particularly visible in online settings, where stronger critic architectures can translate into clear return improvements \citep{thousand_layers, bro, simba}. By contrast, similar idea does not work well in offline goal-conditioned RL as in online.
+Many difficult prediction problems are better viewed as iterative inference than as one-shot regression. Rather than mapping an input directly to an answer in a single feedforward pass, a model can maintain a latent state, repeatedly revise it, and expose deeper computation through repeated application of a shared update rule. This idea appears in recurrent-depth sequence models such as Universal Transformers, adaptive computation methods, implicit fixed-point models, and recurrent reasoning systems that solve supervised tasks through repeated latent refinement \citep{universal_transformer, act, deq, recurrent_relational_networks, energy_diffusion, hrm, trm, urm}. These developments suggest a broader architectural question: can iterative refinement also serve as a useful computation principle for reinforcement learning?
 
-This gap suggests that offline goal-conditioned RL may need a different architectural bias. In this setting, the agent must infer long-horizon goal reachability from a fixed dataset, often with incomplete coverage and no opportunity to repair errors through additional exploration. Recent analyses argue that policy extraction and generalization are major bottlenecks in offline goal-conditioned RL, while separate work in offline RL more broadly questions when imperfect value learning itself is also a limiting factor \citep{ogbench, value_bottleneck}. Our starting point is that these issues are not mutually exclusive. We focus on the value learning.
+Recent architecture work shows that network design can substantially affect RL performance. Increasing depth, width, regularization, or residual feedforward capacity has improved several online and self-supervised RL settings \citep{thousand_layers, bro, simba}. However, offline goal-conditioned RL (GCRL) appears to be a different regime. The same depth-scaling study that reports large online goal-reaching gains also finds that directly scaling feedforward depth on offline GCRL does not reliably help \citep{thousand_layers}. This contrast suggests that the missing ingredient may not be capacity alone. In offline GCRL, extra computation must be useful for a specific fixed-data inference problem: deciding which goals are reachable, which behavioral fragments can be stitched, and which learned signals can safely support policy extraction.
 
-Motivated by this view, we study iterative refinement on the critic side of offline goal-conditioned RL. We focus on Contrastive RL (CRL) because it provides the cleanest setting in which to isolate this mechanism: the learned object is a goal-conditioned critic score, and the actor is trained directly from that score. This makes CRL an unusually good microscope for testing whether iterative refinement improves the critic itself, whether the effect is strongest on stitching-heavy tasks, and whether the improvement survives parameter and wall-clock controls against stronger feedforward baselines. Our hypothesis is deliberately narrower than a broad ``recurrence helps RL'' claim: iterative refinement should help most when the main bottleneck lies in the goal-conditioned critic.
+This makes offline GCRL a natural stress test for iterative refinement. The agent receives only a fixed dataset of trajectories and must learn goal-reaching behavior without further interaction. Benchmarks such as OGBench are designed to expose long-horizon reasoning, trajectory stitching, state-goal generalization, and policy-extraction difficulties under this fixed-data constraint \citep{ogbench}. Recent analyses suggest that the bottleneck in offline GCRL is not unique: value learning, policy extraction, and generalization can all limit offline RL and offline GCRL depending on the method and task \citep{ogbench, value_bottleneck}. A recurrent refinement architecture is attractive in this setting because it changes how computation is used: instead of making a single deeper feedforward pass, it repeatedly updates a latent representation before the algorithm consumes the resulting value, score, or policy signal.
 
-The resulting paper is organized around three layers of evidence. First, we introduce a recurrent critic architecture for CRL and show that it yields the clearest gains on OGBench stitching tasks. Second, we analyze the mechanism of these gains through critic-side probes, iteration-depth studies, and capacity controls against wider and deeper MLPs. Third, we study the limits of the idea: other goal-conditioned algorithms often exhibit smaller gains, actor-side recurrence is much less compelling, and the benefit is therefore selective rather than universal. We also include an online CRL extension to test whether the same critic-side inductive bias remains useful outside the purely offline setting.
+This paper studies iterative refinement as an architectural bias for offline GCRL. We ask whether replacing a single feedforward computation with repeated latent refinement can improve the learned objects used by offline goal-conditioned algorithms. To instantiate the idea, we build recurrent modules using standard stabilizing components from modern deep networks, including SwiGLU updates, recurrent step embeddings, LayerNorm, and LayerScale \citep{shazeer_glu, universal_transformer, layer_norm, layerscale}. We then evaluate refinement across several algorithmic settings, while using Contrastive RL (CRL) as the main diagnostic case because its learned score is especially exposed: CRL trains a goal-conditioned compatibility function and then trains the actor to choose actions that score well under that function \citep{crl}. This lets us ask not only whether refinement improves offline GCRL, but also how it changes the learned signal that policy extraction relies on.
 
-Taken together, these results support a targeted architectural claim. Iterative refinement is not equally useful for every network in goal-conditioned RL. Its main value appears when the critic must repeatedly resolve ambiguous long-horizon judgments from limited data support. This is exactly the regime exposed by offline stitching tasks, and CRL is the setting in which that regime is easiest to study.
-
-\paragraph{Contributions.}
-The paper makes four contributions. First, it introduces a recurrent critic architecture for CRL that combines tied refinement, SwiGLU updates, pre-layer normalization, LayerScale, step embeddings, and learned input/output projections. Second, it argues that offline stitching tasks expose a critic-side inference bottleneck and uses CRL as the cleanest mechanism-analysis setting for that hypothesis. Third, it evaluates whether the gains remain after parameter-matched and wall-clock-aware controls against wider and deeper MLP critics. Fourth, it uses weaker results in other algorithms, actor-side replacements, and an online CRL extension to clarify the scope of the claim rather than to overstate generality.
+The paper makes four contributions. First, it introduces iterative latent refinement as an architectural principle for offline GCRL and instantiates it in recurrent network modules for goal-conditioned learning. Second, it shows that refinement gives its clearest gains on stitching-heavy OGBench tasks, where long-horizon reachability judgments are central. Third, it provides diagnostic evidence, especially in CRL, that the gain is mediated by a more actor-usable value signal rather than by a uniformly larger raw margin or a better global graph-distance model. Fourth, it tests the scope of the idea through iteration-depth studies, ablations, feedforward capacity controls, actor-side replacements, other offline GCRL algorithms, and an online CRL extension.
 
 \section{Related Work}
-This work sits at the intersection of offline goal-conditioned RL, critic architecture design, and iterative computation. Prior goal-conditioned RL methods differ substantially in objective design, critic parameterization, and actor training, but most still rely on conventional feedforward backbones for the main learned signal. Our focus is not to propose a new RL loss. It is to ask whether the critic architecture itself should allocate computation iteratively when the task requires long-horizon composition from partial offline coverage.
+Many areas of machine learning have recently explored architectures that allocate computation through repeated latent updates rather than a single feedforward pass. Universal Transformers apply recurrence over depth with shared transition functions and adaptive computation \citep{universal_transformer, act}, while Deep Equilibrium Models formulate prediction as convergence to an implicit fixed point \citep{deq}. A broader family of recurrent and iterative reasoning methods similarly performs multiple rounds of latent correction before producing a final prediction \citep{recurrent_relational_networks, energy_diffusion}. More recent systems such as HRM, TRM, and URM have renewed interest in this direction by showing that compact recurrent computation can be effective on supervised reasoning tasks \citep{hrm, trm, urm}. Reinforcement learning has also seen growing interest in architecture and scaling. Recent work has improved online RL agents by increasing network depth or width, adding residual structure, or otherwise strengthening feedforward actor-critic backbones \citep{thousand_layers, bro, simba}. These results suggest that value-function architecture can be an important factor in control performance. However, offline goal-conditioned RL poses a different scaling problem. In this setting, conventional feedforward architecture changes do not necessarily yield consistent gains, because the agent must infer goal reachability from a fixed dataset rather than repair value errors through additional interaction.
 
-The paper also connects to a broader literature on recurrent refinement, test-time computation, and deep-network scaling. Those works motivate the possibility that repeated tied updates can be a better use of compute than a single larger feedforward stack. Our setting differs in two ways. First, the object being refined is a goal-conditioned critic used for policy extraction, not a generic latent state. Second, we use weaker or negative results as part of the scientific argument: recurrence appears most useful when the algorithm exposes a clean critic-side bottleneck.
+Offline goal-conditioned RL is particularly challenging because it combines long-horizon reasoning with the distributional constraints of offline learning. OGBench was introduced to study these difficulties through tasks that require stitching across trajectories, generalization over state-goal pairs, and robust policy extraction from learned value estimates \citep{ogbench}. Recent analyses further suggest that the main bottleneck in offline GCRL is not unique: value learning, policy extraction, and generalization can all limit performance depending on the algorithm and task \citep{ogbench, value_bottleneck}. 
 
+Existing offline GCRL algorithms address these challenges from several directions. Contrastive RL learns a goal-conditioned compatibility score and trains the actor to optimize that score, providing a simple non-hierarchical actor-critic formulation \citep{crl, ogbench}. Hierarchical methods such as HIQL introduce temporal abstraction to improve long-horizon goal reaching \citep{hiql}. Other recent approaches, including SAW-style methods, focus on improving policy extraction or actor-side goal-conditioned learning under fixed datasets \citep{saw}. These directions are complementary to ours, as our work targets the value-learning side of this picture.
 
 
 \section{Preliminaries}
 \label{sec:preliminaries}
-\paragraph{Problem setup.}
-We consider offline goal-conditioned RL in a Markov decision process $\mathcal{M}=(\mathcal{S},\mathcal{A},P,\mu)$, where $\mathcal{S}$ is the state space, $\mathcal{A}$ is the action space, $P(s' \mid s,a)$ is the transition kernel, and $\mu$ is the initial-state distribution. We assume a goal space $\mathcal{G}$, and in the state-goal setting used throughout OGBench we take $\mathcal{G}=\mathcal{S}$. The agent is given only an offline dataset
-\begin{equation}
-\mathcal{D}=\{\tau^{(n)}\}_{n=1}^{N}, \qquad
-\tau^{(n)}=(s^{(n)}_0,a^{(n)}_0,s^{(n)}_1,\ldots,s^{(n)}_{T_n}),
-\end{equation}
-collected by one or more behavior policies, with no further environment interaction during training. The goal is to learn a goal-conditioned policy $\pi(a \mid s,g)$ that reaches a desired goal $g \in \mathcal{G}$.
-
-For a goal distribution $p(g)$ and a goal-conditioned reward $r_g(s_t,a_t,s_{t+1})$, the objective is
-\begin{equation}
+\paragraph{Offline goal-conditioned RL}
+We consider an offline goal-conditioned Markov decision process with state space $\mathcal{S}$, action space $\mathcal{A}$, transition kernel $P$, and goal space $\mathcal{G}$. The learner is given a fixed dataset of trajectories $\mathcal{D}=\{\tau^{(n)}\}_{n=1}^{N}$, with $\tau=(s_0,a_0,s_1,\ldots,s_T)$, and receives no further environment interaction during training. Given an initial state and goal $g$, the objective is to learn a goal-conditioned policy $\pi(a\mid s,g)$ that maximizes the discounted goal-reaching return
+\(
 J(\pi)=
 \mathbb{E}_{g \sim p(g),\, \tau \sim p^{\pi}(\tau \mid g)}
 \left[
-\sum_{t=0}^{T} \gamma^{t} r_g(s_t,a_t,s_{t+1})
+\sum_{t=0}^{\infty} \gamma^t r_g(s_t,a_t,s_{t+1})
 \right],
-\end{equation}
-where
-\begin{equation}
-p^{\pi}(\tau \mid g)
-=
-\mu(s_0)\prod_{t=0}^{T-1}\pi(a_t \mid s_t,g)\,P(s_{t+1} \mid s_t,a_t).
-\end{equation}
-In goal-reaching tasks, a common choice is a sparse reward such as $r_g(s_t,a_t,s_{t+1})=\mathbf{1}[s_{t+1}=g]$ or its observation-space analogue. In our offline setting, goals are sampled from the dataset itself. Following OGBench, training can pair each transition with either a future state from the same trajectory or a random state from the dataset. Future-trajectory goals provide positive reachability supervision, while random goals create hard negatives and off-support comparisons.
+\)
+where $r_g$ is the sparse goal-reaching reward or its environment-specific analogue. During training, goals are sampled from the dataset, with future states providing positive reachability supervision and other dataset states providing contrastive comparisons.
 
-\paragraph{CRL with BCE contrastive loss.}
-Our experiments use Contrastive Reinforcement Learning (CRL) to solve the goal-conditioned problem above. CRL is an actor-critic method, and it is the primary algorithm in this paper because it exposes the critic-side bottleneck most clearly. We write the critic as $f_{\phi,\psi}(s,a,g)$ and the policy as $\pi_{\theta}(a \mid s,g)$. For continuous control, the critic is parameterized by two neural networks that produce a state-action embedding $\phi(s,a)$ and a goal embedding $\psi(g)$. The critic score is their scaled inner product,
+\paragraph{Contrastive RL}
+Contrastive RL (CRL) learns a goal-conditioned compatibility score and then extracts a policy from that score \citep{crl}. We write the critic as $f_{\phi,\psi}(s,a,g)$ and the actor as $\pi_\theta(a\mid s,g)$. CRL can be written as a binary-NCE objective that contrasts a future goal $g$ against a random goal $g^-$ \citep{ma_collins_binary_nce, crl}:
 \begin{equation}
-f_{\phi,\psi}(s,a,g)=\frac{\phi(s,a)^{\top}\psi(g)}{\sqrt{d}},
+\mathcal{J}_{\mathrm{CRL}}(f)
+=
+\mathbb{E}_{(s,a)\sim p_{\mathcal{D}},\,g\sim p_{\mathcal{D}}^{\mathrm{future}}(\cdot\mid s,a),\,g^-\sim p_{\mathcal{D}}}
+\left[
+\log\sigma(f(s,a,g))+\log(1-\sigma(f(s,a,g^-)))
+\right].
 \end{equation}
-where $d$ is the latent dimension. In our setting, each positive goal $g_i$ is sampled as a future state from the same trajectory as $(s_i,a_i)$, consistent with the reachability objective in the problem setup. Training is performed on minibatches $\mathcal{B}=\{(s_i,a_i,g_i)\}_{i=1}^{B}$, and the critic constructs in-batch logits
-\begin{equation}
-\ell_{ij}=f_{\phi,\psi}(s_i,a_i,g_j)=\frac{\phi(s_i,a_i)^{\top}\psi(g_j)}{\sqrt{d}}.
-\end{equation}
-The diagonal entry $\ell_{ii}$ is the positive pair, while the off-diagonal entries $\ell_{ij}$ with $j \neq i$ act as negatives drawn from other goals in the batch. Unlike the standard InfoNCE form of CRL, the version used in this paper adopts the sigmoid BCE objective implemented in OGBench. Each logit is trained independently against the identity-matrix target:
+In our experiments, the score is parameterized as a scaled inner product
+\(f_{\phi,\psi}(s,a,g)=\phi(s,a)^\top\psi(g)/\sqrt{d}\). Following the OGBench reference implementation, we estimate the negative of this objective with an in-batch sigmoid BCE loss: for logits $\ell_{ij}=f_{\phi,\psi}(s_i,a_i,g_j)$, diagonal entries are positives and off-diagonal entries are negatives \citep{ogbench},
 \begin{equation}
 \mathcal{L}_{\mathrm{critic}}(\phi,\psi)
 =
 \frac{1}{B^2}\sum_{i=1}^{B}\sum_{j=1}^{B}
 \mathrm{BCE}\!\left(\ell_{ij}, \mathbf{1}[i=j]\right).
 \end{equation}
-This form is better aligned with our mechanism story. The critic is not asked to normalize one positive against a softmax over negatives; instead, it must learn an absolute goal-conditioned compatibility signal that separates reachable from non-matched goals across the batch. In the main experiments, we use the DDPG+BC actor variant of CRL, so the actor is trained to choose actions with high critic score while staying close to the offline behavior policy. As a result, improvements in the critic directly affect policy extraction, which is exactly why CRL provides a clean setting for studying recurrent refinement.
+For policy extraction, continuous-action CRL uses the DDPG+BC objective from OGBench, replacing $Q$ with the learned CRL score:
+\begin{equation}
+\mathcal{J}_{\mathrm{actor}}(\pi_\theta)
+=
+\mathbb{E}_{(s,a)\sim p_{\mathcal{D}},\,g\sim p_{\mathcal{D}}(\cdot\mid s)}
+\left[
+f_{\phi,\psi}(s,\pi_\theta^\mu(s,g),g)
++ \alpha \log \pi_\theta(a\mid s,g)
+\right],
+\end{equation}
+where $\pi_\theta^\mu(s,g)$ is the mean action of the policy \citep{td3bc, ogbench}. Thus policy extraction depends directly on the learned score while remaining regularized toward behavior support. This direct score-to-actor interface is why CRL is our main diagnostic setting for studying how refinement changes value learning. We use the same CRL setup as OGBench to keep the comparison straightforward.
 
-\paragraph{Recurrent network learning.}
-At step $k$, we first apply pre-layer normalization and add a learned step embedding:
-\begin{equation}
-u^{(k)} = \mathrm{LN}(h^{(k)}) + E_k,
-\end{equation}
-where $E_k$ is the embedding for refinement step $k$. The update block is a tied two-layer SwiGLU cell,
-\begin{align}
-a^{(k)} &= W_a u^{(k)}, \\
-b^{(k)} &= W_b u^{(k)}, \\
-g^{(k)} &= \mathrm{SiLU}(a^{(k)}) \odot b^{(k)}, \\
-\Delta h^{(k)} &= W_o g^{(k)},
-\end{align}
-followed by a residual update with per-step LayerScale parameter $\alpha_k$:
-\begin{equation}
-h^{(k+1)} = h^{(k)} + \alpha_k \Delta h^{(k)}.
-\end{equation}
-After $K$ steps, an output projection produces the final latent representation
-\begin{equation}
-z = W_{\mathrm{out}} h^{(K)},
-\end{equation}
-The parameters $(W_{\mathrm{in}}, W_a, W_b, W_o, W_{\mathrm{out}})$ are shared across refinement steps, while the step embeddings $\{E_k\}$ and LayerScale coefficients $\{\alpha_k\}$ are step-specific.
 
-\begin{figure}[t]
-\centering
-\fbox{%
-  \parbox[c][1.8in][c]{0.9\linewidth}{%
-    \centering
-    Placeholder for recurrent CRL critic diagram.\\
-    Show input projection, tied recurrent SwiGLU refinement steps,\\
-    step embeddings, LayerScale residual updates, and output projection\\
-    for both $\phi(s,a)$ and $\psi(g)$ towers.
-  }%
-}
-\caption{Placeholder for the recurrent CRL critic architecture. The final version will include a model diagram showing the tied iterative refinement block used inside the $\phi$ and $\psi$ towers.}
-\label{fig:recurrent-crl-critic}
-\end{figure}
+
+\section{Recurrent Latent Refinement}
+\label{sec:architecture}
+Our goal is to test iterative refinement as cleanly as possible, not to introduce a heavily engineered backbone. We therefore use a minimal recurrent module that can replace a feedforward block while keeping the surrounding algorithm, losses, replay data, and optimization procedure unchanged. Given an input representation $x$, the module initializes a latent state $h^{(0)}$ and refines it for $K$ steps with a tied update rule. The same parameters are reused at every refinement step, so additional computation comes primarily from recurrence rather than from adding an independent stack of layers.
+
+The refinement block combines four standard components. First, we use pre-layer normalization to keep the repeatedly updated latent state on a stable scale \citep{layer_norm}. Second, we add a learned step embedding $E_k$, which lets a shared recurrent block distinguish early and late refinement steps, analogous to depth or recurrence-position information in recurrent-depth transformers \citep{universal_transformer}. Third, the update uses a SwiGLU transformation, providing a simple gated nonlinear channel update without introducing attention or task-specific machinery \citep{shazeer_glu}. Finally, the residual update is multiplied by a small LayerScale coefficient $\alpha_k$, which controls the magnitude of each refinement step and stabilizes repeated residual computation \citep{layerscale}. In compact notation, one refinement step is
+\begin{equation}
+h^{(k+1)}
+=
+h^{(k)}
++
+\alpha_k W_o\,\mathrm{SwiGLU}\!\left(\mathrm{LN}(h^{(k)})+E_k\right),
+\qquad k=0,\ldots,K-1.
+\end{equation}
+Only the step embeddings and LayerScale coefficients are step-specific; the update weights are shared across refinement steps. This design makes the architectural hypothesis explicit: offline GCRL may benefit from repeatedly revising the latent value or policy representation before it is consumed by the algorithm. The exact insertion point, hidden dimension, refinement depth, and algorithm-specific instantiations are described in the experimental setup, so the method section only specifies the shared refinement principle.
 
 \section{Experiments}
 \subsection{Experiment Setup}
@@ -222,7 +199,7 @@ We conduct our experiments on OGBench \citep{ogbench}, a benchmark for offline g
 
 
 \paragraph{Architecture and algorithm}
-The main algorithm is CRL with the DDPG+BC actor objective and the BCE contrastive critic loss described in Section~\ref{sec:preliminaries}. CRL is a good candidate to isolate the effect of critic and actor. The default baseline uses the standard OGBench MLP critic and results are draw from OGBench paper. The recurrent variant replaces only the critic network with the tied refinement architecture in Section~\ref{sec:architecture}; the actor, replay data, optimization schedule, goal sampling, and loss functions are otherwise kept fixed and same as baseline.
+The main diagnostic algorithm is CRL with the DDPG+BC actor objective and the BCE contrastive critic loss described in Section~\ref{sec:preliminaries}. CRL is useful for isolating the effect of value learning because its learned compatibility score is trained directly and then consumed directly by policy extraction. The default baseline uses the standard OGBench MLP critic, with baseline numbers drawn from the OGBench implementation. The recurrent variant replaces the relevant critic network with the tied refinement module from Section~\ref{sec:architecture}; the actor, replay data, optimization schedule, goal sampling, and losses are otherwise kept fixed. We report the exact tower placement, hidden dimensions, refinement depth, and algorithm-specific insertions with each experiment.
 
 
 \subsection{Main Results}
@@ -1245,36 +1222,8 @@ More information about this disclosure can be found at: \url{https://neurips.cc/
 Do {\bf not} include this section in the anonymized submission, only in the final paper. You can use the \texttt{ack} environment provided in the style file to automatically hide this section in the anonymized submission.
 \end{ack}
 
-\section*{References}
-
-
-References follow the acknowledgments in the camera-ready paper. Use unnumbered first-level heading for
-the references. Any choice of citation style is acceptable as long as you are
-consistent. It is permissible to reduce the font size to \verb+small+ (9 point)
-when listing the references.
-Note that the Reference section does not count towards the page limit.
-\medskip
-
-
-{
-\small
-
-
-[1] Alexander, J.A.\ \& Mozer, M.C.\ (1995) Template-based algorithms for
-connectionist rule extraction. In G.\ Tesauro, D.S.\ Touretzky and T.K.\ Leen
-(eds.), {\it Advances in Neural Information Processing Systems 7},
-pp.\ 609--616. Cambridge, MA: MIT Press.
-
-
-[2] Bower, J.M.\ \& Beeman, D.\ (1995) {\it The Book of GENESIS: Exploring
-  Realistic Neural Models with the GEneral NEural SImulation System.}  New York:
-TELOS/Springer--Verlag.
-
-
-[3] Hasselmo, M.E., Schnell, E.\ \& Barkai, E.\ (1995) Dynamics of learning and
-recall at excitatory recurrent synapses and cholinergic modulation in rat
-hippocampal region CA3. {\it Journal of Neuroscience} {\bf 15}(7):5249-5262.
-}
+\bibliographystyle{plainnat}
+\bibliography{references}
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

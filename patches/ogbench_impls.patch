@@ -3734,7 +3734,7 @@ index 0000000..60716d2
 +if __name__ == '__main__':
 +    main()
 diff --git a/impls/main.py b/impls/main.py
-index 3660e03..4be640c 100644
+index 3660e03..3e31e04 100644
 --- a/impls/main.py
 +++ b/impls/main.py
 @@ -1,17 +1,27 @@
@@ -4024,7 +4024,7 @@ index 3660e03..4be640c 100644
  
      FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, FLAGS.run_group, exp_name)
      os.makedirs(FLAGS.save_dir, exist_ok=True)
-@@ -53,108 +289,1872 @@ def main(_):
+@@ -53,108 +289,1969 @@ def main(_):
      with open(os.path.join(FLAGS.save_dir, 'flags.json'), 'w') as f:
          json.dump(flag_dict, f)
  
@@ -4724,9 +4724,79 @@ index 3660e03..4be640c 100644
 +        reduce_axes = tuple(i for i in range(arr.ndim) if i not in (step_axis, batch_axis))
 +        return np.mean(arr, axis=reduce_axes)
 +
-+    def _score_value_batch(eval_agent, observations, goals, module_name='value'):
-+        values = eval_agent.network.select(module_name)(observations, goals)
++    def _value_forward(eval_agent, observations, goals, module_name='value', *, num_iters=None):
++        value_call = eval_agent.network.select(module_name)
++        if value_backbone == 'recur_tied' and num_iters is not None:
++            return value_call(observations, goals, num_iters=num_iters)
++        return value_call(observations, goals)
++
++    def _score_value_batch(eval_agent, observations, goals, module_name='value', *, num_iters=None):
++        values = _value_forward(eval_agent, observations, goals, module_name=module_name, num_iters=num_iters)
 +        return _reduced_scores(values, 'value')
++
++    def _log_hiql_actor_value_metrics(eval_metrics, eval_agent, probe_batch, *, prefix, num_iters=None):
++        if config.get('agent_name') != 'hiql' or not has_value:
++            return
++
++        def log_one_actor(actor_name, start_key, next_key, goal_key, alpha):
++            if start_key not in probe_batch or next_key not in probe_batch or goal_key not in probe_batch:
++                return
++            start_v = _score_value_batch(
++                eval_agent,
++                probe_batch[start_key],
++                probe_batch[goal_key],
++                num_iters=num_iters,
++            )
++            next_v = _score_value_batch(
++                eval_agent,
++                probe_batch[next_key],
++                probe_batch[goal_key],
++                num_iters=num_iters,
++            )
++            adv = next_v - start_v
++            scaled_adv = np.minimum(float(alpha) * adv, np.log(float(config.get('actor_confidence_weight_clip', 100.0))))
++            awr_weight = np.exp(scaled_adv)
++            weight_sum = np.sum(awr_weight)
++            ess = (weight_sum**2) / (np.sum(awr_weight**2) + 1e-8)
++            goal_prefix = goal_key[:-len('_goals')] if goal_key.endswith('_goals') else 'value'
++
++            _log_pair_preference_metrics(
++                eval_metrics,
++                f'{prefix}/{actor_name}_value',
++                next_v,
++                start_v,
++                batch=probe_batch,
++                goal_prefix=goal_prefix,
++                preferred_name='next_value',
++                reference_name='start_value',
++                delta_name='adv',
++                prefer_name='positive_adv_frac',
++            )
++            _log_scalar_metrics(
++                eval_metrics,
++                f'{prefix}/{actor_name}_awr_weight',
++                awr_weight,
++                batch=probe_batch,
++                goal_prefix=goal_prefix,
++            )
++            eval_metrics[f'{prefix}/{actor_name}_awr_weight_ess_frac'] = float(
++                ess / max(1, len(awr_weight))
++            )
++
++        log_one_actor(
++            'low_actor',
++            'observations',
++            'next_observations',
++            'low_actor_goals',
++            config.get('low_alpha', 1.0),
++        )
++        log_one_actor(
++            'high_actor',
++            'observations',
++            'high_actor_targets',
++            'high_actor_goals',
++            config.get('high_alpha', 1.0),
++        )
 +
 +    def _critic_forward(eval_agent, observations, goals, actions, *, num_iters=None, return_aux=False):
 +        critic_num_iters = config.get('critic_eval_num_iters', None) if num_iters is None else num_iters
@@ -4981,6 +5051,13 @@ index 3660e03..4be640c 100644
 +                goal_prefix='value',
 +            )
 +
++        _log_hiql_actor_value_metrics(
++            eval_metrics,
++            eval_agent,
++            probe_batch,
++            prefix='evaluation/probe/hiql_actor',
++        )
++
 +        if config.get('discrete', False) or behavior_actions is None or 'actor' not in actor_module_names:
 +            return
 +
@@ -5139,6 +5216,14 @@ index 3660e03..4be640c 100644
 +                if k > 1:
 +                    delta_k = np.asarray(value_steps[-1] - value_steps[-2])
 +                    eval_metrics[f'evaluation/refine/value_delta_step_{k}_mean_abs'] = float(np.mean(np.abs(delta_k)))
++
++                _log_hiql_actor_value_metrics(
++                    eval_metrics,
++                    eval_agent,
++                    probe_batch,
++                    prefix=f'evaluation/refine/value_step_{k}_hiql_actor',
++                    num_iters=k,
++                )
 +
 +            final_values = value_steps[-1]
 +            if target_value_module_name is not None:
@@ -5641,6 +5726,18 @@ index 3660e03..4be640c 100644
 +            'evaluation/42_probe_actor_q_delta_mean': 'evaluation/probe/actor_critic/q_delta_mean',
 +            'evaluation/43_probe_actor_value_adv_mean': 'evaluation/probe/actor_value/adv_mean',
 +            'evaluation/44_probe_policy_behavior_mse_mean': 'evaluation/probe/policy_behavior/mse_mean',
++            'evaluation/45_probe_hiql_low_adv_mean': 'evaluation/probe/hiql_actor/low_actor_value/adv_mean',
++            'evaluation/46_probe_hiql_low_awr_ess_frac': 'evaluation/probe/hiql_actor/low_actor_awr_weight_ess_frac',
++            'evaluation/47_probe_hiql_high_adv_mean': 'evaluation/probe/hiql_actor/high_actor_value/adv_mean',
++            'evaluation/48_probe_hiql_high_awr_ess_frac': 'evaluation/probe/hiql_actor/high_actor_awr_weight_ess_frac',
++            'evaluation/49_refine_final_hiql_low_adv_mean': (
++                f'evaluation/refine/value_step_{int(config.get("value_recur_iters", 1))}_hiql_actor'
++                '/low_actor_value/adv_mean'
++            ),
++            'evaluation/50_refine_final_hiql_high_adv_mean': (
++                f'evaluation/refine/value_step_{int(config.get("value_recur_iters", 1))}_hiql_actor'
++                '/high_actor_value/adv_mean'
++            ),
 +        }
 +        for alias_key, source_key in top_eval_aliases.items():
 +            if source_key in eval_metrics:

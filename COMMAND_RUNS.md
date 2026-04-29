@@ -31,6 +31,28 @@ sbatch --array=0 --gpus=a100-40 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-sti
 
 ```
 
+## HIQL Value-Refinement Mechanism Probe on `antmaze-large-stitch-v0`
+
+This run uses the new HIQL-specific diagnostics:
+
+- `evaluation/probe/hiql_actor/low_actor_value/adv_*`
+- `evaluation/probe/hiql_actor/low_actor_awr_weight_*`
+- `evaluation/probe/hiql_actor/high_actor_value/adv_*`
+- `evaluation/probe/hiql_actor/high_actor_awr_weight_*`
+- `evaluation/refine/value_step_{k}_hiql_actor/...` for per-refinement-step low/high actor-facing value signals
+
+```bash
+# SLURM seed 4, recurrent HIQL value, explicit probe dumps at start/mid/final.
+sbatch --array=0 --gpus=h100-47 --export="ALL,SEEDS=4,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=HIQL_AntLargeStitch_Mechanism,EXP_NAME=sd004_ALS_hiql_recur_mech,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=2,VALUE_RECUR_NUM_DENSE_LAYERS=2,VALUE_RECUR_BLOCK_TYPE=swiglu,VALUE_RECUR_MAX_ITERS=2,VALUE_RECUR_LN_MODE=pre_loop,VALUE_RECUR_USE_STEP_INFO=1,VALUE_RECUR_USE_FILM=0,VALUE_RECUR_USE_INPUT_INJECTION=0,VALUE_RECUR_USE_SOFT_MIXTURE=0,DISCOUNT=0.99,LOW_ALPHA=3.0,HIGH_ALPHA=3.0,SUBGOAL_STEPS=25,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,REFINE_PROBE_SIZE=512,REFINE_DUMP_STEPS=1:500000:1000000,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_hiql.slurm
+
+sbatch --array=0 --gpus=h100-47 --export="ALL,SEEDS=4,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=HIQL_AntLargeStitch_Mechanism,EXP_NAME=sd004_ALS_hiql_recur_mech,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=6,VALUE_RECUR_NUM_DENSE_LAYERS=2,VALUE_RECUR_BLOCK_TYPE=swiglu,VALUE_RECUR_MAX_ITERS=6,VALUE_RECUR_LN_MODE=pre_loop,VALUE_RECUR_USE_STEP_INFO=1,VALUE_RECUR_USE_FILM=0,VALUE_RECUR_USE_INPUT_INJECTION=0,VALUE_RECUR_USE_SOFT_MIXTURE=0,DISCOUNT=0.99,LOW_ALPHA=3.0,HIGH_ALPHA=3.0,SUBGOAL_STEPS=25,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,REFINE_PROBE_SIZE=512,REFINE_DUMP_STEPS=1:500000:1000000,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_hiql.slurm
+
+
+
+# NSCC PBS seed 4 equivalent. The -J 0 override is needed because this is a single-seed SEEDS list.
+qsub -J 0 -P personal -q normal -v SEEDS=4,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=HIQL_AntLargeStitch_Mechanism,EXP_NAME=sd004_ALS_hiql_recur_mech,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=6,VALUE_RECUR_NUM_DENSE_LAYERS=2,VALUE_RECUR_BLOCK_TYPE=swiglu,VALUE_RECUR_MAX_ITERS=6,VALUE_RECUR_LN_MODE=pre_loop,VALUE_RECUR_USE_STEP_INFO=1,VALUE_RECUR_USE_FILM=0,VALUE_RECUR_USE_INPUT_INJECTION=0,VALUE_RECUR_USE_SOFT_MIXTURE=0,DISCOUNT=0.99,LOW_ALPHA=3.0,HIGH_ALPHA=3.0,SUBGOAL_STEPS=25,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,REFINE_PROBE_SIZE=512,REFINE_DUMP_STEPS=1:500000:1000000,EVAL_ON_CPU=0 pbs/train_hiql.pbs
+```
+
 ## CRL SwiGLU on `antmaze-medium-stitch-v0`
 
 This command uses the new `recur_tied` inner block variant with `CRITIC_RECUR_BLOCK_TYPE=swiglu`, while keeping the benchmark-aligned CRL task defaults for `antmaze-medium-stitch-v0`: `alpha=0.1`, `discount=0.99`, `actor_p_trajgoal=0.5`, and `actor_p_randomgoal=0.5`.
@@ -62,63 +84,6 @@ qsub -P personal -q normal -v SEEDS=0,ENV_NAME=antmaze-giant-navigate-v0,RUN_GRO
 
 ```
 
-## CRL actor-scaling interaction grid on `antmaze-large-stitch-v0` (`seed=0`)
-
-These four `CRL` runs are the minimal interaction test for the hypothesis:
-does actor scaling become useful only when the critic is iterative?
-
-The grid is:
-- baseline actor + baseline critic
-- baseline actor + iterative critic
-- scaled actor + baseline critic
-- scaled actor + iterative critic
-
-All four runs use the standard `antmaze-large-stitch-v0` CRL task defaults:
-- `alpha=0.1`
-- `discount=0.99`
-- `actor_p_curgoal=0.0`
-- `actor_p_trajgoal=0.5`
-- `actor_p_randomgoal=0.5`
-
-The scaled actor here uses the new `residual_mlp` backbone, while the iterative critic uses `recur_tied` with the SwiGLU cell.
-
-```bash
-# 1. Baseline: MLP actor + MLP critic
-sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_ALS_ActorScaleInteraction,EXP_NAME=sd000_ALS_actorint_mlp_mlp,CRITIC_BACKBONE=mlp,ACTOR_BACKBONE=mlp,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online" slurm/train_crl.slurm
-
-# 2. Critic-only scaling: MLP actor + iterative critic
-sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_ALS_ActorScaleInteraction,EXP_NAME=sd000_ALS_actorint_mlp_recurcritic,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=4,ACTOR_BACKBONE=mlp,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online" slurm/train_crl.slurm
-
-# 3. Actor-only scaling: residual actor + MLP critic
-qsub -P personal -q normal -v SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_ALS_ActorScaleInteraction,EXP_NAME=sd000_ALS_actor8_resactor_mlpcritic,CRITIC_BACKBONE=mlp,ACTOR_BACKBONE=residual_mlp,ACTOR_NUM_LAYERS=8,ACTOR_LAYER_WIDTH=512,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online pbs/train_crl.pbs
-
-# 4. Full interaction: residual actor + iterative critic
-qsub -P personal -q normal -v SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_ALS_ActorScaleInteraction,EXP_NAME=sd000_ALS_actor8_resactor_recurcritic,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=4,ACTOR_BACKBONE=residual_mlp,ACTOR_NUM_LAYERS=8,ACTOR_LAYER_WIDTH=512,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online pbs/train_crl.pbs
-
-```
-
-## CRL InfoNCE comparison on `antmaze-large-stitch-v0` (`seed=0`)
-
-These runs are the cleanest first comparison against your existing `BCE` CRL results on ALS:
-- keep the same task, seed, batch size, actor loss, LR, LR decay, and critic architecture
-- change only `CONTRASTIVE_LOSS_TYPE` from `bce` to `infonce`
-- start with `INFONCE_TEMPERATURE=0.1`
-
-The most important matched comparison is the recurrent critic, since that is the core mechanism story. If `temp=0.1` is promising but clearly under-tuned, the next sweep should be temperature only, while keeping `BATCH_SIZE=1024` fixed.
-
-```bash
-# 1. Matched ALS baseline: MLP critic + InfoNCE
-sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_ALS_InfoNCE,EXP_NAME=sd000_ALS_mlp_infonce_t01,CRITIC_BACKBONE=mlp,CONTRASTIVE_LOSS_TYPE=infonce,INFONCE_TEMPERATURE=0.1,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,BATCH_SIZE=1024,WANDB_MODE=online" slurm/train_crl.slurm
-
-# 2. Matched ALS recurrent critic: SwiGLU recur_tied + InfoNCE
-sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_ALS_InfoNCE,EXP_NAME=sd000_ALS_recur_infonce_t01,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=4,CONTRASTIVE_LOSS_TYPE=infonce,INFONCE_TEMPERATURE=0.1,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,BATCH_SIZE=1024,WANDB_MODE=online" slurm/train_crl.slurm
-
-# 3. Recurrent critic temperature sweep: lower temperature
-sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_ALS_InfoNCE,EXP_NAME=sd000_ALS_recur_infonce_t003,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=4,CONTRASTIVE_LOSS_TYPE=infonce,INFONCE_TEMPERATURE=0.03,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,BATCH_SIZE=1024,WANDB_MODE=online" slurm/train_crl.slurm
-
-# 4. Recurrent critic temperature sweep: higher temperature
-sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=CRL_ALS_InfoNCE,EXP_NAME=sd000_ALS_recur_infonce_t03,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=4,CONTRASTIVE_LOSS_TYPE=infonce,INFONCE_TEMPERATURE=0.3,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,BATCH_SIZE=1024,WANDB_MODE=online" slurm/train_crl.slurm
-```
 
 ## CRL parameter-matched MLP comparisons on `antmaze-medium-stitch-v0`
 
@@ -157,30 +122,6 @@ qsub -P personal -q normal -v SEEDS=0,ENV_NAME=scene-play-v0,RUN_GROUP=CRL_Scene
 ```
 
 
-## HIQL confidence-gate comparison on `antmaze-large-stitch-v0` (`seed=4`)
-
-These four runs compare:
-- MLP HIQL baseline
-- MLP HIQL + confidence-scaled AWR
-- recurrent-value HIQL
-- recurrent-value HIQL + confidence-scaled AWR
-
-They use the current [slurm/train_hiql.slurm](/Users/bruce/Recurrent-Offline-RL/slurm/train_hiql.slurm) launcher, `seed=4`, and the standard `antmaze-large-stitch-v0` HIQL task defaults: `discount=0.99`, `low_alpha=3.0`, `high_alpha=3.0`, `subgoal_steps=25`, `actor_p_trajgoal=0.5`, `actor_p_randomgoal=0.5`.
-
-```bash
-# 1. HIQL baseline (MLP value)
-sbatch --array=0 --gpus=a100-40 --export="ALL,SEEDS=4,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=HIQL_AntLargeStitch_ConfGate,EXP_NAME=sd004_ALS_HIQL_mlp,VALUE_BACKBONE=mlp,DISCOUNT=0.99,LOW_ALPHA=3.0,HIGH_ALPHA=3.0,SUBGOAL_STEPS=25,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,ACTOR_CONFIDENCE_GATE=0,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_hiql.slurm
-
-# 2. HIQL baseline + confidence-scaled AWR (MLP value)
-sbatch --array=0 --gpus=a100-40 --export="ALL,SEEDS=4,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=HIQL_AntLargeStitch_ConfGate,EXP_NAME=sd004_ALS_HIQL_mlp_conf,VALUE_BACKBONE=mlp,DISCOUNT=0.99,LOW_ALPHA=3.0,HIGH_ALPHA=3.0,SUBGOAL_STEPS=25,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,ACTOR_CONFIDENCE_GATE=1,ACTOR_CONFIDENCE_NUM_NEGATIVES=4,ACTOR_CONFIDENCE_TAU=0.0,ACTOR_CONFIDENCE_TEMPERATURE=1.0,ACTOR_CONFIDENCE_MIN=0.1,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_hiql.slurm
-
-# 3. HIQL recurrent value
-sbatch --array=0 --gpus=a100-40 --export="ALL,SEEDS=4,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=HIQL_AntLargeStitch_ConfGate,EXP_NAME=sd004_ALS_HIQL_recur,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=4,VALUE_RECUR_MAX_ITERS=4,VALUE_RECUR_BLOCK_TYPE=swiglu,VALUE_RECUR_NUM_DENSE_LAYERS=2,DISCOUNT=0.99,LOW_ALPHA=3.0,HIGH_ALPHA=3.0,SUBGOAL_STEPS=25,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,ACTOR_CONFIDENCE_GATE=0,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_hiql.slurm
-
-# 4. HIQL recurrent value + confidence-scaled AWR
-sbatch --array=0 --gpus=a100-40 --export="ALL,SEEDS=4,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=HIQL_AntLargeStitch_ConfGate,EXP_NAME=sd004_ALS_HIQL_recur_conf,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=4,VALUE_RECUR_MAX_ITERS=4,VALUE_RECUR_BLOCK_TYPE=swiglu,VALUE_RECUR_NUM_DENSE_LAYERS=2,DISCOUNT=0.99,LOW_ALPHA=3.0,HIGH_ALPHA=3.0,SUBGOAL_STEPS=25,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,ACTOR_CONFIDENCE_GATE=1,ACTOR_CONFIDENCE_NUM_NEGATIVES=4,ACTOR_CONFIDENCE_TAU=0.0,ACTOR_CONFIDENCE_TEMPERATURE=1.0,ACTOR_CONFIDENCE_MIN=0.1,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_hiql.slurm
-```
-
 
 ## SAW paper-aligned references
 
@@ -199,21 +140,6 @@ sbatch --array=0 --gpus=h100-47 --export="ALL,SEEDS=2,ENV_NAME=scene-play-v0,RUN
 
 ```
 
-
-## SAW input/output Ablation
-```bash
-# 1. Control: recurrent SwiGLU, no input group, no output group
-sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=SAW_AntGiantNav_NewDesignAbl,EXP_NAME=sd000_AGN_SAW_Swi_ctrl,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=4,VALUE_RECUR_NUM_DENSE_LAYERS=2,VALUE_RECUR_BLOCK_TYPE=swiglu,VALUE_RECUR_MAX_ITERS=4,VALUE_RECUR_USE_INPUT_INJECTION=0,VALUE_RECUR_USE_SOFT_MIXTURE=0,DISCOUNT=0.995,EXPECTILE=0.7,LOW_ALPHA=3.0,AWR_ALPHA=3.0,KL_ALPHA=3.0,SUBGOAL_STEPS=25,WANDB_MODE=online" slurm/train_saw.slurm
-
-# 2. Input Group Only: separate input anchor/state + per-step learned lambda
-sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=SAW_AntGiantNav_NewDesignAbl,EXP_NAME=sd000_AGN_SAW_Swi_inj,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=4,VALUE_RECUR_NUM_DENSE_LAYERS=2,VALUE_RECUR_BLOCK_TYPE=swiglu,VALUE_RECUR_MAX_ITERS=4,VALUE_RECUR_USE_INPUT_INJECTION=1,VALUE_RECUR_USE_SOFT_MIXTURE=0,DISCOUNT=0.995,EXPECTILE=0.7,LOW_ALPHA=3.0,AWR_ALPHA=3.0,KL_ALPHA=3.0,SUBGOAL_STEPS=25,WANDB_MODE=online" slurm/train_saw.slurm
-
-# 3. Output Group Only: shared per-step head + soft mixture over steps
-sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=SAW_AntGiantNav_NewDesignAbl,EXP_NAME=sd000_AGN_SAW_Swi_mix,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=4,VALUE_RECUR_NUM_DENSE_LAYERS=2,VALUE_RECUR_BLOCK_TYPE=swiglu,VALUE_RECUR_MAX_ITERS=4,VALUE_RECUR_USE_INPUT_INJECTION=0,VALUE_RECUR_USE_SOFT_MIXTURE=1,DISCOUNT=0.995,EXPECTILE=0.7,LOW_ALPHA=3.0,AWR_ALPHA=3.0,KL_ALPHA=3.0,SUBGOAL_STEPS=25,WANDB_MODE=online" slurm/train_saw.slurm
-
-# 4. Both Groups: input anchor injection + soft mixture
-sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-giant-navigate-v0,RUN_GROUP=SAW_AntGiantNav_NewDesignAbl,EXP_NAME=sd000_AGN_SAW_Swi_inj_mix,VALUE_BACKBONE=recur_tied,VALUE_RECUR_ITERS=4,VALUE_RECUR_NUM_DENSE_LAYERS=2,VALUE_RECUR_BLOCK_TYPE=swiglu,VALUE_RECUR_MAX_ITERS=4,VALUE_RECUR_USE_INPUT_INJECTION=1,VALUE_RECUR_USE_SOFT_MIXTURE=1,DISCOUNT=0.995,EXPECTILE=0.7,LOW_ALPHA=3.0,AWR_ALPHA=3.0,KL_ALPHA=3.0,SUBGOAL_STEPS=25,WANDB_MODE=online" slurm/train_saw.slurm
-```
 
 ### NSCC PBS equivalents
 
@@ -247,5 +173,3 @@ sbatch --array=0 --gpus=a100-40 --export="ALL,SEEDS=0,ENV_NAME=antmaze-medium-st
 
 sbatch --array=0 --gpus=a100-40 --export="ALL,SEEDS=0,ENV_NAME=antmaze-medium-stitch-v0,RUN_GROUP=GCIQL_AntMediumStitch,EXP_NAME=sd000_AMS_GCIQL_baseline,VALUE_BACKBONE=mlp,CRITIC_BACKBONE=mlp,DISCOUNT=0.99,ALPHA=0.3,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online" slurm/train_gciql.slurm
 ```
-
-qsub -P personal -q normal -v SEEDS=0,ENV_NAME=antmaze-medium-explore-v0,RUN_GROUP=CRL_AntMediumExplore,EXP_NAME=sd000_AME_Swi_in,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=4,RECUR_USE_ACT=0,ALPHA=0.003,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.0,ACTOR_P_RANDOMGOAL=1.0,EVAL_ON_CPU=0 pbs/train_crl.pbs

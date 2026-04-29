@@ -45,6 +45,8 @@ VIDEO_EPISODES="${VIDEO_EPISODES:-0}"
 EVAL_ON_CPU="${EVAL_ON_CPU:-1}"
 SAVE_INTERVAL="${SAVE_INTERVAL:-0}"
 SAVE_STEPS="${SAVE_STEPS:-600000:800000:900000:1000000}"
+REFINE_PROBE_SIZE="${REFINE_PROBE_SIZE:-256}"
+REFINE_DUMP_STEPS="${REFINE_DUMP_STEPS:-}"
 DISABLE_TQDM="${DISABLE_TQDM:-1}"
 
 LR="${LR:-3e-4}"
@@ -244,6 +246,7 @@ CMD=(
   "--video_episodes=${VIDEO_EPISODES}"
   "--eval_on_cpu=${EVAL_ON_CPU}"
   "--save_interval=${SAVE_INTERVAL}"
+  "--refine_probe_size=${REFINE_PROBE_SIZE}"
   "--disable_tqdm=${DISABLE_TQDM}"
   "--exp_name=${EXP_NAME}"
   "--agent=agents/hiql.py"
@@ -256,6 +259,10 @@ fi
 
 if [[ -n "${SAVE_STEPS}" ]]; then
   CMD+=("--save_steps=${SAVE_STEPS}")
+fi
+
+if [[ -n "${REFINE_DUMP_STEPS}" ]]; then
+  CMD+=("--refine_dump_steps=${REFINE_DUMP_STEPS}")
 fi
 
 if [[ -n "${RESTORE_PATH}" ]]; then
