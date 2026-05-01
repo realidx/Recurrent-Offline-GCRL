@@ -1126,7 +1126,7 @@ index 559df71..b51d35a 100644
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.2,  # Probability of using the current state as the value goal.
 diff --git a/impls/agents/hiql.py b/impls/agents/hiql.py
-index 63e5dee..878b75e 100644
+index 63e5dee..47d943b 100644
 --- a/impls/agents/hiql.py
 +++ b/impls/agents/hiql.py
 @@ -8,7 +8,7 @@ import ml_collections
@@ -1452,7 +1452,7 @@ index 63e5dee..878b75e 100644
 +            )
 +            value_def = GCValue(gc_encoder=value_encoder_def, **value_kwargs)
 +            target_value_def = GCValue(gc_encoder=target_value_encoder_def, **value_kwargs)
-+        elif self._is_recurrent_backbone(value_backbone):
++        elif cls._is_recurrent_backbone(value_backbone):
 +            recur_value_kwargs = dict(
 +                hidden_dims=config['value_hidden_dims'],
 +                layer_norm=config['layer_norm'],
@@ -1644,7 +1644,7 @@ index 79852cb..cc4fa11 100644
              value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
 diff --git a/impls/agents/saw.py b/impls/agents/saw.py
 new file mode 100644
-index 0000000..4db0ccd
+index 0000000..4e17508
 --- /dev/null
 +++ b/impls/agents/saw.py
 @@ -0,0 +1,430 @@
@@ -1937,7 +1937,7 @@ index 0000000..4db0ccd
 +                gc_encoder=encoders.get('target_value'),
 +                **value_kwargs,
 +            )
-+        elif self._is_recurrent_backbone(value_backbone):
++        elif cls._is_recurrent_backbone(value_backbone):
 +            recur_value_kwargs = dict(
 +                hidden_dims=config['value_hidden_dims'],
 +                layer_norm=config['layer_norm'],
