@@ -105,12 +105,12 @@ DISCRETE="${DISCRETE:-0}"
 ENCODER="${ENCODER:-}"
 
 # Critic backbone selection.
-CRITIC_BACKBONE="${CRITIC_BACKBONE:-mlp}"   # mlp | recur_tied
+CRITIC_BACKBONE="${CRITIC_BACKBONE:-mlp}"   # mlp | recur_tied | recur_stacked_swiglu
 LAYERSCALE_INIT="${LAYERSCALE_INIT:-1e-2}"
 
 # recurrent tied options.
 KTRAIN="${KTRAIN:-4}"
-RECUR_NUM_DENSE_LAYERS="${RECUR_NUM_DENSE_LAYERS:-2}" # User-facing N in NxK: dense layers inside each tied recurrent residual update.
+RECUR_NUM_DENSE_LAYERS="${RECUR_NUM_DENSE_LAYERS:-2}" # For recur_tied: dense layers inside each recurrent update. For recur_stacked_swiglu: stacked residual SwiGLU layers per iteration.
 RECUR_NUM_BLOCKS="${RECUR_NUM_BLOCKS:-1}"   # Deprecated fallback: number of 2-layer pairs inside each tied recurrent residual update.
 RECUR_MAX_ITERS="${RECUR_MAX_ITERS:-4}"
 CRITIC_RECUR_LN_MODE="${CRITIC_RECUR_LN_MODE:-per_layer_final}"
@@ -325,7 +325,7 @@ fi
 case "${CRITIC_BACKBONE}" in
   mlp)
     ;;
-  recur_tied)
+  recur_tied|recur_stacked_swiglu)
     if [[ ! "${CRITIC_RECUR_LN_MODE}" =~ ^(pre_loop|per_layer|per_layer_final|pre_loop_per_layer)$ ]]; then
       echo "Error: CRITIC_RECUR_LN_MODE='${CRITIC_RECUR_LN_MODE}' is invalid. Use pre_loop, per_layer, per_layer_final, or pre_loop_per_layer." >&2
       exit 2
@@ -334,7 +334,7 @@ case "${CRITIC_BACKBONE}" in
       echo "Error: CRITIC_RECUR_BLOCK_TYPE='${CRITIC_RECUR_BLOCK_TYPE}' is invalid. Use dense or swiglu." >&2
       exit 2
     fi
-    if [[ "${CRITIC_RECUR_BLOCK_TYPE:-dense}" == "swiglu" && "${RECUR_NUM_DENSE_LAYERS}" != "2" ]]; then
+    if [[ "${CRITIC_BACKBONE}" == "recur_tied" && "${CRITIC_RECUR_BLOCK_TYPE:-dense}" == "swiglu" && "${RECUR_NUM_DENSE_LAYERS}" != "2" ]]; then
       echo "Error: CRITIC_RECUR_BLOCK_TYPE=swiglu requires RECUR_NUM_DENSE_LAYERS=2." >&2
       exit 2
     fi
@@ -342,10 +342,32 @@ case "${CRITIC_BACKBONE}" in
       echo "Error: CRITIC_RECUR_FILM_MODE='${CRITIC_RECUR_FILM_MODE}' is invalid. Use hidden, context, or hidden_context." >&2
       exit 2
     fi
+    if [[ "${CRITIC_BACKBONE}" == "recur_stacked_swiglu" ]]; then
+      if [[ "${CRITIC_RECUR_USE_FILM}" != "0" ]]; then
+        echo "Error: CRITIC_BACKBONE=recur_stacked_swiglu does not support CRITIC_RECUR_USE_FILM." >&2
+        exit 2
+      fi
+      if [[ "${CRITIC_RECUR_USE_INPUT_INJECTION}" != "0" ]]; then
+        echo "Error: CRITIC_BACKBONE=recur_stacked_swiglu does not support CRITIC_RECUR_USE_INPUT_INJECTION." >&2
+        exit 2
+      fi
+      if [[ "${CRITIC_RECUR_USE_SOFT_MIXTURE}" != "0" ]]; then
+        echo "Error: CRITIC_BACKBONE=recur_stacked_swiglu does not support CRITIC_RECUR_USE_SOFT_MIXTURE." >&2
+        exit 2
+      fi
+      if [[ "${RECUR_USE_ACT}" != "0" ]]; then
+        echo "Error: CRITIC_BACKBONE=recur_stacked_swiglu does not support RECUR_USE_ACT." >&2
+        exit 2
+      fi
+    fi
+    critic_recur_block_type_flag="${CRITIC_RECUR_BLOCK_TYPE:-dense}"
+    if [[ "${CRITIC_BACKBONE}" == "recur_stacked_swiglu" ]]; then
+      critic_recur_block_type_flag="swiglu"
+    fi
     AGENT_FLAGS+=(
       "--agent.critic_recur_iters=${KTRAIN}"
       "--agent.critic_recur_num_dense_layers=${RECUR_NUM_DENSE_LAYERS}"
-      "--agent.critic_recur_block_type=${CRITIC_RECUR_BLOCK_TYPE:-dense}"
+      "--agent.critic_recur_block_type=${critic_recur_block_type_flag}"
       "--agent.critic_recur_max_iters=${RECUR_MAX_ITERS}"
       "--agent.critic_recur_ln_mode=${CRITIC_RECUR_LN_MODE}"
       "--agent.critic_recur_use_step_info=${RECUR_USE_STEP_INFO}"
@@ -363,7 +385,7 @@ case "${CRITIC_BACKBONE}" in
     )
     ;;
   *)
-    echo "Error: unsupported CRITIC_BACKBONE='${CRITIC_BACKBONE}'." >&2
+    echo "Error: unsupported CRITIC_BACKBONE='${CRITIC_BACKBONE}'. Use mlp, recur_tied, or recur_stacked_swiglu." >&2
     exit 2
     ;;
 esac

@@ -74,7 +74,7 @@ LOW_ACTOR_HIDDEN_DIMS="${LOW_ACTOR_HIDDEN_DIMS:-512x512x512}"
 VALUE_HIDDEN_DIMS="${VALUE_HIDDEN_DIMS:-512x512x512}"
 VALUE_BACKBONE="${VALUE_BACKBONE:-mlp}"
 VALUE_RECUR_ITERS="${VALUE_RECUR_ITERS:-4}"
-VALUE_RECUR_NUM_DENSE_LAYERS="${VALUE_RECUR_NUM_DENSE_LAYERS:-2}"
+VALUE_RECUR_NUM_DENSE_LAYERS="${VALUE_RECUR_NUM_DENSE_LAYERS:-2}" # For recur_stacked_swiglu this is the stacked residual SwiGLU depth per iteration.
 VALUE_RECUR_BLOCK_TYPE="${VALUE_RECUR_BLOCK_TYPE:-dense}"
 VALUE_RECUR_MAX_ITERS="${VALUE_RECUR_MAX_ITERS:-16}"
 VALUE_RECUR_LN_MODE="${VALUE_RECUR_LN_MODE:-per_layer_final}"
@@ -200,7 +200,7 @@ fi
 case "${VALUE_BACKBONE}" in
   mlp)
     ;;
-  recur_tied)
+  recur_tied|recur_stacked_swiglu)
     if [[ ! "${VALUE_RECUR_LN_MODE}" =~ ^(pre_loop|per_layer|per_layer_final|pre_loop_per_layer)$ ]]; then
       echo "Error: VALUE_RECUR_LN_MODE='${VALUE_RECUR_LN_MODE}' is invalid. Use pre_loop, per_layer, per_layer_final, or pre_loop_per_layer." >&2
       exit 2
@@ -209,7 +209,7 @@ case "${VALUE_BACKBONE}" in
       echo "Error: VALUE_RECUR_BLOCK_TYPE='${VALUE_RECUR_BLOCK_TYPE}' is invalid. Use dense or swiglu." >&2
       exit 2
     fi
-    if [[ "${VALUE_RECUR_BLOCK_TYPE}" == "swiglu" && "${VALUE_RECUR_NUM_DENSE_LAYERS}" != "2" ]]; then
+    if [[ "${VALUE_BACKBONE}" == "recur_tied" && "${VALUE_RECUR_BLOCK_TYPE}" == "swiglu" && "${VALUE_RECUR_NUM_DENSE_LAYERS}" != "2" ]]; then
       echo "Error: VALUE_RECUR_BLOCK_TYPE=swiglu requires VALUE_RECUR_NUM_DENSE_LAYERS=2." >&2
       exit 2
     fi
@@ -217,10 +217,32 @@ case "${VALUE_BACKBONE}" in
       echo "Error: VALUE_RECUR_FILM_MODE='${VALUE_RECUR_FILM_MODE}' is invalid. Use hidden, context, or hidden_context." >&2
       exit 2
     fi
+    if [[ "${VALUE_BACKBONE}" == "recur_stacked_swiglu" ]]; then
+      if [[ "${VALUE_RECUR_USE_FILM}" != "0" ]]; then
+        echo "Error: VALUE_BACKBONE=recur_stacked_swiglu does not support VALUE_RECUR_USE_FILM." >&2
+        exit 2
+      fi
+      if [[ "${VALUE_RECUR_USE_INPUT_INJECTION}" != "0" ]]; then
+        echo "Error: VALUE_BACKBONE=recur_stacked_swiglu does not support VALUE_RECUR_USE_INPUT_INJECTION." >&2
+        exit 2
+      fi
+      if [[ "${VALUE_RECUR_USE_SOFT_MIXTURE}" != "0" ]]; then
+        echo "Error: VALUE_BACKBONE=recur_stacked_swiglu does not support VALUE_RECUR_USE_SOFT_MIXTURE." >&2
+        exit 2
+      fi
+      if [[ "${VALUE_RECUR_USE_ACT}" != "0" ]]; then
+        echo "Error: VALUE_BACKBONE=recur_stacked_swiglu does not support VALUE_RECUR_USE_ACT." >&2
+        exit 2
+      fi
+    fi
+    value_recur_block_type_flag="${VALUE_RECUR_BLOCK_TYPE}"
+    if [[ "${VALUE_BACKBONE}" == "recur_stacked_swiglu" ]]; then
+      value_recur_block_type_flag="swiglu"
+    fi
     AGENT_FLAGS+=(
       "--agent.value_recur_iters=${VALUE_RECUR_ITERS}"
       "--agent.value_recur_num_dense_layers=${VALUE_RECUR_NUM_DENSE_LAYERS}"
-      "--agent.value_recur_block_type=${VALUE_RECUR_BLOCK_TYPE}"
+      "--agent.value_recur_block_type=${value_recur_block_type_flag}"
       "--agent.value_recur_max_iters=${VALUE_RECUR_MAX_ITERS}"
       "--agent.value_recur_ln_mode=${VALUE_RECUR_LN_MODE}"
       "--agent.value_recur_use_step_info=${VALUE_RECUR_USE_STEP_INFO}"
@@ -238,7 +260,7 @@ case "${VALUE_BACKBONE}" in
     )
     ;;
   *)
-    echo "Error: VALUE_BACKBONE='${VALUE_BACKBONE}' is invalid. Use mlp or recur_tied." >&2
+    echo "Error: VALUE_BACKBONE='${VALUE_BACKBONE}' is invalid. Use mlp, recur_tied, or recur_stacked_swiglu." >&2
     exit 2
     ;;
 esac

@@ -192,90 +192,42 @@ h^{(k)}
 \end{equation}
 Only the step embeddings and LayerScale coefficients are step-specific; the update weights are shared across refinement steps. This design makes the architectural hypothesis explicit: offline GCRL may benefit from repeatedly revising the latent value or policy representation before it is consumed by the algorithm. The exact insertion point, hidden dimension, refinement depth, and algorithm-specific instantiations are described in the experimental setup, so the method section only specifies the shared refinement principle.
 
+
+
 \section{Experiments}
 \subsection{Experiment Setup}
-\paragraph{Environment}
-We conduct our experiments on OGBench \citep{ogbench}, a benchmark for offline goal-conditioned RL that provides fixed datasets and multiple goal-reaching evaluation tasks per environment. We tested on both locomotion and manipulation datasets, each dataset is evaluated on the five OGBench goal tasks, and we report both average success and standard deviation.
+\paragraph{Environments and evaluation protocol}
+We evaluate on OGBench \citep{ogbench}, a benchmark designed specifically for offline goal-conditioned RL. In this setting the agent receives a fixed dataset of trajectories and must learn to reach new evaluation goals without any additional environment interaction. OGBench provides standardized datasets and multiple held-out state-goal evaluation pairs for each task, making it useful for testing long-horizon reachability, trajectory stitching, state-goal generalization, and policy extraction from offline data. The benchmark spans locomotion and manipulation domains: locomotion tasks require simulated agents to navigate mazes of different sizes and dataset types, while manipulation tasks require reaching object configurations or compositional scene goals. Following the benchmark protocol, we report average success over the five OGBench evaluation tasks for each dataset, with 50 episodes per task.
 
 
-\paragraph{Architecture and algorithm}
-The main diagnostic algorithm is CRL with the DDPG+BC actor objective and the BCE contrastive critic loss described in Section~\ref{sec:preliminaries}. CRL is useful for isolating the effect of value learning because its learned compatibility score is trained directly and then consumed directly by policy extraction. The default baseline uses the standard OGBench MLP critic, with baseline numbers drawn from the OGBench implementation. The recurrent variant replaces the relevant critic network with the tied refinement module from Section~\ref{sec:architecture}; the actor, replay data, optimization schedule, goal sampling, and losses are otherwise kept fixed. We report the exact tower placement, hidden dimensions, refinement depth, and algorithm-specific insertions with each experiment.
+\paragraph{Algorithms and architecture}
+We study recurrent latent refinement as an architecture-level replacement inside existing offline GCRL algorithms, rather than as a new loss or data-generation procedure. Our experiments include CRL, HIQL, and SAW as the main algorithmic settings, with GCIQL and QRL used as additional value-learning checks where available. These methods cover complementary regimes: CRL exposes a contrastive state-action-goal critic, HIQL and SAW represent hierarchical or subgoal-based policy-extraction approaches for long-horizon tasks, and GCIQL/QRL provide additional value-learning baselines. In each comparison, the recurrent variant replaces the relevant MLP value or critic backbone with the tied refinement module from Section~\ref{sec:architecture}. The surrounding algorithm is otherwise held fixed, including the actor architecture, replay data, goal sampling, losses, batch size, optimizer, and evaluation protocol. Exact hyperparameters and insertion points are reported in the appendix. Unless otherwise noted, the default recurrent module uses four refinement steps; Section~\ref{sec:depth} studies this choice directly.
 
 
 \subsection{Main Results}
-In this section we will compare across several datasets including locomotion and manipulation. In the following section we will provide empirical analysis using selected datasets.
+Placeholder for the main recurrent-versus-MLP comparison across locomotion and manipulation datasets and across the evaluated offline GCRL algorithms.
 
-\subsection{Why and How Is the Recurrent Critic Better Than the Baseline?}
-This subsection should be written as an empirical diagnostic argument, not as a data dump. The final paper should convey one narrow claim:
-\begin{quote}
-Recurrent refinement improves CRL by making the goal-conditioned critic more useful for policy extraction on difficult state-goal pairs; the improvement is visible in critic discrimination and actor-facing diagnostics, but it is not a uniform improvement of every raw margin or every global geometry metric.
-\end{quote}
-The writer should use figures to carry most numerical evidence and use the text to explain the mechanism. The logs for this subsection are in \texttt{references/mechanism/Baseline vs Recurrent}. The comparison is the default MLP CRL critic versus the final recurrent critic (\texttt{iter4}) on AMS, ALS, and AGN.
+\subsection{Why Is the Recurrent Critic Better?}
+End-task success alone does not explain what the recurrent critic changes. This subsection therefore uses CRL as the mechanism analysis setting because CRL exposes the critic signal most directly. Our diagnostic experiments focus on three state-based AntMaze tasks that play different roles in the analysis: \texttt{antmaze-medium-stitch} (AMS), a clean positive case; \texttt{antmaze-large-stitch} (ALS), a harder long-horizon stitching case; and \texttt{antmaze-giant-navigate} (AGN), a boundary case with sparser useful stitching signal. Unless stated otherwise, the diagnostic comparison is the default MLP CRL critic against the four-step recurrent CRL critic.
 
-\textbf{Current aggregation convention.}
-All reference numbers below are final-checkpoint values extracted from the current CSV logs. The MLP baseline currently has one run per task, so its entry is reported as a single value. The recurrent critic has four runs per task, so its entry is reported as mean $\pm$ sample standard deviation over seeds. These numbers should be treated as the figure-building reference for this section; if additional baseline seeds are added later, regenerate the tables and update the claims.
+A central challenge in analyzing architectural changes in reinforcement learning is that final performance can conflate value learning, policy optimization, data coverage, and evaluation variance. CRL provides a cleaner diagnostic setting because the learned score $f(s,a,g)$ is trained explicitly by the contrastive objective and then used directly in the DDPG+BC actor objective. Changes to the critic therefore appear at the policy-extraction interface, rather than only through an indirect bootstrapping target.
 
-\subsubsection{Why CRL Is the Right Diagnostic Setting}
-\textbf{Intention.}
-Open the subsection by explaining why CRL is an unusually clean setting for mechanism analysis. In CRL, the learned critic score $f(s,a,g)$ is not a hidden auxiliary object: it is trained by the contrastive objective and then used directly by the DDPG+BC actor. Therefore, if recurrence helps, we can inspect the critic itself and the actor-critic interface without first disentangling many algorithmic components.
+Concretely, CRL learns a compatibility score for state-action-goal triples. A dataset transition paired with a future goal from the same trajectory is a positive pair, while pairing the same transition with another sampled goal gives a negative pair. Let $q^+=f(s,a,g)$ and $q^-=f(s,a,g^-)$ denote these matched and mismatched scores. If recurrent refinement changes the critic in a useful way, it should make this positive-versus-negative signal easier for the actor to use, not merely change the final success number.
 
-\textbf{Logs needed.}
-This opening does not require a figure. It should reference the following families of logs only to motivate the diagnostics used later:
-\begin{itemize}
-\item Critic discrimination: \texttt{evaluation/critic\_signal/*}.
-\item Actor-critic interface: \texttt{evaluation/actor\_critic/*}.
-\item Behavior support: \texttt{evaluation/policy\_behavior\_mse}, \texttt{evaluation/policy\_behavior\_l2}, and \texttt{evaluation/actor\_behavior\_log\_prob}.
-\item Geometry caveat: \texttt{evaluation/critic\_geometry/*}.
-\end{itemize}
+We use this structure to ask three mechanism questions: whether the recurrent critic separates matched and non-matched goals more reliably, whether the actor can use the resulting score while remaining near behavior support, and whether the gains are simply explained by better maze-distance geometry. For critic discrimination, we report the raw margin $\mathbb{E}[q^+-q^-]$, ranking accuracy $\Pr[q^+>q^-]$, and normalized separation
+\[
+\frac{\mathbb{E}[q^+-q^-]}{\sqrt{\mathrm{Var}(q^+) + \mathrm{Var}(q^-) + \epsilon}}.
+\]
+For actor usability, we use the fact that the DDPG+BC actor is trained to choose actions that score well under the CRL critic while remaining behavior-regularized. We therefore compare critic scores on actor and dataset actions through $q_\Delta=\mathbb{E}[f(s,\pi(s,g),g)]-\mathbb{E}[f(s,a_{\mathcal{D}},g)]$, the fraction of states where the actor action is preferred, and policy--behavior deviation. Finally, graph-distance correlations are included only as a caveat: they test whether recurrence is merely learning a better shortest-path surrogate.
 
-\textbf{Writing guidance.}
-Use this paragraph to set expectations. The section is not trying to prove a theorem and is not trying to show that recurrent critics are better on every statistic. The correct framing is ``diagnostic evidence for a critic-side mechanism.'' Avoid saying ``recurrence solves long-horizon reasoning'' or ``learns the correct geometry.'' Say instead that CRL lets us test whether the learned score becomes more useful for offline actor extraction.
-
-\subsubsection{Diagnostic Definitions}
-\textbf{Intention.}
-Define the metrics once so that the final text can discuss the figures without repeatedly explaining notation. This makes the section look deliberate rather than post hoc.
-
-\textbf{Definitions to include.}
-For a matched goal score $q^+=f(s,a,g)$ and a non-matched goal score $q^-=f(s,a,g^-)$:
-\begin{itemize}
-\item \texttt{margin\_mean}: $\mathbb{E}[q^+-q^-]$.
-\item \texttt{rank\_acc}: $\Pr[q^+>q^-]$.
-\item \texttt{separation\_z}: $\mathbb{E}[q^+-q^-] / \sqrt{\mathrm{Var}(q^+) + \mathrm{Var}(q^-) + \epsilon}$.
-\end{itemize}
-For actor usability:
-\begin{itemize}
-\item \texttt{q\_actor\_mean}: critic score of the actor action $f(s,\pi(s,g),g)$.
-\item \texttt{q\_behavior\_mean}: critic score of the dataset action $f(s,a_{\mathcal{D}},g)$.
-\item \texttt{q\_delta\_mean}: \texttt{q\_actor\_mean} $-$ \texttt{q\_behavior\_mean}.
-\item \texttt{prefer\_actor\_frac}: fraction where the critic scores the actor action above the dataset action.
-\item Policy-behavior MSE/L2/log probability: how far the extracted actor moves from behavior support.
-\end{itemize}
-For geometry:
-\begin{itemize}
-\item \texttt{graph\_corr}: Pearson correlation between critic score and negative maze graph distance.
-\item \texttt{hard\_graph\_corr}: the same correlation restricted to the longer-distance hard subset.
-\end{itemize}
-
-\textbf{Figure guidance.}
-Do not make a standalone metric-definition figure. Definitions should be text, perhaps with one compact equation for \texttt{separation\_z}. The figures should start after the reader knows what the metrics mean.
-
-\subsubsection{Claim 1: The Critic Signal Becomes More Discriminative}
-\textbf{Intention.}
-Show that recurrence changes the critic, not only final return. The desired claim is not ``all raw margins increase.'' The safe claim is that the recurrent critic improves the discriminative quality of the matched-versus-non-matched signal, especially as measured by normalized separation and rank-based metrics. AMS is the clean positive case where raw margin also increases. ALS and AGN are important because they prevent overclaiming: success and \texttt{separation\_z} improve even when raw \texttt{margin\_mean} does not.
-
-\textbf{Logs needed.}
-\begin{itemize}
-\item \texttt{evaluation/overall\_success} and \texttt{evaluation/best\_so\_far\_success} for context only.
-\item \texttt{evaluation/critic\_signal/pos\_mean}.
-\item \texttt{evaluation/critic\_signal/neg\_mean}.
-\item \texttt{evaluation/critic\_signal/margin\_mean}.
-\item \texttt{evaluation/critic\_signal/margin\_std}.
-\item \texttt{evaluation/critic\_signal/rank\_acc}.
-\item \texttt{evaluation/critic\_signal/separation\_z}.
-\item Optional training-side support: \texttt{training/critic/categorical\_accuracy} and \texttt{training/critic/score\_margin}.
-\end{itemize}
-
-\textbf{Current log summary.}
+% Figure plan: Use a compact two-panel quantitative figure here.
+% Panel (a): final success; panel (b): normalized separation z.
+% X-axis: AMS, ALS, AGN. For each task, show MLP -> Recurrent as paired bars
+% or connected dots/slope lines. The desired visual message is simple:
+% recurrence moves both success and critic separation upward. Do not include
+% raw margin in the main panel; it distracts from the clean z-separation claim.
+\paragraph{A sharper actor-facing score.}
+The first pattern is that recurrence changes the critic in a way that is visible before considering policy rollouts. Across the three AntMaze diagnostics, the recurrent critic improves the normalized separation between matched and mismatched goals. This is the critic-side evidence that the score presented to the actor becomes sharper: positive state-action-goal triples are more cleanly distinguished from negative goal pairings in the same settings where evaluation success improves.
 \begin{center}
 \scriptsize
 \setlength{\tabcolsep}{2.5pt}
@@ -295,42 +247,16 @@ Separation $z$ & 1.848 & 2.109 $\pm$ 0.055 & 2.178 & 2.487 $\pm$ 0.039 & 1.451 &
 \end{tabular}
 \end{center}
 
-Use this table to support the precise critic claim: AMS shows a clean raw-margin improvement, while ALS and AGN show improved normalized separation without improved raw margin. The figure should therefore make \texttt{separation\_z} visually central and treat \texttt{margin\_mean} as a supporting/caveat metric.
+The main visual comparison should therefore pair success with separation $z$, making the critic-side sharpening visible next to the control improvement.
 
-\textbf{Recommended figure.}
-Make this the first part of a multi-panel ``mechanism summary'' figure:
-\begin{itemize}
-\item Rows or grouped bars for AMS, ALS, AGN.
-\item Two methods per task: MLP baseline and recurrent critic.
-\item Panels: final success, \texttt{separation\_z}, \texttt{rank\_acc}, and \texttt{margin\_mean}.
-\item Use \texttt{separation\_z} as the main critic-sharpness panel; keep \texttt{margin\_mean} as a secondary/caveat panel.
-\item If space is limited, use success + \texttt{separation\_z} + \texttt{margin\_mean}. Put \texttt{rank\_acc} in appendix if saturated.
-\end{itemize}
-
-\textbf{What the text should say.}
-The paper should say that AMS gives the cleanest margin story, while ALS and AGN show that raw margins are not the mechanism by themselves. The important observation is that the recurrent critic produces a better normalized separation signal in the same settings where success improves.
-
-\textbf{What to avoid.}
-Do not write ``the recurrent critic has larger margins across tasks.'' This is false for ALS and AGN. Do not imply that critic logits are calibrated across architectures. Treat raw margin as suggestive only when paired with variance-normalized separation or rank accuracy.
-
-\subsubsection{Claim 2: The Main Repair Is Actor-Usable Signal}
-\textbf{Intention.}
-This should be the central mechanism claim. The recurrent critic is better not because it always assigns larger actor advantages, but because the actor can extract a better policy from it while staying closer to behavior support. This is the subtle part and should be explained carefully: in offline RL, larger \texttt{q\_delta} or larger \texttt{prefer\_actor\_frac} is not automatically good, because it may indicate overconfident extrapolation.
-
-\textbf{Logs needed.}
-\begin{itemize}
-\item \texttt{evaluation/actor\_critic/q\_actor\_mean}.
-\item \texttt{evaluation/actor\_critic/q\_behavior\_mean}.
-\item \texttt{evaluation/actor\_critic/q\_delta\_mean}.
-\item \texttt{evaluation/actor\_critic/q\_delta\_std} if available.
-\item \texttt{evaluation/actor\_critic/prefer\_actor\_frac}.
-\item \texttt{evaluation/policy\_behavior\_mse}.
-\item \texttt{evaluation/policy\_behavior\_l2}.
-\item \texttt{evaluation/actor\_behavior\_log\_prob}.
-\item Optional bucketed actor metrics if present: \texttt{evaluation/actor\_critic/traj\_*}, \texttt{evaluation/actor\_critic/maze\_path\_*}, and \texttt{evaluation/policy\_behavior/*}.
-\end{itemize}
-
-\textbf{Current log summary.}
+% Figure plan: Use a success-vs-behavior-drift scatter rather than another table.
+% X-axis: policy-behavior MSE or L2, lower is better. Y-axis: success, higher is
+% better. Plot one MLP and one Recurrent point per task, connected by arrows.
+% The desired visual message is movement toward the upper-left: higher success
+% while staying closer to behavior support. If space allows, add a small side
+% panel with q_delta paired bars; otherwise mention q_delta only in the caption.
+\paragraph{A less extrapolative policy-extraction signal.}
+A closer look at the actor interface gives a more specific explanation for the performance gain. With the recurrent critic, the extracted actor reaches higher success while staying closer to the behavior policy. The actor-over-behavior score gap $q_\Delta$ decreases on all three tasks, policy MSE and L2 distance decrease, and behavior log probability improves. In an offline setting, this combination is the useful actor-facing signature: the critic supports better goal reaching without requiring the actor to move farther away from the data distribution.
 \begin{center}
 \scriptsize
 \setlength{\tabcolsep}{2.5pt}
@@ -349,39 +275,20 @@ Behavior log prob. & -8.129 & -7.680 $\pm$ 0.005 & -7.748 & -7.694 $\pm$ 0.014 &
 \end{tabular}
 \end{center}
 
-This is the most important table for the mechanism story. It shows that recurrent improves success while reducing \texttt{q\_delta} on all three tasks and reducing behavior drift. The final text should interpret this as a more conservative and actor-usable critic signal, not as a weaker critic.
+This actor-facing pattern is the central mechanism: recurrence moves CRL toward the high-success, low-drift regime.
 
-\textbf{Recommended figure.}
-Make a paired actor-usability figure or the second half of the mechanism summary:
-\begin{itemize}
-\item X-axis: tasks AMS, ALS, AGN.
-\item Left panel: \texttt{q\_delta\_mean} or \texttt{prefer\_actor\_frac}.
-\item Middle panel: policy-behavior MSE or L2.
-\item Right panel: success.
-\item Use arrows or annotations to emphasize the key pattern: recurrent can have smaller actor-over-behavior advantage but better success and lower behavior drift.
-\item A scatter plot can also work: x-axis behavior drift, y-axis success, marker color for method. The recurrent points should move toward higher success/lower drift.
-\end{itemize}
-
-\textbf{What the text should say.}
-The baseline critic can appear more enthusiastic about actor actions, but that is not the same as being a better offline critic. The recurrent critic produces a more conservative and more usable actor-facing signal: the actor does not need to move as far from behavior to obtain higher success. This is the strongest explanation for why CRL is helped by critic-side recurrence.
-
-\textbf{What to avoid.}
-Do not say ``recurrent increases \texttt{q\_delta}.'' It often decreases. Do not present lower \texttt{q\_delta} as bad. The correct interpretation is calibration/supported extraction: better success with less drift and less aggressive critic preference for actor actions.
-
-\subsubsection{Claim 3: The Gain Is Selective on Harder Control Decisions}
-\textbf{Intention.}
-Show that the recurrent improvement is not a uniform lift on every example. The mechanism should be tied to hard control-relevant cases: long-horizon goals, path-sensitive maze buckets, and difficult evaluation subtasks. This supports the paper's broader thesis that iterative refinement helps when the critic must resolve ambiguous long-horizon judgments.
-
-\textbf{Logs needed.}
-\begin{itemize}
-\item Per-task success: \texttt{evaluation/task1\_success} through \texttt{evaluation/task5\_success}.
-\item Trajectory buckets: \texttt{evaluation/critic\_signal/traj\_short\_margin\_mean}, \texttt{traj\_medium\_margin\_mean}, \texttt{traj\_long\_margin\_mean}, and matching \texttt{rank\_acc} if useful.
-\item Maze Euclidean buckets: \texttt{evaluation/critic\_signal/maze\_xy\_short\_margin\_mean}, \texttt{maze\_xy\_medium\_margin\_mean}, \texttt{maze\_xy\_long\_margin\_mean}.
-\item Maze path buckets: \texttt{evaluation/critic\_signal/maze\_path\_short\_margin\_mean}, \texttt{maze\_path\_medium\_margin\_mean}, and any available long-path metrics.
-\item Optional actor-side bucket metrics: \texttt{evaluation/actor\_critic/maze\_path\_*} and \texttt{evaluation/policy\_behavior/*/maze\_path\_*}.
-\end{itemize}
-
-\textbf{Current per-task success summary.}
+% Figure plan: This is the best place for a visually memorable maze-map figure,
+% following the style of the 1000-layer paper. Draw the AMS/ALS maze layouts or
+% graph abstractions, overlay the five evaluation start-goal tasks, and color
+% each task by improvement: Recurrent success minus MLP success. This makes the
+% hard tasks visible spatially and shows where recurrence helps. If possible,
+% annotate path length or graph distance lightly near each task. Put the hard-
+% bucket diagnostics in a small inset heatmap rather than on the maze itself:
+% rows = AMS/ALS/AGN, columns = trajectory-long, XY-long, path-medium, etc.,
+% values = Recurrent minus MLP. The maze should carry the main message; the
+% heatmap only supports it.
+\paragraph{The effect is concentrated on difficult decisions.}
+The per-task results show that recurrent refinement helps most on the harder goal-reaching decisions. On AMS, the largest gains occur on tasks 3 and 4, where the MLP baseline is weak and the recurrent critic reaches high success. ALS shows the same pattern on several long-horizon subtasks, with substantial gains on tasks 1, 3, 4, and 5. AGN remains the hardest diagnostic setting, but recurrence still improves the average success and several individual goals. This pattern matches the role of iterative refinement: it is most valuable when the critic must resolve difficult reachability judgments from fixed offline data.
 \begin{center}
 \scriptsize
 \setlength{\tabcolsep}{2.5pt}
@@ -398,7 +305,8 @@ Task 5 & 0.820 & 0.940 $\pm$ 0.000 & 0.000 & 0.300 $\pm$ 0.321 & 0.020 & 0.395 $
 \end{tabular}
 \end{center}
 
-\textbf{Current hard-bucket critic-margin summary.}
+The hard-bucket results give the same qualitative picture. AMS shows the clearest improvement across longer trajectory, Euclidean, and path-distance buckets, while ALS shows that the largest control gains appear on challenging subtasks where a single aggregate critic statistic is not enough to summarize the policy outcome.
+
 \begin{center}
 \scriptsize
 \setlength{\tabcolsep}{2.5pt}
@@ -418,36 +326,11 @@ Path medium & 15.889 & 21.923 $\pm$ 1.113 & 20.299 & 17.230 $\pm$ 1.400 & 8.550 
 \end{tabular}
 \end{center}
 
-These tables support a selective story. AMS has broad hard-bucket margin gains and especially large gains on tasks 3 and 4. ALS has large per-task success gains despite lower raw bucket margins, so the text should not equate selectivity with raw margin improvement. AGN improves average and per-task success but remains the weaker boundary case.
-
-\textbf{Recommended figure.}
-Use one of two designs:
-\begin{itemize}
-\item A heatmap of recurrent minus MLP for each task and metric bucket. Rows: AMS, ALS, AGN. Columns: aggregate, trajectory medium/long, maze-XY medium/long, maze-path medium. Use a diverging colormap centered at zero.
-\item A compact grouped bar plot for AMS only, plus a per-task success bar plot for all three tasks. This may be cleaner if the ALS/AGN raw bucket margins are mixed.
-\end{itemize}
-The safest main-paper figure is probably a heatmap with clear labels and a caption that says raw bucket margins are not uniformly positive. The visual goal is selectivity, not universal improvement.
-
-\textbf{What the text should say.}
-Use AMS as the clearest hard-bucket positive case. Use ALS as the harder control case where per-task success improves strongly but raw bucket margins are less straightforward. Use AGN as the boundary case: recurrent improves average success, but the diagnostic gains are smaller and the task remains hard. This three-role structure makes the section more believable.
-
-\textbf{What to avoid.}
-Do not claim the recurrent critic improves every hard bucket across all tasks. The logs do not support that. Instead, say the improvement is selective and operational: it appears most clearly where the actor needs a usable signal for difficult control decisions, and raw bucket margins alone are an incomplete proxy.
-
-\subsubsection{Claim 4: The Geometry Caveat Prevents Overclaiming}
-\textbf{Intention.}
-This part should explicitly rule out the overly simple explanation that recurrence wins by learning a uniformly better shortest-path or maze-distance geometry. This caveat is important for top-conference credibility: it shows that we looked for a stronger explanation and found a narrower one.
-
-\textbf{Logs needed.}
-\begin{itemize}
-\item \texttt{evaluation/critic\_geometry/graph\_corr}.
-\item \texttt{evaluation/critic\_geometry/graph\_spearman}.
-\item \texttt{evaluation/critic\_geometry/hard\_graph\_corr}.
-\item \texttt{evaluation/critic\_geometry/hard\_graph\_spearman}.
-\item Optional context: \texttt{evaluation/overall\_success} or \texttt{evaluation/critic\_signal/separation\_z} shown beside geometry metrics.
-\end{itemize}
-
-\textbf{Current log summary.}
+% Figure plan: Do not make geometry a standalone main figure. If included, use a
+% small inset or appendix panel showing graph_corr/hard_graph_corr beside success.
+% The visible role is to prevent overclaiming, not to create a fourth "negative"
+% claim in the main text.
+As a check against overinterpreting this result, we also measured how well the critic score aligns with maze graph distance. This diagnostic does not support the stronger claim that recurrence learns a uniformly better shortest-path surrogate: AMS and ALS improve in control even though graph-distance correlations decrease, while AGN is mixed.
 \begin{center}
 \scriptsize
 \setlength{\tabcolsep}{2.5pt}
@@ -463,92 +346,26 @@ Hard graph Spearman & 0.314 & 0.223 $\pm$ 0.041 & 0.347 & 0.335 $\pm$ 0.029 & 0.
 \end{tabular}
 \end{center}
 
-Use this table as the explicit caveat. AMS and ALS improve control while graph correlations decrease. AGN is roughly tied on overall graph correlation but not better on hard graph correlation. This supports the statement that recurrence is not simply learning a uniformly better graph-distance surrogate.
 
-\textbf{Recommended figure.}
-Make a small caveat figure:
-\begin{itemize}
-\item Two panels: \texttt{graph\_corr} and \texttt{hard\_graph\_corr}.
-\item Bars for MLP and recurrent across AMS, ALS, AGN.
-\item Add a thin reference line or light annotation: ``higher is better as geometry surrogate.''
-\item Optionally add success as small dots above each task or show success in the preceding figure, so the reader sees that control improves despite geometry not improving.
-\end{itemize}
+\subsection{Iterative Refinement Creates a Threshold Effect}
+\label{sec:depth}
+The previous subsection shows that the recurrent critic changes the CRL signal. We next ask whether this effect actually requires iteration. A one-step recurrent block is an important control: it changes the critic architecture, but it cannot repeatedly revise the latent representation. We therefore sweep the number of refinement steps $K$ on \texttt{antmaze-medium-stitch}. The result is a clear threshold. One refinement step is not enough to explain the gain; performance enters the high-success regime only after the critic is allowed to refine its representation multiple times.
 
-\textbf{What the text should say.}
-The recurrent critic is more useful for control even though it is not consistently better aligned with negative graph distance. This means the mechanism is not ``better global distance regression.'' It is more likely about a critic signal that is better matched to CRL policy extraction under offline support constraints.
-
-\textbf{What to avoid.}
-Do not hide this result in the appendix. Do not call it a failure. It is a useful caveat that protects the paper from overclaiming.
-
-\subsubsection{Recommended Final Narrative and Figure Order}
-\textbf{Intention.}
-The final written subsection should have a clear story arc. The writer should not list metrics one by one. Each paragraph should answer a mechanism question.
-
-\textbf{Recommended order.}
-\begin{enumerate}
-\item Start with why CRL exposes the mechanism cleanly.
-\item Define critic discrimination and actor-usability metrics.
-\item Show critic discrimination: recurrent improves normalized separation and rank-based quality, with AMS as the clean margin case.
-\item Show actor usability: recurrent yields better success with less behavior drift and less aggressive actor-over-behavior preference.
-\item Show selectivity: strongest evidence appears on harder subtasks/buckets; AGN is a boundary case.
-\item End with the geometry caveat: recurrent is not just a uniformly better graph-distance model.
-\end{enumerate}
-
-\textbf{Recommended figures.}
-Keep the main paper to three figures at most:
-\begin{itemize}
-\item \textbf{Figure 5.3A: Mechanism summary.} Panels: success, \texttt{separation\_z}, \texttt{q\_delta\_mean}, policy-behavior MSE. Tasks: AMS, ALS, AGN. This is the most important figure.
-\item \textbf{Figure 5.3B: Selectivity.} Heatmap or grouped bars for hard buckets and per-task success. This figure should communicate selective hard-case gains, not universal margin gains.
-\item \textbf{Figure 5.3C: Geometry caveat.} \texttt{graph\_corr} and \texttt{hard\_graph\_corr}. This figure should make the caveat visible and honest.
-\end{itemize}
-
-\textbf{One-sentence takeaway for the final paper.}
-The recurrent CRL critic is not merely a larger-margin critic; it is a more actor-usable critic whose discriminative signal supports better offline policy extraction on hard goal-conditioned decisions, while not uniformly improving global maze-geometry correlation.
-
-\textbf{Recommended order.}
-\begin{enumerate}
-\item Start with why CRL exposes the mechanism cleanly.
-\item Define critic discrimination and actor-usability metrics.
-\item Show critic discrimination: recurrent improves normalized separation and rank-based quality, with AMS as the clean margin case.
-\item Show actor usability: recurrent yields better success with less behavior drift and less aggressive actor-over-behavior preference.
-\item Show selectivity: strongest evidence appears on harder subtasks/buckets; AGN is a boundary case.
-\item End with the geometry caveat: recurrent is not just a uniformly better graph-distance model.
-\end{enumerate}
-
-\textbf{Recommended figures.}
-Keep the main paper to three figures at most:
-\begin{itemize}
-\item \textbf{Figure 5.3A: Mechanism summary.} Panels: success, \texttt{separation\_z}, \texttt{q\_delta\_mean}, policy-behavior MSE. Tasks: AMS, ALS, AGN. This is the most important figure.
-\item \textbf{Figure 5.3B: Selectivity.} Heatmap or grouped bars for hard buckets and per-task success. This figure should communicate selective hard-case gains, not universal margin gains.
-\item \textbf{Figure 5.3C: Geometry caveat.} \texttt{graph\_corr} and \texttt{hard\_graph\_corr}. This figure should make the caveat visible and honest.
-\end{itemize}
-
-\textbf{One-sentence takeaway for the final paper.}
-The recurrent CRL critic is not merely a larger-margin critic; it is a more actor-usable critic whose discriminative signal supports better offline policy extraction on hard goal-conditioned decisions, while not uniformly improving global maze-geometry correlation.
-
-\subsection{Iterative Depth Really Helps: Evidence for a Threshold Effect}
-This subsection should be written as an iteration-depth guide for the AMS sweep. It should answer a narrower question than Section 5.3:
-\begin{quote}
-Is the gain from the recurrent CRL critic actually due to multi-step refinement, or does it already appear after replacing the MLP with a one-step recurrent-style block?
-\end{quote}
-The final paper should make one clean claim: \texttt{iter1} is not enough, the main performance jump appears once the critic has at least two refinement steps, and the gains then saturate rather than increasing linearly with every additional step. This is the pattern expected if recurrence is doing bounded iterative correction rather than acting as an unlimited scaling knob.
-
-\textbf{Current aggregation convention.}
-The logs are in \texttt{references/mechanism/CRL\_iter/AMS}. The available sweep in this workspace contains \texttt{iter1}, \texttt{iter2}, \texttt{iter4}, \texttt{iter6}, and \texttt{iter8}, each with four seeds. The MLP baseline is the available single AMS baseline run from \texttt{references/mechanism/Baseline vs Recurrent}. I did not find \texttt{iter3}, \texttt{iter5}, or \texttt{iter7} CSVs in the current workspace, so the main-paper figure should either use the available depths or regenerate the missing depths before plotting a complete 1--8 sweep. One \texttt{iter6} CSV has a malformed intermediate row; the final-checkpoint summaries below are still usable, but learning-curve generation should handle or repair that file explicitly.
-
-\subsubsection{Claim 1: One Recurrent Step Is Not Enough}
-\textbf{Intention.}
-Treat \texttt{iter1} as the control for ``changed recurrent block but no meaningful multi-step correction.'' If \texttt{iter1} were already enough, the story would be weaker: recurrence might just be a better one-shot block. Instead, the current AMS logs show only a small final improvement from MLP to \texttt{iter1}, followed by a large jump at \texttt{iter2}.
-
-\textbf{Logs needed.}
-\begin{itemize}
-\item \texttt{evaluation/overall\_success}.
-\item \texttt{evaluation/best\_so\_far\_success}.
-\item Learning-curve values of \texttt{evaluation/overall\_success} over training step.
-\item Optional per-task success if the figure needs to show which evaluation tasks unlock after \texttt{iter2}.
-\end{itemize}
-
-\textbf{Current performance and critic-depth summary.}
+% Current log note: the available AMS sweep contains K=1,2,4,6,8 with four seeds
+% each. The MLP baseline is the single available AMS CRL run. I did not find K=3,
+% K=5, or K=7 CSVs in the current workspace. One K=6 CSV has a malformed
+% intermediate row; final-checkpoint summaries are still usable, but learning
+% curve plotting should handle or repair that file.
+%
+% Figure plan: Use this as the main depth figure. Left panel: AMS learning curves
+% for MLP, K=1, K=2, K=4, and K=8; include K=6 only if readable. Right panel:
+% final or best success versus K, with MLP shown as a separate baseline or K=0
+% reference. Visually emphasize the failure of K=1 to reach the high-success
+% regime and the sharp transition at K=2. The figure should communicate that
+% iterative refinement is necessary, not merely that a recurrent block has more
+% parameters or a different parameterization.
+\paragraph{One refinement step is not enough.}
+The final-checkpoint sweep separates one-step recurrence from true iterative refinement. The $K=1$ critic remains close to the MLP baseline, while $K=2$ already reaches the high-success regime. Larger depths preserve this improvement, with $K=4$ and $K=6$ giving the strongest final performance. This pattern supports the main depth claim: the benefit appears when the critic can revise its latent representation more than once.
 \begin{center}
 \scriptsize
 \setlength{\tabcolsep}{2.5pt}
@@ -566,35 +383,12 @@ MLP & 0.608 & 0.608 & 1000k & 22.315 & 0.988 & 1.848 & 21.599 & 0.985 \\
 \end{tabular}
 \end{center}
 
-\textbf{Recommended figure.}
-Figure 5.4A should be a performance threshold figure on AMS:
-\begin{itemize}
-\item Left panel: learning curves for MLP, \texttt{iter1}, \texttt{iter2}, \texttt{iter4}, and \texttt{iter8}. Include \texttt{iter6} only if the plot remains readable.
-\item Right panel: final success or best success versus refinement depth $K$.
-\item Use a visual marker or shaded region to highlight the \texttt{iter1} $\rightarrow$ \texttt{iter2} jump.
-\item If plotting all seeds, show mean with standard-error or standard-deviation bands for recurrent settings and a single baseline curve for MLP.
-\end{itemize}
-
-\textbf{What the text should say.}
-The final text should emphasize that \texttt{iter1} is close to the MLP baseline at the final checkpoint, while \texttt{iter2} moves into the high-success regime. This supports the claim that the important effect is multi-step refinement, not merely swapping the feedforward block for a recurrent-style parameterization.
-
-\textbf{What to avoid.}
-Do not say this proves an exact universal threshold at two steps. The evidence is an AMS threshold pattern, not a theorem. Also do not say more iterations always help; \texttt{iter8} has strong critic metrics but lower final success than \texttt{iter4}/\texttt{iter6}.
-
-\subsubsection{Claim 2: The Threshold Appears Early in Training}
-\textbf{Intention.}
-Use the 100k checkpoint to show that the depth effect is not only a late-training artifact. The early result is especially useful because success increases sharply with iteration depth while raw margin changes much less. This supports the same caution as Section 5.3: the mechanism is not simply ``larger margin means larger return.''
-
-\textbf{Logs needed.}
-\begin{itemize}
-\item \texttt{evaluation/overall\_success} at early checkpoints, especially 100k.
-\item \texttt{evaluation/critic\_signal/margin\_mean}.
-\item \texttt{evaluation/critic\_signal/rank\_acc}.
-\item \texttt{evaluation/critic\_signal/separation\_z}.
-\item \texttt{evaluation/critic\_signal/traj\_long\_rank\_acc}.
-\end{itemize}
-
-\textbf{Current 100k summary.}
+% Figure plan: If space allows, add an inset on the main depth figure showing
+% 100k success versus K. This inset reinforces that the threshold is visible
+% during learning, not only at the final checkpoint. Keep the inset focused on
+% success; critic diagnostics can remain in the table or appendix.
+\paragraph{The threshold appears during learning.}
+The same transition is already visible early in training. At 100k gradient steps, the MLP critic is still near zero success and the $K=1$ critic remains far below the deeper recurrent variants. By contrast, $K=2$ and larger depths have already entered the useful success range. The depth sweep therefore shows an optimization-time threshold as well as a final-performance threshold.
 \begin{center}
 \scriptsize
 \setlength{\tabcolsep}{3pt}
@@ -612,108 +406,7 @@ MLP & 0.084 & 13.202 & 0.977 & 2.016 & 0.971 \\
 \end{tabular}
 \end{center}
 
-\textbf{Recommended figure.}
-Include a small inset in Figure 5.4A or a separate panel in Figure 5.4B:
-\begin{itemize}
-\item X-axis: refinement depth $K$.
-\item Y-axis: 100k success.
-\item Overlay or adjacent panel: 100k \texttt{margin\_mean} or \texttt{separation\_z}.
-\item The visual point should be that early success jumps more dramatically than raw margin.
-\end{itemize}
-
-\textbf{What the text should say.}
-At 100k, the MLP is still near zero success, while \texttt{iter2+} already reaches the useful regime. The margin difference is much smaller than the success difference, so the early-depth effect should be described as improved usable ranking/separation and faster policy extraction rather than just larger aggregate scores.
-
-\subsubsection{Claim 3: After the Threshold, the Effect Saturates}
-\textbf{Intention.}
-Show that recurrence is not a simple ``more steps always better'' scaling law. The strongest final success is around \texttt{iter4}/\texttt{iter6}; \texttt{iter8} has high critic separation but lower final success. This supports a threshold-and-saturation story.
-
-\textbf{Logs needed.}
-\begin{itemize}
-\item Final and best \texttt{evaluation/overall\_success}.
-\item \texttt{evaluation/best\_so\_far\_success}.
-\item \texttt{evaluation/critic\_signal/separation\_z}.
-\item \texttt{evaluation/critic\_signal/rank\_acc}.
-\item Optional wall-clock or \texttt{time/step\_time} if later text wants to mention extra compute, but detailed compute belongs in Section 5.5.
-\end{itemize}
-
-\textbf{Recommended figure.}
-Use the right panel of Figure 5.4A:
-\begin{itemize}
-\item Plot final success and best success versus $K$.
-\item Use separate markers for final and best if both are included.
-\item Show a plateau band from \texttt{iter2} through \texttt{iter8}, with the peak around \texttt{iter4}/\texttt{iter6}.
-\item Do not overinterpret the exact ordering among high-depth settings.
-\end{itemize}
-
-\textbf{What the text should say.}
-The main gain appears by \texttt{iter2}; later depths preserve high performance and may improve some critic diagnostics, but they do not produce a linear return improvement. This is consistent with iterative correction of a bounded critic-side ambiguity.
-
-\subsubsection{Claim 4: Actor-Usability Changes Smoothly With Depth}
-\textbf{Intention.}
-Connect Section 5.4 back to Section 5.3. As refinement depth increases, the actor moves closer to behavior support: \texttt{q\_delta}, \texttt{prefer\_actor\_frac}, policy MSE, and policy L2 all decrease. This should be interpreted carefully. Lower \texttt{q\_delta} is not bad here; it coincides with higher success and lower behavior drift, which supports the calibrated actor-extraction story.
-
-\textbf{Logs needed.}
-\begin{itemize}
-\item \texttt{evaluation/actor\_critic/q\_delta\_mean}.
-\item \texttt{evaluation/actor\_critic/prefer\_actor\_frac}.
-\item \texttt{evaluation/policy\_behavior\_mse}.
-\item \texttt{evaluation/policy\_behavior\_l2}.
-\item \texttt{evaluation/actor\_behavior\_log\_prob}.
-\end{itemize}
-
-\textbf{Current actor-usability summary.}
-\begin{center}
-\scriptsize
-\setlength{\tabcolsep}{3pt}
-\begin{tabular}{lccccc}
-\toprule
-Setting & $q_{\Delta}$ & Prefer actor & Policy MSE & Policy L2 & Behavior log prob. \\
-\midrule
-MLP & 1.846 & 0.734 & 0.194 & 1.051 & -8.129 \\
-\texttt{iter1} & 1.273 $\pm$ 0.096 & 0.717 $\pm$ 0.008 & 0.159 $\pm$ 0.004 & 0.985 $\pm$ 0.012 & -7.989 $\pm$ 0.017 \\
-\texttt{iter2} & 0.734 $\pm$ 0.066 & 0.643 $\pm$ 0.003 & 0.120 $\pm$ 0.005 & 0.866 $\pm$ 0.017 & -7.833 $\pm$ 0.020 \\
-\texttt{iter4} & 0.265 $\pm$ 0.049 & 0.557 $\pm$ 0.017 & 0.082 $\pm$ 0.001 & 0.734 $\pm$ 0.004 & -7.680 $\pm$ 0.005 \\
-\texttt{iter6} & 0.227 $\pm$ 0.031 & 0.545 $\pm$ 0.010 & 0.079 $\pm$ 0.002 & 0.719 $\pm$ 0.007 & -7.666 $\pm$ 0.009 \\
-\texttt{iter8} & 0.172 $\pm$ 0.017 & 0.521 $\pm$ 0.015 & 0.077 $\pm$ 0.002 & 0.714 $\pm$ 0.005 & -7.659 $\pm$ 0.007 \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-\textbf{Recommended figure.}
-Figure 5.4B should be the mechanism threshold figure:
-\begin{itemize}
-\item Panel A: critic signal versus depth, preferably \texttt{separation\_z} and/or \texttt{rank\_acc}.
-\item Panel B: actor-usability versus depth, preferably policy-behavior MSE or L2.
-\item Optionally include \texttt{q\_delta} as a secondary line, but annotate that lower is not inherently worse in offline RL.
-\item If space is tight, use \texttt{separation\_z}, final success, and policy MSE as the three most compact diagnostics.
-\end{itemize}
-
-\textbf{What the text should say.}
-The actor-facing diagnostics become less aggressive with depth while success improves. This is consistent with recurrence making the critic more suitable for offline policy extraction: the actor can succeed without moving as far from the behavior action distribution.
-
-\textbf{What to avoid.}
-Do not claim \texttt{q\_delta} is monotonic evidence of better actor supervision in the usual ``higher is better'' sense. The point is the combination: lower \texttt{q\_delta}, lower behavior drift, and higher success.
-
-\subsubsection{Recommended Final Narrative and Figure Order}
-\textbf{Recommended order.}
-\begin{enumerate}
-\item Open with the question: does recurrence help because it is iterative?
-\item Present \texttt{iter1} as the one-step recurrent-style control.
-\item Show that \texttt{iter4}/\texttt{iter6} saturate and \texttt{iter8} does not continue improving return.
-\item Connect depth to critic signal and actor-usability metrics.
-\item Close with the geometry caveat.
-\end{enumerate}
-
-\textbf{Recommended figures.}
-Use two figures:
-\begin{itemize}
-\item \textbf{Figure 5.4A: Performance threshold.} AMS learning curves plus final/best success versus iteration count.
-\item \textbf{Figure 5.4B: Mechanism threshold.} Critic separation and actor behavior drift versus iteration count, with optional geometry inset.
-\end{itemize}
-
-\textbf{One-sentence takeaway for the final paper.}
-The recurrent critic's benefit emerges once the critic can revise its estimate more than once, rises sharply around small multi-step depth, and then saturates, which supports iterative correction rather than a generic one-step architecture swap.
+Taken together, the depth sweep supports a simple conclusion: the recurrent critic's gain is genuinely iterative. A single refinement step is insufficient, the main transition appears once $K\geq2$, and additional steps mainly preserve or saturate the improvement rather than creating a linear depth-scaling trend.
 
 \subsection{Matched Parameter and Computation Comparison}
 Because the paper is architectural, fairness controls are mandatory. The cleanest capacity-control environment is \texttt{antmaze-large-stitch-v0}. The recurrent critic should be compared against the default MLP critic, a wider MLP, and a deeper MLP. The feedforward controls should preserve the same basic MLP recipe as CRL's default critic: GELU activations, layer normalization, and no residual connections. The wider and deeper controls are chosen by matching critic parameter count as closely as possible to the recurrent critic, rather than by arbitrary scaling.
@@ -735,32 +428,19 @@ For the current recurrent target, parameter matching yields two reasonable contr
 \end{figure}
 
 \subsection{Ablation on Model Components}
-This subsection should be a compact component-ablation guide. It does not need the same depth as Sections 5.3 and 5.4. The purpose is simply to show that the final recurrent critic is not an arbitrary collection of tricks: some stabilizing choices matter, especially LayerScale and pre-normalized recurrent updates.
+We ablate the stabilizing components of the four-step recurrent CRL critic on \texttt{antmaze-medium-stitch}. The final design performs best, and the largest drop comes from removing LayerScale. Removing pre-normalization also weakens the model, but does not collapse performance, while the step ablation has a smaller effect on success. This gives a simple component-level picture: recurrent refinement is most reliable when repeated residual updates are kept on a controlled scale.
 
-\textbf{Current aggregation convention.}
-The ablation logs are in \texttt{references/mechanism/Ablation} and use AMS with a 4-step recurrent critic. The final recurrent reference uses the four AMS \texttt{iter4} runs from \texttt{references/mechanism/Baseline vs Recurrent}. The MLP row is the available single AMS baseline run. The ablation variants are:
-\begin{itemize}
-\item \textbf{No pre-LN}: \texttt{critic\_recur\_swiglu\_pre\_ln=False}; four seeds are available, with the seed-1 run stored under \texttt{noLN2}.
-\item \textbf{No LayerScale}: \texttt{critic\_recur\_use\_layerscale=False}; four seeds are available.
-\item \textbf{No step/FiLM}: the run name is \texttt{noStep}, but the flags show \texttt{critic\_recur\_use\_step\_info=False} and \texttt{critic\_recur\_use\_film=False}. The current final reference has \texttt{use\_film=True} and \texttt{use\_step\_info=False}, so this row should be treated as a combined configuration difference rather than a clean step-info-only ablation.
-\end{itemize}
-The writer should verify these flag interpretations before final submission, because the names and flags are not perfectly aligned.
-
-\subsubsection{Claim 1: LayerScale Is the Most Important Stabilizer}
-\textbf{Intention.}
-Show that the largest degradation comes from removing LayerScale. This supports the architectural story that recurrent refinement needs controlled residual updates; without LayerScale, the critic can still learn, but performance and actor-usability become substantially worse and more variable.
-
-\textbf{Logs needed.}
-\begin{itemize}
-\item \texttt{evaluation/overall\_success}.
-\item \texttt{evaluation/best\_so\_far\_success}.
-\item \texttt{evaluation/critic\_signal/margin\_mean}.
-\item \texttt{evaluation/critic\_signal/separation\_z}.
-\item \texttt{evaluation/critic\_signal/traj\_long\_margin\_mean}.
-\item \texttt{evaluation/critic\_signal/maze\_path\_medium\_margin\_mean}.
-\end{itemize}
-
-\textbf{Current performance and critic summary.}
+% Current log note: ablation logs are in references/mechanism/Ablation. The final
+% recurrent reference uses the four AMS iter4 runs from Baseline vs Recurrent,
+% and the MLP row is the available single AMS baseline run. The "No step/FiLM"
+% row is a combined configuration difference in the current logs, so do not
+% describe it as a clean step-info-only ablation without verifying flags.
+%
+% Figure plan: Use one compact grouped bar figure. Main panel: final success for
+% MLP, final recurrent, no pre-LN, no LayerScale, and no step/FiLM. Optional
+% small side panel: path-medium margin or long-trajectory margin. The visual
+% message should be simple: final recurrent is best; removing LayerScale causes
+% the clearest degradation.
 \begin{center}
 \scriptsize
 \setlength{\tabcolsep}{2.5pt}
@@ -772,116 +452,12 @@ MLP & 0.608 & 0.608 & 1000k & 22.315 & 0.988 & 1.848 & 21.599 & 15.889 \\
 Final recur & 0.947 $\pm$ 0.015 & 0.953 $\pm$ 0.020 & 850k $\pm$ 173k & 27.644 $\pm$ 0.564 & 0.998 $\pm$ 0.002 & 2.109 $\pm$ 0.055 & 27.005 $\pm$ 0.445 & 21.923 $\pm$ 1.113 \\
 No pre-LN & 0.863 $\pm$ 0.081 & 0.879 $\pm$ 0.089 & 825k $\pm$ 50k & 20.671 $\pm$ 0.545 & 0.991 $\pm$ 0.003 & 2.038 $\pm$ 0.048 & 19.848 $\pm$ 0.243 & 15.234 $\pm$ 0.564 \\
 No LayerScale & 0.781 $\pm$ 0.124 & 0.803 $\pm$ 0.106 & 900k $\pm$ 115k & 17.686 $\pm$ 1.179 & 0.987 $\pm$ 0.006 & 2.093 $\pm$ 0.034 & 16.859 $\pm$ 1.023 & 12.682 $\pm$ 0.503 \\
-No step/FiLM & 0.926 $\pm$ 0.042 & 0.947 $\pm$ 0.021 & 825k $\pm$ 171k & 20.524 $\pm$ 0.565 & 0.992 $\pm$ 0.004 & 1.985 $\pm$ 0.041 & 19.762 $\pm$ 0.404 & 14.982 $\pm$ 0.509 \\
+No step & 0.926 $\pm$ 0.042 & 0.947 $\pm$ 0.021 & 825k $\pm$ 171k & 20.524 $\pm$ 0.565 & 0.992 $\pm$ 0.004 & 1.985 $\pm$ 0.041 & 19.762 $\pm$ 0.404 & 14.982 $\pm$ 0.509 \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-\textbf{Recommended figure.}
-Use one compact grouped bar chart:
-\begin{itemize}
-\item X-axis: MLP, final recurrent, no pre-LN, no LayerScale, no step/FiLM.
-\item Primary panel: final success with error bars.
-\item Secondary panel: one mechanism metric, preferably path-medium margin or policy-behavior MSE.
-\item Put MLP in a muted color, final recurrent in the main color, and ablations in related lighter colors.
-\end{itemize}
-
-\textbf{What the text should say.}
-Removing LayerScale causes the clearest drop: final success falls from $0.947\pm0.015$ to $0.781\pm0.124$, and path-medium margin falls from $21.923\pm1.113$ to $12.682\pm0.503$. This suggests that controlled residual update magnitude is important for stable recurrent critic refinement.
-
-\subsubsection{Claim 2: Pre-Normalized Updates Help, But Are Not the Only Source of the Gain}
-\textbf{Intention.}
-Show that pre-LN is useful but not solely responsible for the recurrent improvement. The no-pre-LN variant remains above the MLP baseline in success, but it loses much of the final recurrent critic's margin and hard-bucket signal.
-
-\textbf{Logs needed.}
-\begin{itemize}
-\item Same performance and critic metrics as Claim 1.
-\item Optional training stability metrics: \texttt{training/grad/critic\_global\_norm}, \texttt{training/critic/contrastive\_loss}, and \texttt{training/critic/score\_margin}.
-\end{itemize}
-
-\textbf{What the text should say.}
-No pre-LN still performs reasonably on AMS, so the result should not be written as ``pre-LN is absolutely required.'' The safer claim is that pre-normalization improves the quality and reliability of the final design: success drops from $0.947\pm0.015$ to $0.863\pm0.081$, and the long-horizon/path-sensitive margins drop close to the MLP level.
-
-\textbf{What to avoid.}
-Do not overstate a binary component story. The ablation results are not ``remove any component and the model fails.'' They show a graded pattern: LayerScale is most important, pre-LN helps, and some other configuration changes are less decisive.
-
-\subsubsection{Claim 3: Actor-Usability Tracks the Stabilizing Components}
-\textbf{Intention.}
-Connect the ablation section back to the actor-usability mechanism. The final recurrent critic has the lowest behavior drift among the high-performing variants. Removing LayerScale produces a much more aggressive actor-over-behavior signal and larger behavior drift, consistent with a less stable critic-action interface.
-
-\textbf{Logs needed.}
-\begin{itemize}
-\item \texttt{evaluation/actor\_critic/q\_delta\_mean}.
-\item \texttt{evaluation/actor\_critic/prefer\_actor\_frac}.
-\item \texttt{evaluation/policy\_behavior\_mse}.
-\item \texttt{evaluation/policy\_behavior\_l2}.
-\item \texttt{evaluation/actor\_behavior\_log\_prob}.
-\end{itemize}
-
-\textbf{Current actor-usability summary.}
-\begin{center}
-\scriptsize
-\setlength{\tabcolsep}{3pt}
-\begin{tabular}{lccccc}
-\toprule
-Setting & $q_{\Delta}$ & Prefer actor & Policy MSE & Policy L2 & Behavior log prob. \\
-\midrule
-MLP & 1.846 & 0.734 & 0.194 & 1.051 & -8.129 \\
-Final recur & 0.265 $\pm$ 0.049 & 0.557 $\pm$ 0.017 & 0.082 $\pm$ 0.001 & 0.734 $\pm$ 0.004 & -7.680 $\pm$ 0.005 \\
-No pre-LN & 0.448 $\pm$ 0.043 & 0.656 $\pm$ 0.012 & 0.100 $\pm$ 0.004 & 0.790 $\pm$ 0.009 & -7.752 $\pm$ 0.014 \\
-No LayerScale & 0.822 $\pm$ 0.223 & 0.717 $\pm$ 0.018 & 0.136 $\pm$ 0.021 & 0.903 $\pm$ 0.059 & -7.896 $\pm$ 0.085 \\
-No step/FiLM & 0.442 $\pm$ 0.043 & 0.662 $\pm$ 0.015 & 0.100 $\pm$ 0.005 & 0.786 $\pm$ 0.015 & -7.750 $\pm$ 0.021 \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-\textbf{What the text should say.}
-The final recurrent critic combines high success with the least aggressive actor-over-behavior gap and lowest behavior drift. Removing LayerScale moves the model back toward the baseline pattern: larger \texttt{q\_delta}, larger \texttt{prefer\_actor\_frac}, and larger behavior MSE. This supports the idea that the final design stabilizes the actor-facing critic signal.
-
-\subsubsection{Claim 4: The Ablations Do Not Change the Geometry Caveat}
-\textbf{Intention.}
-Keep this short. The geometry metrics are not the main point of the ablation section, but they confirm that component gains should not be explained as globally better graph-distance regression.
-
-\textbf{Current geometry summary.}
-\begin{center}
-\scriptsize
-\setlength{\tabcolsep}{4pt}
-\begin{tabular}{lcc}
-\toprule
-Setting & Graph corr. & Hard graph corr. \\
-\midrule
-MLP & 0.516 & 0.286 \\
-Final recur & 0.427 $\pm$ 0.021 & 0.209 $\pm$ 0.039 \\
-No pre-LN & 0.493 $\pm$ 0.013 & 0.230 $\pm$ 0.019 \\
-No LayerScale & 0.487 $\pm$ 0.020 & 0.311 $\pm$ 0.043 \\
-No step/FiLM & 0.504 $\pm$ 0.013 & 0.257 $\pm$ 0.039 \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-\textbf{Writing guidance.}
-Do not give this table much main-text space. A one-sentence caveat is enough: the best-performing final recurrent critic does not have the best geometry correlation, so the ablation should be interpreted through control performance and actor-usable critic signal.
-
-\subsubsection{Recommended Final Narrative and Figure Order}
-\textbf{Recommended order.}
-\begin{enumerate}
-\item State that this section tests whether the final recurrent design depends on stabilizing components.
-\item Show the compact success ablation.
-\item Emphasize LayerScale as the most important removal.
-\item Mention pre-LN as helpful but not solely responsible.
-\item Use actor-usability diagnostics to connect the ablation back to Section 5.3.
-\item Add a short geometry caveat if space allows.
-\end{enumerate}
-
-\textbf{Recommended figure.}
-Use one main figure:
-\begin{itemize}
-\item \textbf{Figure 5.6A: Component ablation on AMS.} Panel A: final success. Panel B: policy-behavior MSE or path-medium margin. Optional Panel C: \texttt{q\_delta}.
-\item Put detailed critic/actor/geometry tables in appendix if page budget is tight.
-\end{itemize}
-
-\textbf{One-sentence takeaway for the final paper.}
-LayerScale and pre-normalized recurrent updates are useful stabilizers for the recurrent CRL critic, with LayerScale producing the clearest ablation drop; the final design works best because it preserves high control performance while keeping the actor-facing critic signal less extrapolative.
+The ablation should not be read as a binary component story. Each variant remains functional, but the full recurrent critic is the most reliable configuration, and LayerScale is the clearest stabilizer for repeated refinement.
 
 \subsection{Actor-Side Recurrence for the Sake of Completeness}
 The actor-side story should be presented as a separate failure mode. If recurrent critics help because they refine the goal-conditioned learning signal, then moving recurrence to the actor need not help much and may even hurt. This is an important negative result because it argues against the generic claim that ``recurrent networks are better everywhere.'' The clean comparison here is baseline CRL, recurrent critic only, recurrent actor only, and critic-plus-actor recurrence on one stitching task and one lower-gain task. The expected result is that the critic-side replacement dominates, while actor-side recurrence produces smaller, inconsistent, or negative gains.

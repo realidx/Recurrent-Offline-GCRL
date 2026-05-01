@@ -568,12 +568,17 @@ index 0000000..441bfaf
 +    )
 +    return config
 diff --git a/impls/agents/crl.py b/impls/agents/crl.py
-index 53109ab..b7feb12 100644
+index 53109ab..d4f7a7b 100644
 --- a/impls/agents/crl.py
 +++ b/impls/agents/crl.py
-@@ -22,51 +22,178 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -21,52 +21,183 @@ class CRLAgent(flax.struct.PyTreeNode):
+     network: Any
      config: Any = nonpytree_field()
  
++    @staticmethod
++    def _is_recurrent_backbone(backbone):
++        return str(backbone) in ('recur_tied', 'recur_stacked_swiglu')
++
      def contrastive_loss(self, batch, grad_params, module_name='critic'):
 -        """Compute the contrastive value loss for the Q or V function."""
 +        """Compute the contrastive value loss for the Q or V function.
@@ -584,7 +589,7 @@ index 53109ab..b7feb12 100644
 +        """
          batch_size = batch['observations'].shape[0]
 +        use_aux = bool(
-+            self.config.get('critic_backbone') == 'recur_tied'
++            self._is_recurrent_backbone(self.config.get('critic_backbone'))
 +            and (
 +                self.config.get('critic_recur_use_act', False)
 +                or self.config.get('critic_recur_use_soft_mixture', False)
@@ -770,7 +775,7 @@ index 53109ab..b7feb12 100644
  
      def actor_loss(self, batch, grad_params, rng=None):
          """Compute the actor loss (AWR or DDPG+BC)."""
-@@ -104,6 +231,7 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -104,6 +235,7 @@ class CRLAgent(flax.struct.PyTreeNode):
              assert not self.config['discrete']
  
              dist = self.network.select('actor')(batch['observations'], batch['actor_goals'], params=grad_params)
@@ -778,7 +783,7 @@ index 53109ab..b7feb12 100644
              if self.config['const_std']:
                  q_actions = jnp.clip(dist.mode(), -1, 1)
              else:
-@@ -124,10 +252,7 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -124,10 +256,7 @@ class CRLAgent(flax.struct.PyTreeNode):
                  'q_loss': q_loss,
                  'bc_loss': bc_loss,
                  'q_mean': q.mean(),
@@ -790,7 +795,7 @@ index 53109ab..b7feb12 100644
              }
          else:
              raise ValueError(f'Unsupported actor loss: {self.config["actor_loss"]}')
-@@ -231,6 +356,29 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -231,6 +360,29 @@ class CRLAgent(flax.struct.PyTreeNode):
                  state_encoder=encoders.get('critic_state'),
                  goal_encoder=encoders.get('critic_goal'),
                  action_dim=action_dim,
@@ -820,7 +825,7 @@ index 53109ab..b7feb12 100644
              )
          else:
              critic_def = GCBilinearValue(
-@@ -241,6 +389,29 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -241,6 +393,29 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
                  state_encoder=encoders.get('critic_state'),
                  goal_encoder=encoders.get('critic_goal'),
@@ -850,7 +855,7 @@ index 53109ab..b7feb12 100644
              )
  
          if config['actor_loss'] == 'awr':
-@@ -253,6 +424,29 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -253,6 +428,29 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
                  state_encoder=encoders.get('value_state'),
                  goal_encoder=encoders.get('value_goal'),
@@ -880,7 +885,7 @@ index 53109ab..b7feb12 100644
              )
  
          if config['discrete']:
-@@ -260,6 +454,10 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -260,6 +458,10 @@ class CRLAgent(flax.struct.PyTreeNode):
                  hidden_dims=config['actor_hidden_dims'],
                  action_dim=action_dim,
                  gc_encoder=encoders.get('actor'),
@@ -891,7 +896,7 @@ index 53109ab..b7feb12 100644
              )
          else:
              actor_def = GCActor(
-@@ -268,6 +466,10 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -268,6 +470,10 @@ class CRLAgent(flax.struct.PyTreeNode):
                  state_dependent_std=False,
                  const_std=config['const_std'],
                  gc_encoder=encoders.get('actor'),
@@ -902,7 +907,7 @@ index 53109ab..b7feb12 100644
              )
  
          network_info = dict(
-@@ -282,7 +484,15 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -282,7 +488,15 @@ class CRLAgent(flax.struct.PyTreeNode):
          network_args = {k: v[1] for k, v in network_info.items()}
  
          network_def = ModuleDict(networks)
@@ -919,7 +924,7 @@ index 53109ab..b7feb12 100644
          network_params = network_def.init(init_rng, **network_args)['params']
          network = TrainState.create(network_def, network_params, tx=network_tx)
  
-@@ -295,8 +505,13 @@ def get_config():
+@@ -295,8 +509,13 @@ def get_config():
              # Agent hyperparameters.
              agent_name='crl',  # Agent name.
              lr=3e-4,  # Learning rate.
@@ -933,13 +938,13 @@ index 53109ab..b7feb12 100644
              value_hidden_dims=(512, 512, 512),  # Value network hidden dimensions.
              latent_dim=512,  # Latent dimension for phi and psi.
              layer_norm=True,  # Whether to use layer normalization.
-@@ -306,6 +521,28 @@ def get_config():
+@@ -306,6 +525,28 @@ def get_config():
              const_std=True,  # Whether to use constant standard deviation for the actor.
              discrete=False,  # Whether the action space is discrete.
              encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
 +            # Critic backbone (phi/psi) hyperparameters (architecture-only swap).
-+            critic_backbone='mlp',  # 'mlp' | 'recur_tied'
-+            critic_recur_iters=4,  # Tied iterations K_train (used if critic_backbone='recur_tied').
++            critic_backbone='mlp',  # 'mlp' | 'recur_tied' | 'recur_stacked_swiglu'
++            critic_recur_iters=4,  # Recurrent iterations K_train (used if critic_backbone is recurrent).
 +            critic_recur_num_dense_layers=2,  # Number of Dense layers inside each tied recurrent residual update.
 +            critic_recur_block_type='dense',  # 'dense' | 'swiglu' recurrent update cell.
 +            critic_recur_num_blocks=1,  # Number of 2-layer MLP pairs inside each tied recurrent residual update.
@@ -962,7 +967,7 @@ index 53109ab..b7feb12 100644
              # Dataset hyperparameters.
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
-@@ -319,6 +556,9 @@ def get_config():
+@@ -319,6 +560,9 @@ def get_config():
              gc_negative=False,  # Unused (defined for compatibility with GCDataset).
              p_aug=0.0,  # Probability of applying image augmentation.
              frame_stack=ml_collections.config_dict.placeholder(int),  # Number of frames to stack.
@@ -1121,7 +1126,7 @@ index 559df71..b51d35a 100644
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.2,  # Probability of using the current state as the value goal.
 diff --git a/impls/agents/hiql.py b/impls/agents/hiql.py
-index 63e5dee..d54f045 100644
+index 63e5dee..878b75e 100644
 --- a/impls/agents/hiql.py
 +++ b/impls/agents/hiql.py
 @@ -8,7 +8,7 @@ import ml_collections
@@ -1133,7 +1138,17 @@ index 63e5dee..d54f045 100644
  
  
  class HIQLAgent(flax.struct.PyTreeNode):
-@@ -24,6 +24,72 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -18,12 +18,82 @@ class HIQLAgent(flax.struct.PyTreeNode):
+     network: Any
+     config: Any = nonpytree_field()
+ 
++    @staticmethod
++    def _is_recurrent_backbone(backbone):
++        return str(backbone) in ('recur_tied', 'recur_stacked_swiglu')
++
+     @staticmethod
+     def expectile_loss(adv, diff, expectile):
+         """Compute the expectile loss."""
          weight = jnp.where(adv >= 0, expectile, (1 - expectile))
          return weight * (diff**2)
  
@@ -1166,7 +1181,7 @@ index 63e5dee..d54f045 100644
 +
 +    def _actor_value_num_iters(self, actor_name):
 +        """Return the fixed recurrent value depth used for actor AWR, or None for default final depth."""
-+        if self.config.get('value_backbone') != 'recur_tied':
++        if not self._is_recurrent_backbone(self.config.get('value_backbone')):
 +            return None
 +        specific = int(self.config.get(f'{actor_name}_actor_value_num_iters', 0))
 +        shared = int(self.config.get('actor_value_num_iters', 0))
@@ -1206,13 +1221,13 @@ index 63e5dee..d54f045 100644
      def value_loss(self, batch, grad_params):
          """Compute the IVL value loss.
  
-@@ -43,30 +109,110 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -43,30 +113,110 @@ class HIQLAgent(flax.struct.PyTreeNode):
  
          q1 = batch['rewards'] + self.config['discount'] * batch['masks'] * next_v1_t
          q2 = batch['rewards'] + self.config['discount'] * batch['masks'] * next_v2_t
 -        (v1, v2) = self.network.select('value')(batch['observations'], batch['value_goals'], params=grad_params)
 +        value_use_aux = bool(
-+            self.config.get('value_backbone') == 'recur_tied'
++            self._is_recurrent_backbone(self.config.get('value_backbone'))
 +            and (
 +                self.config.get('value_recur_use_act', False)
 +                or self.config.get('value_recur_use_soft_mixture', False)
@@ -1326,7 +1341,7 @@ index 63e5dee..d54f045 100644
  
          # Compute the goal representations of the subgoals.
          goal_reps = self.network.select('goal_rep')(
-@@ -80,12 +226,26 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -80,12 +230,26 @@ class HIQLAgent(flax.struct.PyTreeNode):
          log_prob = dist.log_prob(batch['actions'])
  
          actor_loss = -(exp_a * log_prob).mean()
@@ -1353,7 +1368,7 @@ index 63e5dee..d54f045 100644
          if not self.config['discrete']:
              actor_info.update(
                  {
-@@ -98,14 +258,20 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -98,14 +262,20 @@ class HIQLAgent(flax.struct.PyTreeNode):
  
      def high_actor_loss(self, batch, grad_params):
          """Compute the high-level actor loss."""
@@ -1380,7 +1395,7 @@ index 63e5dee..d54f045 100644
  
          dist = self.network.select('high_actor')(batch['observations'], batch['high_actor_goals'], params=grad_params)
          target = self.network.select('goal_rep')(
-@@ -114,14 +280,29 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -114,14 +284,29 @@ class HIQLAgent(flax.struct.PyTreeNode):
          log_prob = dist.log_prob(target)
  
          actor_loss = -(exp_a * log_prob).mean()
@@ -1411,7 +1426,7 @@ index 63e5dee..d54f045 100644
  
      @jax.jit
      def total_loss(self, batch, grad_params, rng=None):
-@@ -259,18 +440,42 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -259,18 +444,43 @@ class HIQLAgent(flax.struct.PyTreeNode):
              high_actor_encoder_def = None
  
          # Define value and actor networks.
@@ -1437,11 +1452,12 @@ index 63e5dee..d54f045 100644
 +            )
 +            value_def = GCValue(gc_encoder=value_encoder_def, **value_kwargs)
 +            target_value_def = GCValue(gc_encoder=target_value_encoder_def, **value_kwargs)
-+        elif value_backbone == 'recur_tied':
++        elif self._is_recurrent_backbone(value_backbone):
 +            recur_value_kwargs = dict(
 +                hidden_dims=config['value_hidden_dims'],
 +                layer_norm=config['layer_norm'],
 +                ensemble=True,
++                backbone=value_backbone,
 +                recur_num_iters=int(config.get('value_recur_iters', 4)),
 +                recur_num_dense_layers=int(config.get('value_recur_num_dense_layers', 2)),
 +                recur_block_type=str(config.get('value_recur_block_type', 'dense')),
@@ -1466,7 +1482,7 @@ index 63e5dee..d54f045 100644
  
          if config['discrete']:
              low_actor_def = GCDiscreteActor(
-@@ -306,7 +511,15 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -306,7 +516,15 @@ class HIQLAgent(flax.struct.PyTreeNode):
          network_args = {k: v[1] for k, v in network_info.items()}
  
          network_def = ModuleDict(networks)
@@ -1483,7 +1499,7 @@ index 63e5dee..d54f045 100644
          network_params = network_def.init(init_rng, **network_args)['params']
          network = TrainState.create(network_def, network_params, tx=network_tx)
  
-@@ -322,9 +535,12 @@ def get_config():
+@@ -322,9 +540,12 @@ def get_config():
              # Agent hyperparameters.
              agent_name='hiql',  # Agent name.
              lr=3e-4,  # Learning rate.
@@ -1492,15 +1508,15 @@ index 63e5dee..d54f045 100644
              batch_size=1024,  # Batch size.
              actor_hidden_dims=(512, 512, 512),  # Actor network hidden dimensions.
              value_hidden_dims=(512, 512, 512),  # Value network hidden dimensions.
-+            value_backbone='mlp',  # 'mlp' | 'recur_tied'
++            value_backbone='mlp',  # 'mlp' | 'recur_tied' | 'recur_stacked_swiglu'
              layer_norm=True,  # Whether to use layer normalization.
              discount=0.99,  # Discount factor.
              tau=0.005,  # Target network update rate.
-@@ -333,6 +549,36 @@ def get_config():
+@@ -333,6 +554,36 @@ def get_config():
              high_alpha=3.0,  # High-level AWR temperature.
              subgoal_steps=25,  # Subgoal steps.
              rep_dim=10,  # Goal representation dimension.
-+            value_recur_iters=4,  # Tied iterations for value_backbone='recur_tied'.
++            value_recur_iters=4,  # Recurrent iterations for recurrent value_backbones.
 +            value_recur_num_dense_layers=2,  # Dense layers inside each recurrent value update.
 +            value_recur_block_type='dense',  # 'dense' | 'swiglu' recurrent update cell.
 +            value_recur_max_iters=4,  # Max supported recurrent iterations for HIQL value.
@@ -1628,10 +1644,10 @@ index 79852cb..cc4fa11 100644
              value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
 diff --git a/impls/agents/saw.py b/impls/agents/saw.py
 new file mode 100644
-index 0000000..b1018c4
+index 0000000..4db0ccd
 --- /dev/null
 +++ b/impls/agents/saw.py
-@@ -0,0 +1,425 @@
+@@ -0,0 +1,430 @@
 +import copy
 +from typing import Any
 +
@@ -1654,6 +1670,10 @@ index 0000000..b1018c4
 +    config: Any = nonpytree_field()
 +
 +    @staticmethod
++    def _is_recurrent_backbone(backbone):
++        return str(backbone) in ('recur_tied', 'recur_stacked_swiglu')
++
++    @staticmethod
 +    def expectile_loss(adv, diff, expectile):
 +        """Compute the expectile loss."""
 +        weight = jnp.where(adv >= 0, expectile, (1 - expectile))
@@ -1672,7 +1692,7 @@ index 0000000..b1018c4
 +        q1 = batch['rewards'] + self.config['discount'] * batch['masks'] * next_v1_t
 +        q2 = batch['rewards'] + self.config['discount'] * batch['masks'] * next_v2_t
 +        value_use_aux = bool(
-+            self.config.get('value_backbone') == 'recur_tied'
++            self._is_recurrent_backbone(self.config.get('value_backbone'))
 +            and (
 +                self.config.get('value_recur_use_act', False)
 +                or self.config.get('value_recur_use_soft_mixture', False)
@@ -1917,11 +1937,12 @@ index 0000000..b1018c4
 +                gc_encoder=encoders.get('target_value'),
 +                **value_kwargs,
 +            )
-+        elif value_backbone == 'recur_tied':
++        elif self._is_recurrent_backbone(value_backbone):
 +            recur_value_kwargs = dict(
 +                hidden_dims=config['value_hidden_dims'],
 +                layer_norm=config['layer_norm'],
 +                ensemble=True,
++                backbone=value_backbone,
 +                recur_num_iters=int(config.get('value_recur_iters', 4)),
 +                recur_num_dense_layers=int(config.get('value_recur_num_dense_layers', 2)),
 +                recur_block_type=str(config.get('value_recur_block_type', 'dense')),
@@ -2011,7 +2032,7 @@ index 0000000..b1018c4
 +            actor_hidden_dims=(512, 512, 512),
 +            value_hidden_dims=(512, 512, 512),
 +            layer_norm=True,
-+            value_backbone='mlp',
++            value_backbone='mlp',  # 'mlp' | 'recur_tied' | 'recur_stacked_swiglu'
 +            value_recur_iters=4,
 +            value_recur_num_dense_layers=2,
 +            value_recur_block_type='dense',
@@ -3800,10 +3821,10 @@ index 0000000..60716d2
 +if __name__ == '__main__':
 +    main()
 diff --git a/impls/main.py b/impls/main.py
-index 3660e03..3e31e04 100644
+index 3660e03..b7fd425 100644
 --- a/impls/main.py
 +++ b/impls/main.py
-@@ -1,17 +1,27 @@
+@@ -1,51 +1,292 @@
 +import glob
 +import hashlib
 +import re
@@ -3832,7 +3853,16 @@ index 3660e03..3e31e04 100644
  from utils.env_utils import make_env_and_datasets
  from utils.evaluation import evaluate
  from utils.flax_utils import restore_agent, save_agent
-@@ -23,29 +33,255 @@ flags.DEFINE_string('run_group', 'Debug', 'Run group.')
+ from utils.log_utils import CsvLogger, get_exp_name, get_flag_dict, get_wandb_video, setup_wandb
+ 
++
++def _is_recurrent_backbone(backbone):
++    return str(backbone) in ('recur_tied', 'recur_stacked_swiglu')
++
++
+ FLAGS = flags.FLAGS
+ 
+ flags.DEFINE_string('run_group', 'Debug', 'Run group.')
  flags.DEFINE_integer('seed', 0, 'Random seed.')
  flags.DEFINE_string('env_name', 'antmaze-large-navigate-v0', 'Environment (dataset) name.')
  flags.DEFINE_string('save_dir', 'exp/', 'Save directory.')
@@ -4075,7 +4105,7 @@ index 3660e03..3e31e04 100644
 +
 +                        # Similar to tied-LN: step encoding mode changes the parameter tree (discrete step_embed vs none).
 +                        # If flags.json disagrees with the checkpoint, infer from params_{epoch}.pkl so restore works.
-+                        if restore_agent_cfg.get('critic_backbone') == 'recur_tied' and 'critic_recur_sinusoidal' in cfg:
++                        if _is_recurrent_backbone(restore_agent_cfg.get('critic_backbone')) and 'critic_recur_sinusoidal' in cfg:
 +                            inferred = _infer_recur_sinusoidal_from_ckpt(restore_dir, FLAGS.restore_epoch)
 +                            if inferred is not None:
 +                                cfg['critic_recur_sinusoidal'] = bool(inferred)
@@ -4090,7 +4120,7 @@ index 3660e03..3e31e04 100644
  
      FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, FLAGS.run_group, exp_name)
      os.makedirs(FLAGS.save_dir, exist_ok=True)
-@@ -53,108 +289,1969 @@ def main(_):
+@@ -53,108 +294,1969 @@ def main(_):
      with open(os.path.join(FLAGS.save_dir, 'flags.json'), 'w') as f:
          json.dump(flag_dict, f)
  
@@ -4792,7 +4822,7 @@ index 3660e03..3e31e04 100644
 +
 +    def _value_forward(eval_agent, observations, goals, module_name='value', *, num_iters=None):
 +        value_call = eval_agent.network.select(module_name)
-+        if value_backbone == 'recur_tied' and num_iters is not None:
++        if _is_recurrent_backbone(value_backbone) and num_iters is not None:
 +            return value_call(observations, goals, num_iters=num_iters)
 +        return value_call(observations, goals)
 +
@@ -4867,7 +4897,7 @@ index 3660e03..3e31e04 100644
 +    def _critic_forward(eval_agent, observations, goals, actions, *, num_iters=None, return_aux=False):
 +        critic_num_iters = config.get('critic_eval_num_iters', None) if num_iters is None else num_iters
 +        critic_call = eval_agent.network.select('critic')
-+        if critic_backbone == 'recur_tied':
++        if _is_recurrent_backbone(critic_backbone):
 +            return critic_call(
 +                observations,
 +                goals,
@@ -5215,8 +5245,8 @@ index 3660e03..3e31e04 100644
 +            )
 +
 +    def _maybe_log_recurrent_refinement(eval_metrics, eval_agent, *, step: int):
-+        has_recurrent_value = value_module_name is not None and value_backbone == 'recur_tied'
-+        has_recurrent_critic = critic_module_name is not None and critic_backbone == 'recur_tied'
++        has_recurrent_value = value_module_name is not None and _is_recurrent_backbone(value_backbone)
++        has_recurrent_critic = critic_module_name is not None and _is_recurrent_backbone(critic_backbone)
 +        if not has_recurrent_value and not has_recurrent_critic:
 +            return
 +        probe_batch, probe_idxs = _get_probe_batch()
@@ -6923,10 +6953,10 @@ index 9c421dd..bd55171 100644
  
      return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..3460a59 100644
+index 4ee2b26..c383102 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
-@@ -6,6 +6,8 @@ import flax.linen as nn
+@@ -6,12 +6,21 @@ import flax.linen as nn
  import jax
  import jax.numpy as jnp
  
@@ -6935,7 +6965,20 @@ index 4ee2b26..3460a59 100644
  
  def default_init(scale=1.0):
      """Default kernel initializer."""
-@@ -60,6 +62,478 @@ class MLP(nn.Module):
+     return nn.initializers.variance_scaling(scale, 'fan_avg', 'uniform')
+ 
+ 
++RECURRENT_BACKBONES = frozenset({'recur_tied', 'recur_stacked_swiglu'})
++
++
++def is_recurrent_backbone(backbone):
++    return str(backbone) in RECURRENT_BACKBONES
++
++
+ def ensemblize(cls, num_qs, out_axes=0, **kwargs):
+     """Ensemblize a module."""
+     return nn.vmap(
+@@ -60,6 +69,663 @@ class MLP(nn.Module):
          return x
  
  
@@ -7411,10 +7454,195 @@ index 4ee2b26..3460a59 100644
 +        return outputs
 +
 +
++class RecurStackedSwiGLUBackbone(nn.Module):
++    """Recurrent backbone with stacked residual SwiGLU layers per iteration."""
++
++    hidden_dim: int
++    out_dim: int
++    num_iters: int
++    num_dense_layers: int = 2
++    max_iters: int = 16
++    layer_norm: bool = True
++    layerscale_init: float = 1e-2
++    use_step_info: bool = False
++    use_sinusoidal_step_encoding: bool = False
++    use_layerscale: bool = True
++
++    @nn.compact
++    def __call__(self, x, num_iters=None, return_aux=False, context=None):
++        del context
++        iters = self.num_iters if num_iters is None else int(num_iters)
++        num_layers = int(self.num_dense_layers)
++        if num_layers <= 0:
++            raise ValueError(f'num_dense_layers must be positive. Got {num_layers}.')
++
++        has_discrete_step_params = self.use_step_info and not self.use_sinusoidal_step_encoding
++        has_per_iter_alpha = self.use_layerscale
++        if (has_discrete_step_params or has_per_iter_alpha) and iters > self.max_iters:
++            raise ValueError(
++                f'num_iters={iters} exceeds max_iters={self.max_iters} for recur_stacked_swiglu with per-iteration parameters'
++            )
++
++        h = nn.Dense(self.hidden_dim, name='input_state_proj')(x)
++        initial_h = h
++
++        if self.use_step_info and not self.use_sinusoidal_step_encoding:
++            step_embed = self.param(
++                'step_embed',
++                nn.initializers.normal(stddev=0.02),
++                (self.max_iters, self.hidden_dim),
++            )
++        else:
++            step_embed = None
++
++        alpha = None
++        if self.use_layerscale:
++            alpha = self.param('alpha', nn.initializers.constant(self.layerscale_init), (self.max_iters,))
++
++        step_proj = nn.Dense(self.hidden_dim, use_bias=False, name='step_proj') if self.use_step_info else None
++        inner_layer_norms = (
++            [nn.LayerNorm(name=f'inner_ln_{layer_index + 1}') for layer_index in range(num_layers)]
++            if self.layer_norm
++            else None
++        )
++        swiglu_gate_layers = [nn.Dense(self.hidden_dim, name=f'swiglu_fc_a_{layer_index + 1}') for layer_index in range(num_layers)]
++        swiglu_value_layers = [nn.Dense(self.hidden_dim, name=f'swiglu_fc_b_{layer_index + 1}') for layer_index in range(num_layers)]
++        swiglu_out_layers = [nn.Dense(self.hidden_dim, name=f'swiglu_fc_o_{layer_index + 1}') for layer_index in range(num_layers)]
++        output_proj = nn.Dense(self.out_dim, name='output_proj')
++
++        if self.use_step_info and not self.use_sinusoidal_step_encoding:
++            step_contributions = step_proj(step_embed)
++        else:
++            step_contributions = None
++
++        hidden_steps = [] if return_aux else None
++        hidden_drift_steps = []
++        for k in range(iters):
++            if self.use_step_info:
++                if not self.use_sinusoidal_step_encoding:
++                    step_contrib_k = step_contributions[k]
++                else:
++                    step_emb_k = sinusoidal_step_encoding(k, self.max_iters, self.hidden_dim)
++                    step_contrib_k = step_proj(step_emb_k)
++            else:
++                step_contrib_k = None
++
++            h_inner = h
++            for layer_index in range(num_layers):
++                u = h_inner
++                if inner_layer_norms is not None:
++                    u = inner_layer_norms[layer_index](u)
++                if step_contrib_k is not None:
++                    u = u + step_contrib_k
++                a_k = swiglu_gate_layers[layer_index](u)
++                b_k = swiglu_value_layers[layer_index](u)
++                g_k = jax.nn.silu(a_k) * b_k
++                delta = swiglu_out_layers[layer_index](g_k)
++                h_inner = h_inner + delta
++
++            if self.use_layerscale:
++                alpha_k = alpha[k]
++                h_next = h + alpha_k * (h_inner - h)
++            else:
++                h_next = h_inner
++
++            initial_h_norm = jnp.linalg.norm(initial_h, axis=-1)
++            hidden_drift = jnp.linalg.norm(h_next - initial_h, axis=-1) / (initial_h_norm + 1e-8)
++            hidden_drift_steps.append(hidden_drift)
++            h = h_next
++            if hidden_steps is not None:
++                hidden_steps.append(h_next)
++
++        outputs = output_proj(h)
++        if return_aux:
++            hidden_stack = jnp.stack(hidden_steps, axis=0)
++            hidden_drift_steps = jnp.stack(hidden_drift_steps, axis=0)
++            return outputs, {
++                'value_step_outputs': output_proj(hidden_stack),
++                'hidden_drift_steps': hidden_drift_steps,
++                'hidden_drift': hidden_drift_steps[-1],
++                'final_hidden_norm': jnp.linalg.norm(h, axis=-1),
++            }
++        return outputs
++
++
++def recurrent_backbone_cls_and_kwargs(
++    backbone,
++    *,
++    hidden_dim,
++    out_dim,
++    num_iters,
++    num_dense_layers,
++    block_type,
++    max_iters,
++    layer_norm,
++    ln_mode,
++    use_step_info,
++    use_sinusoidal_step_encoding,
++    use_film,
++    film_mode,
++    use_input_injection,
++    use_soft_mixture,
++    use_layerscale,
++    swiglu_pre_ln,
++    use_act,
++    act_epsilon,
++    act_min_iters,
++    layerscale_init,
++):
++    backbone = str(backbone)
++    if backbone == 'recur_tied':
++        return RecurTiedBackbone, dict(
++            hidden_dim=hidden_dim,
++            out_dim=out_dim,
++            num_iters=int(num_iters),
++            num_dense_layers=int(num_dense_layers),
++            block_type=str(block_type),
++            max_iters=int(max_iters),
++            layer_norm=layer_norm,
++            ln_mode=str(ln_mode),
++            use_step_info=bool(use_step_info),
++            use_sinusoidal_step_encoding=bool(use_sinusoidal_step_encoding),
++            use_film=bool(use_film),
++            film_mode=str(film_mode),
++            use_input_injection=bool(use_input_injection),
++            use_soft_mixture=bool(use_soft_mixture),
++            use_layerscale=bool(use_layerscale),
++            swiglu_pre_ln=bool(swiglu_pre_ln),
++            use_act=bool(use_act),
++            act_epsilon=float(act_epsilon),
++            act_min_iters=int(act_min_iters),
++            layerscale_init=layerscale_init,
++            activations=nn.gelu,
++        )
++    if backbone == 'recur_stacked_swiglu':
++        if use_film:
++            raise ValueError("backbone='recur_stacked_swiglu' does not support FiLM.")
++        if use_input_injection:
++            raise ValueError("backbone='recur_stacked_swiglu' does not support input injection.")
++        if use_soft_mixture:
++            raise ValueError("backbone='recur_stacked_swiglu' does not support soft-mixture readout.")
++        if use_act:
++            raise ValueError("backbone='recur_stacked_swiglu' does not support ACT halting.")
++        return RecurStackedSwiGLUBackbone, dict(
++            hidden_dim=hidden_dim,
++            out_dim=out_dim,
++            num_iters=int(num_iters),
++            num_dense_layers=int(num_dense_layers),
++            max_iters=int(max_iters),
++            layer_norm=layer_norm,
++            layerscale_init=layerscale_init,
++            use_step_info=bool(use_step_info),
++            use_sinusoidal_step_encoding=bool(use_sinusoidal_step_encoding),
++            use_layerscale=bool(use_layerscale),
++        )
++    raise ValueError(f'Unsupported backbone: {backbone}')
++
++
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -164,9 +638,43 @@ class GCActor(nn.Module):
+@@ -164,9 +830,43 @@ class GCActor(nn.Module):
      const_std: bool = True
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -7459,7 +7687,7 @@ index 4ee2b26..3460a59 100644
          self.mean_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
          if self.state_dependent_std:
              self.log_std_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
-@@ -196,7 +704,10 @@ class GCActor(nn.Module):
+@@ -196,7 +896,10 @@ class GCActor(nn.Module):
              if goals is not None:
                  inputs.append(goals)
              inputs = jnp.concatenate(inputs, axis=-1)
@@ -7471,7 +7699,7 @@ index 4ee2b26..3460a59 100644
  
          means = self.mean_net(outputs)
          if self.state_dependent_std:
-@@ -230,9 +741,43 @@ class GCDiscreteActor(nn.Module):
+@@ -230,9 +933,43 @@ class GCDiscreteActor(nn.Module):
      action_dim: int
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -7516,7 +7744,7 @@ index 4ee2b26..3460a59 100644
          self.logit_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
  
      def __call__(
-@@ -257,7 +802,10 @@ class GCDiscreteActor(nn.Module):
+@@ -257,7 +994,10 @@ class GCDiscreteActor(nn.Module):
              if goals is not None:
                  inputs.append(goals)
              inputs = jnp.concatenate(inputs, axis=-1)
@@ -7528,7 +7756,7 @@ index 4ee2b26..3460a59 100644
  
          logits = self.logit_net(outputs)
  
-@@ -282,14 +830,22 @@ class GCValue(nn.Module):
+@@ -282,14 +1022,22 @@ class GCValue(nn.Module):
      layer_norm: bool = True
      ensemble: bool = True
      gc_encoder: nn.Module = None
@@ -7556,7 +7784,7 @@ index 4ee2b26..3460a59 100644
  
      def __call__(self, observations, goals=None, actions=None):
          """Return the value/critic function.
-@@ -314,6 +870,77 @@ class GCValue(nn.Module):
+@@ -314,6 +1062,77 @@ class GCValue(nn.Module):
          return v
  
  
@@ -7567,6 +7795,7 @@ index 4ee2b26..3460a59 100644
 +    layer_norm: bool = True
 +    ensemble: bool = True
 +    gc_encoder: nn.Module = None
++    backbone: str = 'recur_tied'
 +    recur_num_iters: int = 4
 +    recur_num_dense_layers: int = 2
 +    recur_block_type: str = 'dense'
@@ -7587,29 +7816,28 @@ index 4ee2b26..3460a59 100644
 +
 +    def setup(self):
 +        hidden_dim = int(self.hidden_dims[-1])
-+        value_module = RecurTiedBackbone
-+        value_kwargs = dict(
++        value_module, value_kwargs = recurrent_backbone_cls_and_kwargs(
++            self.backbone,
 +            hidden_dim=hidden_dim,
 +            out_dim=1,
-+            num_iters=int(self.recur_num_iters),
-+            num_dense_layers=int(self.recur_num_dense_layers),
-+            block_type=str(self.recur_block_type),
-+            max_iters=int(self.recur_max_iters),
++            num_iters=self.recur_num_iters,
++            num_dense_layers=self.recur_num_dense_layers,
++            block_type=self.recur_block_type,
++            max_iters=self.recur_max_iters,
 +            layer_norm=self.layer_norm,
-+            ln_mode=str(self.recur_ln_mode),
-+            use_step_info=bool(self.recur_use_step_info),
-+            use_sinusoidal_step_encoding=bool(self.recur_sinusoidal),
-+            use_film=bool(self.recur_use_film),
-+            film_mode=str(self.recur_film_mode),
-+            use_input_injection=bool(self.recur_use_input_injection),
-+            use_soft_mixture=bool(self.recur_use_soft_mixture),
-+            use_layerscale=bool(self.recur_use_layerscale),
-+            swiglu_pre_ln=bool(self.recur_swiglu_pre_ln),
-+            use_act=bool(self.recur_use_act),
-+            act_epsilon=float(self.recur_act_epsilon),
-+            act_min_iters=int(self.recur_act_min_iters),
++            ln_mode=self.recur_ln_mode,
++            use_step_info=self.recur_use_step_info,
++            use_sinusoidal_step_encoding=self.recur_sinusoidal,
++            use_film=self.recur_use_film,
++            film_mode=self.recur_film_mode,
++            use_input_injection=self.recur_use_input_injection,
++            use_soft_mixture=self.recur_use_soft_mixture,
++            use_layerscale=self.recur_use_layerscale,
++            swiglu_pre_ln=self.recur_swiglu_pre_ln,
++            use_act=self.recur_use_act,
++            act_epsilon=self.recur_act_epsilon,
++            act_min_iters=self.recur_act_min_iters,
 +            layerscale_init=self.layerscale_init,
-+            activations=nn.gelu,
 +        )
 +        if self.ensemble:
 +            value_module = ensemblize(value_module, 2)
@@ -7634,11 +7862,11 @@ index 4ee2b26..3460a59 100644
  class GCDiscreteCritic(GCValue):
      """Goal-conditioned critic for discrete actions."""
  
-@@ -347,16 +974,91 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +1166,90 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
-+    backbone: str = 'mlp'  # 'mlp' | 'recur_tied'
++    backbone: str = 'mlp'  # 'mlp' | 'recur_tied' | 'recur_stacked_swiglu'
 +    recur_num_iters: int = 4
 +    recur_num_dense_layers: int = 2
 +    recur_block_type: str = 'dense'
@@ -7665,54 +7893,53 @@ index 4ee2b26..3460a59 100644
 +            module_cls = MLP
 +            phi_kwargs = dict(hidden_dims=(*self.hidden_dims, self.latent_dim), activate_final=False, layer_norm=self.layer_norm)
 +            psi_kwargs = dict(hidden_dims=(*self.hidden_dims, self.latent_dim), activate_final=False, layer_norm=self.layer_norm)
-+        elif backbone == 'recur_tied':
++        elif is_recurrent_backbone(backbone):
 +            hidden_dim = int(self.hidden_dims[-1])
-+            module_cls = RecurTiedBackbone
-+            phi_kwargs = dict(
++            module_cls, phi_kwargs = recurrent_backbone_cls_and_kwargs(
++                backbone,
 +                hidden_dim=hidden_dim,
 +                out_dim=self.latent_dim,
-+                num_iters=int(self.recur_num_iters),
-+                num_dense_layers=int(self.recur_num_dense_layers),
-+                block_type=str(self.recur_block_type),
-+                max_iters=int(self.recur_max_iters),
++                num_iters=self.recur_num_iters,
++                num_dense_layers=self.recur_num_dense_layers,
++                block_type=self.recur_block_type,
++                max_iters=self.recur_max_iters,
 +                layer_norm=self.layer_norm,
-+                ln_mode=str(self.recur_ln_mode),
-+                use_step_info=bool(self.recur_use_step_info),
-+                use_sinusoidal_step_encoding=bool(self.recur_sinusoidal),
-+                use_film=bool(self.recur_use_film),
-+                film_mode=str(self.recur_film_mode),
-+                use_input_injection=bool(self.recur_use_input_injection),
-+                use_soft_mixture=bool(self.recur_use_soft_mixture),
-+                use_layerscale=bool(self.recur_use_layerscale),
-+                swiglu_pre_ln=bool(self.recur_swiglu_pre_ln),
-+                use_act=bool(self.recur_use_act),
-+                act_epsilon=float(self.recur_act_epsilon),
-+                act_min_iters=int(self.recur_act_min_iters),
++                ln_mode=self.recur_ln_mode,
++                use_step_info=self.recur_use_step_info,
++                use_sinusoidal_step_encoding=self.recur_sinusoidal,
++                use_film=self.recur_use_film,
++                film_mode=self.recur_film_mode,
++                use_input_injection=self.recur_use_input_injection,
++                use_soft_mixture=self.recur_use_soft_mixture,
++                use_layerscale=self.recur_use_layerscale,
++                swiglu_pre_ln=self.recur_swiglu_pre_ln,
++                use_act=self.recur_use_act,
++                act_epsilon=self.recur_act_epsilon,
++                act_min_iters=self.recur_act_min_iters,
 +                layerscale_init=self.layerscale_init,
-+                activations=nn.gelu,
 +            )
-+            psi_kwargs = dict(
++            _, psi_kwargs = recurrent_backbone_cls_and_kwargs(
++                backbone,
 +                hidden_dim=hidden_dim,
 +                out_dim=self.latent_dim,
-+                num_iters=int(self.recur_num_iters),
-+                num_dense_layers=int(self.recur_num_dense_layers),
-+                block_type=str(self.recur_block_type),
-+                max_iters=int(self.recur_max_iters),
++                num_iters=self.recur_num_iters,
++                num_dense_layers=self.recur_num_dense_layers,
++                block_type=self.recur_block_type,
++                max_iters=self.recur_max_iters,
 +                layer_norm=self.layer_norm,
-+                ln_mode=str(self.recur_ln_mode),
-+                use_step_info=bool(self.recur_use_step_info),
-+                use_sinusoidal_step_encoding=bool(self.recur_sinusoidal),
-+                use_film=bool(self.recur_use_film),
-+                film_mode=str(self.recur_film_mode),
-+                use_input_injection=bool(self.recur_use_input_injection),
-+                use_soft_mixture=bool(self.recur_use_soft_mixture),
-+                use_layerscale=bool(self.recur_use_layerscale),
-+                swiglu_pre_ln=bool(self.recur_swiglu_pre_ln),
-+                use_act=bool(self.recur_use_act),
-+                act_epsilon=float(self.recur_act_epsilon),
-+                act_min_iters=int(self.recur_act_min_iters),
++                ln_mode=self.recur_ln_mode,
++                use_step_info=self.recur_use_step_info,
++                use_sinusoidal_step_encoding=self.recur_sinusoidal,
++                use_film=self.recur_use_film,
++                film_mode=self.recur_film_mode,
++                use_input_injection=self.recur_use_input_injection,
++                use_soft_mixture=self.recur_use_soft_mixture,
++                use_layerscale=self.recur_use_layerscale,
++                swiglu_pre_ln=self.recur_swiglu_pre_ln,
++                use_act=self.recur_use_act,
++                act_epsilon=self.recur_act_epsilon,
++                act_min_iters=self.recur_act_min_iters,
 +                layerscale_init=self.layerscale_init,
-+                activations=nn.gelu,
 +            )
 +        else:
 +            raise ValueError(f'Unsupported backbone: {backbone}')
@@ -7731,7 +7958,7 @@ index 4ee2b26..3460a59 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +1066,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +1257,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -7739,14 +7966,14 @@ index 4ee2b26..3460a59 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,16 +1078,127 @@ class GCBilinearValue(nn.Module):
+@@ -375,16 +1269,127 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
 -        phi = self.phi(phi_inputs)
 -        psi = self.psi(goals)
 +        aux = {}
-+        if self.backbone == 'recur_tied' and return_aux:
++        if is_recurrent_backbone(self.backbone) and return_aux:
 +            # IMPORTANT: nn.vmap does not support kwargs; pass iterative args positionally.
 +            phi, phi_aux = self.phi(phi_inputs, num_iters, True, phi_inputs)
 +            psi, psi_aux = self.psi(goals, num_iters, True, goals)
@@ -7847,7 +8074,7 @@ index 4ee2b26..3460a59 100644
 +                aux['softmix_step_weights_psi'] = psi_softmix_weights
 +            if phi_softmix_weights is not None and psi_softmix_weights is not None:
 +                aux['softmix_step_weights_mean'] = 0.5 * (phi_softmix_weights + psi_softmix_weights)
-+        elif self.backbone == 'recur_tied':
++        elif is_recurrent_backbone(self.backbone):
 +            # IMPORTANT: nn.vmap does not support kwargs; pass iterative args positionally.
 +            phi = self.phi(phi_inputs, num_iters, False, phi_inputs)
 +            psi = self.psi(goals, num_iters, False, goals)
@@ -7869,7 +8096,7 @@ index 4ee2b26..3460a59 100644
          else:
              return v
  
-@@ -394,9 +1208,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+@@ -394,9 +1399,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
  
      action_dim: int = None
  
@@ -7881,11 +8108,11 @@ index 4ee2b26..3460a59 100644
  
  
  class GCMRNValue(nn.Module):
-@@ -416,11 +1230,66 @@ class GCMRNValue(nn.Module):
+@@ -416,11 +1421,65 @@ class GCMRNValue(nn.Module):
      latent_dim: int
      layer_norm: bool = True
      encoder: nn.Module = None
-+    backbone: str = 'mlp'  # 'mlp' | 'recur_tied'
++    backbone: str = 'mlp'  # 'mlp' | 'recur_tied' | 'recur_stacked_swiglu'
 +    recur_num_iters: int = 4
 +    recur_num_dense_layers: int = 2
 +    recur_block_type: str = 'dense'
@@ -7914,49 +8141,48 @@ index 4ee2b26..3460a59 100644
 +                activate_final=False,
 +                layer_norm=self.layer_norm,
 +            )
-+        elif backbone == 'recur_tied':
++        elif is_recurrent_backbone(backbone):
 +            hidden_dim = int(self.hidden_dims[-1])
-+            module_cls = RecurTiedBackbone
-+            phi_kwargs = dict(
++            module_cls, phi_kwargs = recurrent_backbone_cls_and_kwargs(
++                backbone,
 +                hidden_dim=hidden_dim,
 +                out_dim=self.latent_dim,
-+                num_iters=int(self.recur_num_iters),
-+                num_dense_layers=int(self.recur_num_dense_layers),
-+                block_type=str(self.recur_block_type),
-+                max_iters=int(self.recur_max_iters),
++                num_iters=self.recur_num_iters,
++                num_dense_layers=self.recur_num_dense_layers,
++                block_type=self.recur_block_type,
++                max_iters=self.recur_max_iters,
 +                layer_norm=self.layer_norm,
-+                ln_mode=str(self.recur_ln_mode),
-+                use_step_info=bool(self.recur_use_step_info),
-+                use_sinusoidal_step_encoding=bool(self.recur_sinusoidal),
-+                use_film=bool(self.recur_use_film),
-+                film_mode=str(self.recur_film_mode),
-+                use_input_injection=bool(self.recur_use_input_injection),
-+                use_soft_mixture=bool(self.recur_use_soft_mixture),
-+                use_layerscale=bool(self.recur_use_layerscale),
-+                swiglu_pre_ln=bool(self.recur_swiglu_pre_ln),
-+                use_act=bool(self.recur_use_act),
-+                act_epsilon=float(self.recur_act_epsilon),
-+                act_min_iters=int(self.recur_act_min_iters),
++                ln_mode=self.recur_ln_mode,
++                use_step_info=self.recur_use_step_info,
++                use_sinusoidal_step_encoding=self.recur_sinusoidal,
++                use_film=self.recur_use_film,
++                film_mode=self.recur_film_mode,
++                use_input_injection=self.recur_use_input_injection,
++                use_soft_mixture=self.recur_use_soft_mixture,
++                use_layerscale=self.recur_use_layerscale,
++                swiglu_pre_ln=self.recur_swiglu_pre_ln,
++                use_act=self.recur_use_act,
++                act_epsilon=self.recur_act_epsilon,
++                act_min_iters=self.recur_act_min_iters,
 +                layerscale_init=self.layerscale_init,
-+                activations=nn.gelu,
 +            )
 +        else:
 +            raise ValueError(f'Unsupported backbone: {backbone}')
++
++        self.phi = module_cls(**phi_kwargs)
  
 -    def __call__(self, observations, goals, is_phi=False, info=False):
-+        self.phi = module_cls(**phi_kwargs)
-+
 +    def __call__(self, observations, goals, is_phi=False, info=False, *, num_iters=None):
          """Return the MRN value function.
  
          Args:
-@@ -436,8 +1305,12 @@ class GCMRNValue(nn.Module):
+@@ -436,8 +1495,12 @@ class GCMRNValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)
 -            phi_s = self.phi(observations)
 -            phi_g = self.phi(goals)
-+            if self.backbone == 'recur_tied':
++            if is_recurrent_backbone(self.backbone):
 +                phi_s = self.phi(observations, num_iters=num_iters, return_aux=False, context=observations)
 +                phi_g = self.phi(goals, num_iters=num_iters, return_aux=False, context=goals)
 +            else:
@@ -7965,11 +8191,11 @@ index 4ee2b26..3460a59 100644
  
          sym_s = phi_s[..., : self.latent_dim // 2]
          sym_g = phi_g[..., : self.latent_dim // 2]
-@@ -471,12 +1344,67 @@ class GCIQEValue(nn.Module):
+@@ -471,12 +1534,66 @@ class GCIQEValue(nn.Module):
      dim_per_component: int
      layer_norm: bool = True
      encoder: nn.Module = None
-+    backbone: str = 'mlp'  # 'mlp' | 'recur_tied'
++    backbone: str = 'mlp'  # 'mlp' | 'recur_tied' | 'recur_stacked_swiglu'
 +    recur_num_iters: int = 4
 +    recur_num_dense_layers: int = 2
 +    recur_block_type: str = 'dense'
@@ -7998,31 +8224,30 @@ index 4ee2b26..3460a59 100644
 +                activate_final=False,
 +                layer_norm=self.layer_norm,
 +            )
-+        elif backbone == 'recur_tied':
++        elif is_recurrent_backbone(backbone):
 +            hidden_dim = int(self.hidden_dims[-1])
-+            module_cls = RecurTiedBackbone
-+            phi_kwargs = dict(
++            module_cls, phi_kwargs = recurrent_backbone_cls_and_kwargs(
++                backbone,
 +                hidden_dim=hidden_dim,
 +                out_dim=self.latent_dim,
-+                num_iters=int(self.recur_num_iters),
-+                num_dense_layers=int(self.recur_num_dense_layers),
-+                block_type=str(self.recur_block_type),
-+                max_iters=int(self.recur_max_iters),
++                num_iters=self.recur_num_iters,
++                num_dense_layers=self.recur_num_dense_layers,
++                block_type=self.recur_block_type,
++                max_iters=self.recur_max_iters,
 +                layer_norm=self.layer_norm,
-+                ln_mode=str(self.recur_ln_mode),
-+                use_step_info=bool(self.recur_use_step_info),
-+                use_sinusoidal_step_encoding=bool(self.recur_sinusoidal),
-+                use_film=bool(self.recur_use_film),
-+                film_mode=str(self.recur_film_mode),
-+                use_input_injection=bool(self.recur_use_input_injection),
-+                use_soft_mixture=bool(self.recur_use_soft_mixture),
-+                use_layerscale=bool(self.recur_use_layerscale),
-+                swiglu_pre_ln=bool(self.recur_swiglu_pre_ln),
-+                use_act=bool(self.recur_use_act),
-+                act_epsilon=float(self.recur_act_epsilon),
-+                act_min_iters=int(self.recur_act_min_iters),
++                ln_mode=self.recur_ln_mode,
++                use_step_info=self.recur_use_step_info,
++                use_sinusoidal_step_encoding=self.recur_sinusoidal,
++                use_film=self.recur_use_film,
++                film_mode=self.recur_film_mode,
++                use_input_injection=self.recur_use_input_injection,
++                use_soft_mixture=self.recur_use_soft_mixture,
++                use_layerscale=self.recur_use_layerscale,
++                swiglu_pre_ln=self.recur_swiglu_pre_ln,
++                use_act=self.recur_use_act,
++                act_epsilon=self.recur_act_epsilon,
++                act_min_iters=self.recur_act_min_iters,
 +                layerscale_init=self.layerscale_init,
-+                activations=nn.gelu,
 +            )
 +        else:
 +            raise ValueError(f'Unsupported backbone: {backbone}')
@@ -8035,13 +8260,13 @@ index 4ee2b26..3460a59 100644
          """Return the IQE value function.
  
          Args:
-@@ -493,8 +1421,12 @@ class GCIQEValue(nn.Module):
+@@ -493,8 +1610,12 @@ class GCIQEValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)
 -            phi_s = self.phi(observations)
 -            phi_g = self.phi(goals)
-+            if self.backbone == 'recur_tied':
++            if is_recurrent_backbone(self.backbone):
 +                phi_s = self.phi(observations, num_iters=num_iters, return_aux=False, context=observations)
 +                phi_g = self.phi(goals, num_iters=num_iters, return_aux=False, context=goals)
 +            else:
