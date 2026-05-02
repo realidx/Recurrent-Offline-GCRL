@@ -1126,7 +1126,7 @@ index 559df71..b51d35a 100644
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.2,  # Probability of using the current state as the value goal.
 diff --git a/impls/agents/hiql.py b/impls/agents/hiql.py
-index 63e5dee..782dc39 100644
+index 63e5dee..6a89703 100644
 --- a/impls/agents/hiql.py
 +++ b/impls/agents/hiql.py
 @@ -8,7 +8,7 @@ import ml_collections
@@ -1426,7 +1426,7 @@ index 63e5dee..782dc39 100644
  
      @jax.jit
      def total_loss(self, batch, grad_params, rng=None):
-@@ -259,18 +444,44 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -259,18 +444,45 @@ class HIQLAgent(flax.struct.PyTreeNode):
              high_actor_encoder_def = None
  
          # Define value and actor networks.
@@ -1471,6 +1471,7 @@ index 63e5dee..782dc39 100644
 +                recur_use_input_injection=bool(config.get('value_recur_use_input_injection', False)),
 +                recur_use_soft_mixture=bool(config.get('value_recur_use_soft_mixture', False)),
 +                recur_use_layerscale=bool(config.get('value_recur_use_layerscale', True)),
++                recur_use_inner_residual=bool(config.get('value_recur_use_inner_residual', True)),
 +                recur_use_act=bool(config.get('value_recur_use_act', False)),
 +                recur_act_epsilon=float(config.get('value_recur_act_epsilon', 0.01)),
 +                recur_act_min_iters=int(config.get('value_recur_act_min_iters', 1)),
@@ -1483,7 +1484,7 @@ index 63e5dee..782dc39 100644
  
          if config['discrete']:
              low_actor_def = GCDiscreteActor(
-@@ -306,7 +517,15 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -306,7 +518,15 @@ class HIQLAgent(flax.struct.PyTreeNode):
          network_args = {k: v[1] for k, v in network_info.items()}
  
          network_def = ModuleDict(networks)
@@ -1500,7 +1501,7 @@ index 63e5dee..782dc39 100644
          network_params = network_def.init(init_rng, **network_args)['params']
          network = TrainState.create(network_def, network_params, tx=network_tx)
  
-@@ -322,9 +541,12 @@ def get_config():
+@@ -322,9 +542,12 @@ def get_config():
              # Agent hyperparameters.
              agent_name='hiql',  # Agent name.
              lr=3e-4,  # Learning rate.
@@ -1513,7 +1514,7 @@ index 63e5dee..782dc39 100644
              layer_norm=True,  # Whether to use layer normalization.
              discount=0.99,  # Discount factor.
              tau=0.005,  # Target network update rate.
-@@ -333,6 +555,37 @@ def get_config():
+@@ -333,6 +556,38 @@ def get_config():
              high_alpha=3.0,  # High-level AWR temperature.
              subgoal_steps=25,  # Subgoal steps.
              rep_dim=10,  # Goal representation dimension.
@@ -1530,6 +1531,7 @@ index 63e5dee..782dc39 100644
 +            value_recur_use_input_injection=False,  # Add a projected copy of the original value input to every recurrent step.
 +            value_recur_use_soft_mixture=False,  # Read out every recurrent step with a shared head and soft-mix them.
 +            value_recur_use_layerscale=True,  # Use LayerScale in the recurrent HIQL value.
++            value_recur_use_inner_residual=True,  # Use residual connections between inner stacked SwiGLU blocks.
 +            value_recur_use_act=False,  # Enable ACT halting for recurrent HIQL value.
 +            value_recur_act_epsilon=0.01,  # ACT halting threshold slack for recurrent HIQL value.
 +            value_recur_act_min_iters=1,  # Minimum recurrent updates before HIQL value may halt.
@@ -6955,7 +6957,7 @@ index 9c421dd..bd55171 100644
  
      return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..3d47116 100644
+index 4ee2b26..c2d5de7 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
 @@ -6,12 +6,21 @@ import flax.linen as nn
@@ -6980,7 +6982,7 @@ index 4ee2b26..3d47116 100644
  def ensemblize(cls, num_qs, out_axes=0, **kwargs):
      """Ensemblize a module."""
      return nn.vmap(
-@@ -60,6 +69,674 @@ class MLP(nn.Module):
+@@ -60,6 +69,677 @@ class MLP(nn.Module):
          return x
  
  
@@ -7470,6 +7472,7 @@ index 4ee2b26..3d47116 100644
 +    step_info_inner_mode: str = 'all'
 +    use_sinusoidal_step_encoding: bool = False
 +    use_layerscale: bool = True
++    use_inner_residual: bool = True
 +
 +    @nn.compact
 +    def __call__(self, x, num_iters=None, return_aux=False, context=None):
@@ -7549,7 +7552,7 @@ index 4ee2b26..3d47116 100644
 +                b_k = swiglu_value_layers[layer_index](u)
 +                g_k = jax.nn.silu(a_k) * b_k
 +                delta = swiglu_out_layers[layer_index](g_k)
-+                h_inner = h_inner + delta
++                h_inner = h_inner + delta if self.use_inner_residual else delta
 +
 +            if self.use_layerscale:
 +                alpha_k = alpha[k]
@@ -7601,6 +7604,7 @@ index 4ee2b26..3d47116 100644
 +    act_min_iters,
 +    layerscale_init,
 +    step_info_inner_mode='all',
++    use_inner_residual=True,
 +):
 +    backbone = str(backbone)
 +    if backbone == 'recur_tied':
@@ -7648,6 +7652,7 @@ index 4ee2b26..3d47116 100644
 +            step_info_inner_mode=str(step_info_inner_mode),
 +            use_sinusoidal_step_encoding=bool(use_sinusoidal_step_encoding),
 +            use_layerscale=bool(use_layerscale),
++            use_inner_residual=bool(use_inner_residual),
 +        )
 +    raise ValueError(f'Unsupported backbone: {backbone}')
 +
@@ -7655,7 +7660,7 @@ index 4ee2b26..3d47116 100644
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -164,9 +841,43 @@ class GCActor(nn.Module):
+@@ -164,9 +844,43 @@ class GCActor(nn.Module):
      const_std: bool = True
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -7700,7 +7705,7 @@ index 4ee2b26..3d47116 100644
          self.mean_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
          if self.state_dependent_std:
              self.log_std_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
-@@ -196,7 +907,10 @@ class GCActor(nn.Module):
+@@ -196,7 +910,10 @@ class GCActor(nn.Module):
              if goals is not None:
                  inputs.append(goals)
              inputs = jnp.concatenate(inputs, axis=-1)
@@ -7712,7 +7717,7 @@ index 4ee2b26..3d47116 100644
  
          means = self.mean_net(outputs)
          if self.state_dependent_std:
-@@ -230,9 +944,43 @@ class GCDiscreteActor(nn.Module):
+@@ -230,9 +947,43 @@ class GCDiscreteActor(nn.Module):
      action_dim: int
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -7757,7 +7762,7 @@ index 4ee2b26..3d47116 100644
          self.logit_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
  
      def __call__(
-@@ -257,7 +1005,10 @@ class GCDiscreteActor(nn.Module):
+@@ -257,7 +1008,10 @@ class GCDiscreteActor(nn.Module):
              if goals is not None:
                  inputs.append(goals)
              inputs = jnp.concatenate(inputs, axis=-1)
@@ -7769,7 +7774,7 @@ index 4ee2b26..3d47116 100644
  
          logits = self.logit_net(outputs)
  
-@@ -282,14 +1033,22 @@ class GCValue(nn.Module):
+@@ -282,14 +1036,22 @@ class GCValue(nn.Module):
      layer_norm: bool = True
      ensemble: bool = True
      gc_encoder: nn.Module = None
@@ -7797,7 +7802,7 @@ index 4ee2b26..3d47116 100644
  
      def __call__(self, observations, goals=None, actions=None):
          """Return the value/critic function.
-@@ -314,6 +1073,79 @@ class GCValue(nn.Module):
+@@ -314,6 +1076,81 @@ class GCValue(nn.Module):
          return v
  
  
@@ -7822,6 +7827,7 @@ index 4ee2b26..3d47116 100644
 +    recur_use_input_injection: bool = False
 +    recur_use_soft_mixture: bool = False
 +    recur_use_layerscale: bool = True
++    recur_use_inner_residual: bool = True
 +    recur_swiglu_pre_ln: bool = True
 +    recur_use_act: bool = False
 +    recur_act_epsilon: float = 0.01
@@ -7848,6 +7854,7 @@ index 4ee2b26..3d47116 100644
 +            use_input_injection=self.recur_use_input_injection,
 +            use_soft_mixture=self.recur_use_soft_mixture,
 +            use_layerscale=self.recur_use_layerscale,
++            use_inner_residual=self.recur_use_inner_residual,
 +            swiglu_pre_ln=self.recur_swiglu_pre_ln,
 +            use_act=self.recur_use_act,
 +            act_epsilon=self.recur_act_epsilon,
@@ -7877,7 +7884,7 @@ index 4ee2b26..3d47116 100644
  class GCDiscreteCritic(GCValue):
      """Goal-conditioned critic for discrete actions."""
  
-@@ -347,16 +1179,90 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +1184,90 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
@@ -7973,7 +7980,7 @@ index 4ee2b26..3d47116 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +1270,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +1275,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -7981,7 +7988,7 @@ index 4ee2b26..3d47116 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,16 +1282,127 @@ class GCBilinearValue(nn.Module):
+@@ -375,16 +1287,127 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
@@ -8111,7 +8118,7 @@ index 4ee2b26..3d47116 100644
          else:
              return v
  
-@@ -394,9 +1412,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+@@ -394,9 +1417,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
  
      action_dim: int = None
  
@@ -8123,7 +8130,7 @@ index 4ee2b26..3d47116 100644
  
  
  class GCMRNValue(nn.Module):
-@@ -416,11 +1434,65 @@ class GCMRNValue(nn.Module):
+@@ -416,11 +1439,65 @@ class GCMRNValue(nn.Module):
      latent_dim: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -8191,7 +8198,7 @@ index 4ee2b26..3d47116 100644
          """Return the MRN value function.
  
          Args:
-@@ -436,8 +1508,12 @@ class GCMRNValue(nn.Module):
+@@ -436,8 +1513,12 @@ class GCMRNValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)
@@ -8206,7 +8213,7 @@ index 4ee2b26..3d47116 100644
  
          sym_s = phi_s[..., : self.latent_dim // 2]
          sym_g = phi_g[..., : self.latent_dim // 2]
-@@ -471,12 +1547,66 @@ class GCIQEValue(nn.Module):
+@@ -471,12 +1552,66 @@ class GCIQEValue(nn.Module):
      dim_per_component: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -8275,7 +8282,7 @@ index 4ee2b26..3d47116 100644
          """Return the IQE value function.
  
          Args:
-@@ -493,8 +1623,12 @@ class GCIQEValue(nn.Module):
+@@ -493,8 +1628,12 @@ class GCIQEValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)
