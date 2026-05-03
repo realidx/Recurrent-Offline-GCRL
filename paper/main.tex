@@ -110,7 +110,7 @@
 
 
 \begin{abstract}
-  The abstract paragraph should be indented \nicefrac{1}{2}~inch (3~picas) on both the left- and right-hand margins. Use 10~point type, with a vertical spacing (leading) of 11~points. The word \textbf{Abstract} must be centered, bold, and in point size 12. Two line spaces precede the abstract. The abstract must be limited to one paragraph.
+Offline goal-conditioned reinforcement learning (GCRL) often faces an imperfect value-learning bottleneck: the agent must infer long-horizon reachability from fixed data and then extract a policy from the learned value or score. We study whether iterative latent refinement can improve this value-learning interface. Our model replaces a one-shot value or critic network with a recurrent module that repeatedly updates a latent representation before the algorithm consumes the resulting signal. We insert this refinement module into several offline GCRL algorithms and observe clear gains across multiple settings. Diagnostic experiments show that refinement changes the learned signal in ways that are useful for downstream policy extraction, especially on difficult stitching decisions. We further analyze how the effect depends on two design choices: how many refinement steps are used, and how expressive each recurrent update is. The results reveal a tradeoff between iterative depth and per-step expressivity, suggesting that effective recurrent refinement depends on how computation is allocated within the value network.
 \end{abstract}
 
 \section{Introduction}
@@ -235,14 +235,14 @@ The first pattern is that recurrence changes the critic in a way that is visible
 \toprule
 Metric & AMS MLP & AMS Recur & ALS MLP & ALS Recur & AGN MLP & AGN Recur \\
 \midrule
-Success & 0.608 & 0.947 $\pm$ 0.015 & 0.184 & 0.489 $\pm$ 0.103 & 0.136 & 0.322 $\pm$ 0.083 \\
-Best success & 0.608 & 0.953 $\pm$ 0.020 & 0.204 & 0.502 $\pm$ 0.095 & 0.156 & 0.341 $\pm$ 0.071 \\
-Pos. mean & -2.820 & -1.396 $\pm$ 0.124 & -2.110 & -2.057 $\pm$ 0.033 & -3.531 & -3.407 $\pm$ 0.098 \\
-Neg. mean & -25.135 & -29.040 $\pm$ 0.451 & -27.603 & -23.222 $\pm$ 0.130 & -15.944 & -15.211 $\pm$ 0.242 \\
-Margin & 22.315 & 27.644 $\pm$ 0.564 & 25.493 & 21.164 $\pm$ 0.135 & 12.413 & 11.805 $\pm$ 0.339 \\
-Margin std. & 12.597 & 13.351 $\pm$ 0.225 & 11.809 & 8.748 $\pm$ 0.248 & 9.283 & 8.071 $\pm$ 0.174 \\
-Rank acc. & 0.988 & 0.998 $\pm$ 0.002 & 0.997 & 0.997 $\pm$ 0.001 & 0.973 & 0.974 $\pm$ 0.001 \\
-Separation $z$ & 1.848 & 2.109 $\pm$ 0.055 & 2.178 & 2.487 $\pm$ 0.039 & 1.451 & 1.618 $\pm$ 0.043 \\
+Success & 0.506 $\pm$ 0.101 & 0.947 $\pm$ 0.015 & 0.148 $\pm$ 0.011 & 0.489 $\pm$ 0.103 & 0.124 $\pm$ 0.035 & 0.322 $\pm$ 0.083 \\
+Best success & 0.574 $\pm$ 0.063 & 0.953 $\pm$ 0.020 & 0.193 $\pm$ 0.020 & 0.502 $\pm$ 0.095 & 0.161 $\pm$ 0.023 & 0.341 $\pm$ 0.071 \\
+Pos. mean & -2.490 $\pm$ 0.069 & -1.396 $\pm$ 0.124 & -2.080 $\pm$ 0.045 & -2.057 $\pm$ 0.033 & -3.421 $\pm$ 0.079 & -3.407 $\pm$ 0.098 \\
+Neg. mean & -26.133 $\pm$ 0.866 & -29.040 $\pm$ 0.451 & -27.875 $\pm$ 0.187 & -23.222 $\pm$ 0.130 & -16.586 $\pm$ 0.391 & -15.211 $\pm$ 0.242 \\
+Margin & 23.644 $\pm$ 0.931 & 27.644 $\pm$ 0.564 & 25.795 $\pm$ 0.221 & 21.164 $\pm$ 0.135 & 13.165 $\pm$ 0.468 & 11.805 $\pm$ 0.339 \\
+Margin std. & 14.039 $\pm$ 0.500 & 13.351 $\pm$ 0.225 & 11.734 $\pm$ 0.202 & 8.748 $\pm$ 0.248 & 9.766 $\pm$ 0.238 & 8.071 $\pm$ 0.174 \\
+Rank acc. & 0.990 $\pm$ 0.002 & 0.998 $\pm$ 0.002 & 0.995 $\pm$ 0.002 & 0.997 $\pm$ 0.001 & 0.973 $\pm$ 0.002 & 0.974 $\pm$ 0.001 \\
+Separation $z$ & 1.731 $\pm$ 0.027 & 2.109 $\pm$ 0.055 & 2.231 $\pm$ 0.040 & 2.487 $\pm$ 0.039 & 1.474 $\pm$ 0.020 & 1.618 $\pm$ 0.043 \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -264,13 +264,13 @@ A closer look at the actor interface gives a more specific explanation for the p
 \toprule
 Metric & AMS MLP & AMS Recur & ALS MLP & ALS Recur & AGN MLP & AGN Recur \\
 \midrule
-$q_{\mathrm{actor}}$ & -10.881 & -12.385 $\pm$ 0.534 & -11.752 & -11.148 $\pm$ 0.278 & -5.153 & -5.155 $\pm$ 0.035 \\
-$q_{\mathrm{behavior}}$ & -12.727 & -12.650 $\pm$ 0.525 & -12.274 & -11.465 $\pm$ 0.304 & -5.348 & -5.280 $\pm$ 0.040 \\
-$q_{\Delta}$ & 1.846 & 0.265 $\pm$ 0.049 & 0.522 & 0.317 $\pm$ 0.030 & 0.195 & 0.125 $\pm$ 0.012 \\
-Prefer actor & 0.734 & 0.557 $\pm$ 0.017 & 0.692 & 0.663 $\pm$ 0.011 & 0.672 & 0.681 $\pm$ 0.010 \\
-Policy MSE & 0.194 & 0.082 $\pm$ 0.001 & 0.099 & 0.086 $\pm$ 0.004 & 0.081 & 0.068 $\pm$ 0.004 \\
-Policy L2 & 1.051 & 0.734 $\pm$ 0.004 & 0.796 & 0.748 $\pm$ 0.013 & 0.741 & 0.685 $\pm$ 0.018 \\
-Behavior log prob. & -8.129 & -7.680 $\pm$ 0.005 & -7.748 & -7.694 $\pm$ 0.014 & -7.674 & -7.624 $\pm$ 0.017 \\
+$q_{\mathrm{actor}}$ & -10.798 $\pm$ 0.462 & -12.385 $\pm$ 0.534 & -12.092 $\pm$ 0.367 & -11.148 $\pm$ 0.278 & -5.134 $\pm$ 0.063 & -5.155 $\pm$ 0.035 \\
+$q_{\mathrm{behavior}}$ & -11.642 $\pm$ 0.459 & -12.650 $\pm$ 0.525 & -12.598 $\pm$ 0.404 & -11.465 $\pm$ 0.304 & -5.337 $\pm$ 0.063 & -5.280 $\pm$ 0.040 \\
+$q_{\Delta}$ & 0.844 $\pm$ 0.035 & 0.265 $\pm$ 0.049 & 0.506 $\pm$ 0.056 & 0.317 $\pm$ 0.030 & 0.203 $\pm$ 0.010 & 0.125 $\pm$ 0.012 \\
+Prefer actor & 0.701 $\pm$ 0.005 & 0.557 $\pm$ 0.017 & 0.681 $\pm$ 0.015 & 0.663 $\pm$ 0.011 & 0.697 $\pm$ 0.010 & 0.681 $\pm$ 0.010 \\
+Policy MSE & 0.137 $\pm$ 0.005 & 0.082 $\pm$ 0.001 & 0.106 $\pm$ 0.006 & 0.086 $\pm$ 0.004 & 0.084 $\pm$ 0.004 & 0.068 $\pm$ 0.004 \\
+Policy L2 & 0.907 $\pm$ 0.015 & 0.734 $\pm$ 0.004 & 0.821 $\pm$ 0.015 & 0.748 $\pm$ 0.013 & 0.751 $\pm$ 0.016 & 0.685 $\pm$ 0.018 \\
+Behavior log prob. & -7.899 $\pm$ 0.020 & -7.680 $\pm$ 0.005 & -7.776 $\pm$ 0.023 & -7.694 $\pm$ 0.014 & -7.688 $\pm$ 0.018 & -7.624 $\pm$ 0.017 \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -296,11 +296,11 @@ The per-task results show that recurrent refinement helps most on the harder goa
 \toprule
 Task & AMS MLP & AMS Recur & ALS MLP & ALS Recur & AGN MLP & AGN Recur \\
 \midrule
-Task 1 & 0.920 & 0.985 $\pm$ 0.019 & 0.400 & 0.745 $\pm$ 0.070 & 0.000 & 0.140 $\pm$ 0.107 \\
-Task 2 & 0.940 & 0.935 $\pm$ 0.025 & 0.000 & 0.000 $\pm$ 0.000 & 0.360 & 0.510 $\pm$ 0.110 \\
-Task 3 & 0.360 & 0.945 $\pm$ 0.034 & 0.480 & 0.830 $\pm$ 0.096 & 0.020 & 0.105 $\pm$ 0.077 \\
-Task 4 & 0.000 & 0.930 $\pm$ 0.062 & 0.040 & 0.570 $\pm$ 0.189 & 0.280 & 0.460 $\pm$ 0.099 \\
-Task 5 & 0.820 & 0.940 $\pm$ 0.000 & 0.000 & 0.300 $\pm$ 0.321 & 0.020 & 0.395 $\pm$ 0.175 \\
+Task 1 & 0.820 $\pm$ 0.135 & 0.985 $\pm$ 0.019 & 0.230 $\pm$ 0.087 & 0.745 $\pm$ 0.070 & 0.040 $\pm$ 0.049 & 0.140 $\pm$ 0.107 \\
+Task 2 & 0.705 $\pm$ 0.167 & 0.935 $\pm$ 0.025 & 0.000 $\pm$ 0.000 & 0.000 $\pm$ 0.000 & 0.195 $\pm$ 0.066 & 0.510 $\pm$ 0.110 \\
+Task 3 & 0.215 $\pm$ 0.206 & 0.945 $\pm$ 0.034 & 0.500 $\pm$ 0.086 & 0.830 $\pm$ 0.096 & 0.025 $\pm$ 0.010 & 0.105 $\pm$ 0.077 \\
+Task 4 & 0.100 $\pm$ 0.101 & 0.930 $\pm$ 0.062 & 0.005 $\pm$ 0.010 & 0.570 $\pm$ 0.189 & 0.300 $\pm$ 0.128 & 0.460 $\pm$ 0.099 \\
+Task 5 & 0.690 $\pm$ 0.082 & 0.940 $\pm$ 0.000 & 0.005 $\pm$ 0.010 & 0.300 $\pm$ 0.321 & 0.060 $\pm$ 0.052 & 0.395 $\pm$ 0.175 \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -314,14 +314,14 @@ The hard-bucket results give the same qualitative picture. AMS shows the cleares
 \toprule
 Bucket & AMS MLP & AMS Recur & ALS MLP & ALS Recur & AGN MLP & AGN Recur \\
 \midrule
-Traj short & 27.376 & 30.021 $\pm$ 1.150 & 28.050 & 23.294 $\pm$ 0.963 & 14.069 & 14.679 $\pm$ 0.876 \\
-Traj medium & 23.350 & 28.982 $\pm$ 1.423 & 26.558 & 22.647 $\pm$ 0.470 & 14.644 & 13.749 $\pm$ 0.355 \\
-Traj long & 21.599 & 27.005 $\pm$ 0.445 & 25.059 & 20.544 $\pm$ 0.197 & 12.178 & 11.541 $\pm$ 0.358 \\
-XY short & 25.138 & 29.612 $\pm$ 0.622 & 27.201 & 22.694 $\pm$ 0.146 & 17.466 & 16.257 $\pm$ 0.444 \\
-XY medium & 15.791 & 22.871 $\pm$ 1.008 & 21.969 & 17.744 $\pm$ 0.214 & 9.853 & 9.366 $\pm$ 0.226 \\
-XY long & 15.509 & 21.358 $\pm$ 5.146 & 20.154 & 16.945 $\pm$ 1.691 & 8.278 & 7.743 $\pm$ 0.134 \\
-Path short & 22.687 & 27.942 $\pm$ 0.563 & 25.765 & 21.341 $\pm$ 0.120 & 14.915 & 14.144 $\pm$ 0.514 \\
-Path medium & 15.889 & 21.923 $\pm$ 1.113 & 20.299 & 17.230 $\pm$ 1.400 & 8.550 & 8.523 $\pm$ 0.296 \\
+Traj short & 26.983 $\pm$ 0.683 & 30.021 $\pm$ 1.150 & 27.998 $\pm$ 1.060 & 23.294 $\pm$ 0.963 & 15.834 $\pm$ 1.190 & 14.679 $\pm$ 0.876 \\
+Traj medium & 26.014 $\pm$ 2.146 & 28.982 $\pm$ 1.423 & 27.086 $\pm$ 1.406 & 22.647 $\pm$ 0.470 & 15.299 $\pm$ 0.512 & 13.749 $\pm$ 0.355 \\
+Traj long & 22.625 $\pm$ 0.718 & 27.005 $\pm$ 0.445 & 25.210 $\pm$ 0.183 & 20.544 $\pm$ 0.197 & 12.891 $\pm$ 0.504 & 11.541 $\pm$ 0.358 \\
+XY short & 26.250 $\pm$ 1.155 & 29.612 $\pm$ 0.622 & 27.380 $\pm$ 0.378 & 22.694 $\pm$ 0.146 & 18.335 $\pm$ 0.584 & 16.257 $\pm$ 0.444 \\
+XY medium & 17.225 $\pm$ 0.261 & 22.871 $\pm$ 1.008 & 22.310 $\pm$ 0.465 & 17.744 $\pm$ 0.214 & 10.308 $\pm$ 0.344 & 9.366 $\pm$ 0.226 \\
+XY long & 17.462 $\pm$ 3.690 & 21.358 $\pm$ 5.146 & 20.567 $\pm$ 2.340 & 16.945 $\pm$ 1.691 & 8.472 $\pm$ 0.210 & 7.743 $\pm$ 0.134 \\
+Path short & 23.984 $\pm$ 0.989 & 27.942 $\pm$ 0.563 & 26.057 $\pm$ 0.193 & 21.341 $\pm$ 0.120 & 15.851 $\pm$ 0.608 & 14.144 $\pm$ 0.514 \\
+Path medium & 16.972 $\pm$ 0.995 & 21.923 $\pm$ 1.113 & 19.957 $\pm$ 1.039 & 17.230 $\pm$ 1.400 & 9.468 $\pm$ 0.618 & 8.523 $\pm$ 0.296 \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -338,10 +338,10 @@ As a check against overinterpreting this result, we also measured how well the c
 \toprule
 Metric & AMS MLP & AMS Recur & ALS MLP & ALS Recur & AGN MLP & AGN Recur \\
 \midrule
-Graph corr. & 0.516 & 0.427 $\pm$ 0.021 & 0.535 & 0.507 $\pm$ 0.010 & 0.694 & 0.696 $\pm$ 0.022 \\
-Graph Spearman & 0.552 & 0.462 $\pm$ 0.017 & 0.564 & 0.529 $\pm$ 0.016 & 0.747 & 0.768 $\pm$ 0.017 \\
-Hard graph corr. & 0.286 & 0.209 $\pm$ 0.039 & 0.334 & 0.317 $\pm$ 0.020 & 0.551 & 0.518 $\pm$ 0.044 \\
-Hard graph Spearman & 0.314 & 0.223 $\pm$ 0.041 & 0.347 & 0.335 $\pm$ 0.029 & 0.515 & 0.513 $\pm$ 0.032 \\
+Graph corr. & 0.514 $\pm$ 0.014 & 0.427 $\pm$ 0.021 & 0.518 $\pm$ 0.010 & 0.507 $\pm$ 0.010 & 0.697 $\pm$ 0.020 & 0.696 $\pm$ 0.022 \\
+Graph Spearman & 0.551 $\pm$ 0.013 & 0.462 $\pm$ 0.017 & 0.537 $\pm$ 0.015 & 0.529 $\pm$ 0.016 & 0.760 $\pm$ 0.018 & 0.768 $\pm$ 0.017 \\
+Hard graph corr. & 0.265 $\pm$ 0.024 & 0.209 $\pm$ 0.039 & 0.329 $\pm$ 0.022 & 0.317 $\pm$ 0.020 & 0.533 $\pm$ 0.022 & 0.518 $\pm$ 0.044 \\
+Hard graph Spearman & 0.294 $\pm$ 0.028 & 0.223 $\pm$ 0.041 & 0.343 $\pm$ 0.016 & 0.335 $\pm$ 0.029 & 0.533 $\pm$ 0.030 & 0.513 $\pm$ 0.032 \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -352,7 +352,7 @@ Hard graph Spearman & 0.314 & 0.223 $\pm$ 0.041 & 0.347 & 0.335 $\pm$ 0.029 & 0.
 The previous subsection shows that the recurrent critic changes the CRL signal. We next ask whether this effect actually requires iteration. A one-step recurrent block is an important control: it changes the critic architecture, but it cannot repeatedly revise the latent representation. We therefore sweep the number of refinement steps $K$ on \texttt{antmaze-medium-stitch}. The result is a clear threshold. One refinement step is not enough to explain the gain; performance enters the high-success regime only after the critic is allowed to refine its representation multiple times.
 
 % Current log note: the available AMS sweep contains K=1,2,4,6,8 with four seeds
-% each. The MLP baseline is the single available AMS CRL run. I did not find K=3,
+% each. The MLP baseline now also uses four AMS CRL seeds. I did not find K=3,
 % K=5, or K=7 CSVs in the current workspace. One K=6 CSV has a malformed
 % intermediate row; final-checkpoint summaries are still usable, but learning
 % curve plotting should handle or repair that file.
@@ -373,7 +373,7 @@ The final-checkpoint sweep separates one-step recurrence from true iterative ref
 \toprule
 Setting & Final succ. & Best succ. & Best step & Margin & Rank & Sep. $z$ & Long margin & Long rank \\
 \midrule
-MLP & 0.608 & 0.608 & 1000k & 22.315 & 0.988 & 1.848 & 21.599 & 0.985 \\
+MLP & 0.506 $\pm$ 0.101 & 0.574 $\pm$ 0.063 & 450k $\pm$ 173k & 23.644 $\pm$ 0.931 & 0.990 $\pm$ 0.002 & 1.731 $\pm$ 0.027 & 22.625 $\pm$ 0.718 & 0.987 $\pm$ 0.003 \\
 \texttt{iter1} & 0.638 $\pm$ 0.062 & 0.697 $\pm$ 0.040 & 725k $\pm$ 189k & 21.111 $\pm$ 0.571 & 0.992 $\pm$ 0.003 & 2.049 $\pm$ 0.034 & 20.251 $\pm$ 0.453 & 0.989 $\pm$ 0.004 \\
 \texttt{iter2} & 0.914 $\pm$ 0.036 & 0.936 $\pm$ 0.018 & 750k $\pm$ 265k & 28.754 $\pm$ 1.049 & 0.996 $\pm$ 0.001 & 1.865 $\pm$ 0.041 & 27.687 $\pm$ 0.714 & 0.994 $\pm$ 0.002 \\
 \texttt{iter4} & 0.947 $\pm$ 0.015 & 0.953 $\pm$ 0.020 & 850k $\pm$ 173k & 27.644 $\pm$ 0.564 & 0.998 $\pm$ 0.002 & 2.109 $\pm$ 0.055 & 27.005 $\pm$ 0.445 & 0.997 $\pm$ 0.002 \\
@@ -388,7 +388,7 @@ MLP & 0.608 & 0.608 & 1000k & 22.315 & 0.988 & 1.848 & 21.599 & 0.985 \\
 % during learning, not only at the final checkpoint. Keep the inset focused on
 % success; critic diagnostics can remain in the table or appendix.
 \paragraph{The threshold appears during learning.}
-The same transition is already visible early in training. At 100k gradient steps, the MLP critic is still near zero success and the $K=1$ critic remains far below the deeper recurrent variants. By contrast, $K=2$ and larger depths have already entered the useful success range. The depth sweep therefore shows an optimization-time threshold as well as a final-performance threshold.
+The same transition is already visible early in training. At 100k gradient steps, the MLP critic and the $K=1$ critic remain below the deeper recurrent variants. By contrast, $K=2$ and larger depths have already entered the useful success range. The depth sweep therefore shows an optimization-time threshold as well as a final-performance threshold.
 \begin{center}
 \scriptsize
 \setlength{\tabcolsep}{3pt}
@@ -396,7 +396,7 @@ The same transition is already visible early in training. At 100k gradient steps
 \toprule
 Setting & 100k succ. & Margin & Rank & Sep. $z$ & Long rank \\
 \midrule
-MLP & 0.084 & 13.202 & 0.977 & 2.016 & 0.971 \\
+MLP & 0.377 $\pm$ 0.067 & 12.786 $\pm$ 0.134 & 0.985 $\pm$ 0.002 & 2.273 $\pm$ 0.056 & 0.980 $\pm$ 0.003 \\
 \texttt{iter1} & 0.380 $\pm$ 0.140 & 10.611 $\pm$ 0.171 & 0.977 $\pm$ 0.005 & 2.255 $\pm$ 0.035 & 0.970 $\pm$ 0.005 \\
 \texttt{iter2} & 0.609 $\pm$ 0.018 & 12.070 $\pm$ 0.158 & 0.987 $\pm$ 0.004 & 2.389 $\pm$ 0.056 & 0.984 $\pm$ 0.005 \\
 \texttt{iter4} & 0.680 $\pm$ 0.027 & 12.995 $\pm$ 0.423 & 0.988 $\pm$ 0.004 & 2.419 $\pm$ 0.096 & 0.983 $\pm$ 0.006 \\
@@ -432,7 +432,7 @@ We ablate the stabilizing components of the four-step recurrent CRL critic on \t
 
 % Current log note: ablation logs are in references/mechanism/Ablation. The final
 % recurrent reference uses the four AMS iter4 runs from Baseline vs Recurrent,
-% and the MLP row is the available single AMS baseline run. The "No step/FiLM"
+% and the MLP row uses the four AMS baseline runs. The "No step/FiLM"
 % row is a combined configuration difference in the current logs, so do not
 % describe it as a clean step-info-only ablation without verifying flags.
 %
@@ -448,7 +448,7 @@ We ablate the stabilizing components of the four-step recurrent CRL critic on \t
 \toprule
 Setting & Final succ. & Best succ. & Best step & Margin & Rank & Sep. $z$ & Long margin & Path-med margin \\
 \midrule
-MLP & 0.608 & 0.608 & 1000k & 22.315 & 0.988 & 1.848 & 21.599 & 15.889 \\
+MLP & 0.506 $\pm$ 0.101 & 0.574 $\pm$ 0.063 & 450k $\pm$ 173k & 23.644 $\pm$ 0.931 & 0.990 $\pm$ 0.002 & 1.731 $\pm$ 0.027 & 22.625 $\pm$ 0.718 & 16.972 $\pm$ 0.995 \\
 Final recur & 0.947 $\pm$ 0.015 & 0.953 $\pm$ 0.020 & 850k $\pm$ 173k & 27.644 $\pm$ 0.564 & 0.998 $\pm$ 0.002 & 2.109 $\pm$ 0.055 & 27.005 $\pm$ 0.445 & 21.923 $\pm$ 1.113 \\
 No pre-LN & 0.863 $\pm$ 0.081 & 0.879 $\pm$ 0.089 & 825k $\pm$ 50k & 20.671 $\pm$ 0.545 & 0.991 $\pm$ 0.003 & 2.038 $\pm$ 0.048 & 19.848 $\pm$ 0.243 & 15.234 $\pm$ 0.564 \\
 No LayerScale & 0.781 $\pm$ 0.124 & 0.803 $\pm$ 0.106 & 900k $\pm$ 115k & 17.686 $\pm$ 1.179 & 0.987 $\pm$ 0.006 & 2.093 $\pm$ 0.034 & 16.859 $\pm$ 1.023 & 12.682 $\pm$ 0.503 \\

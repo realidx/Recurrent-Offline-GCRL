@@ -3825,10 +3825,10 @@ index 0000000..60716d2
 +if __name__ == '__main__':
 +    main()
 diff --git a/impls/main.py b/impls/main.py
-index 3660e03..b7fd425 100644
+index 3660e03..4ac3e19 100644
 --- a/impls/main.py
 +++ b/impls/main.py
-@@ -1,51 +1,292 @@
+@@ -1,51 +1,308 @@
 +import glob
 +import hashlib
 +import re
@@ -3842,6 +3842,7 @@ index 3660e03..b7fd425 100644
 +import subprocess
  import time
  from collections import defaultdict
++from contextlib import contextmanager
  
  import jax
 +import jax.numpy as jnp
@@ -3866,6 +3867,16 @@ index 3660e03..b7fd425 100644
 +
  FLAGS = flags.FLAGS
  
++
++@contextmanager
++def _maybe_preserve_np_random_state(enabled=True):
++    state = np.random.get_state() if enabled else None
++    try:
++        yield
++    finally:
++        if state is not None:
++            np.random.set_state(state)
++
  flags.DEFINE_string('run_group', 'Debug', 'Run group.')
  flags.DEFINE_integer('seed', 0, 'Random seed.')
  flags.DEFINE_string('env_name', 'antmaze-large-navigate-v0', 'Environment (dataset) name.')
@@ -3904,6 +3915,11 @@ index 3660e03..b7fd425 100644
  flags.DEFINE_integer('video_episodes', 1, 'Number of video episodes for each task.')
  flags.DEFINE_integer('video_frame_skip', 3, 'Frame skip for videos.')
  flags.DEFINE_integer('eval_on_cpu', 1, 'Whether to evaluate on CPU.')
++flags.DEFINE_bool(
++    'preserve_training_rng_on_eval',
++    True,
++    'Preserve the global NumPy RNG around evaluation/validation diagnostics so logging does not change training batches.',
++)
 +flags.DEFINE_bool('eval_only', False, 'Skip training and run evaluation only (requires --restore_path).')
 +flags.DEFINE_bool(
 +    'restore_use_flags',
@@ -4124,7 +4140,7 @@ index 3660e03..b7fd425 100644
  
      FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, FLAGS.run_group, exp_name)
      os.makedirs(FLAGS.save_dir, exist_ok=True)
-@@ -53,108 +294,1969 @@ def main(_):
+@@ -53,108 +310,1974 @@ def main(_):
      with open(os.path.join(FLAGS.save_dir, 'flags.json'), 'w') as f:
          json.dump(flag_dict, f)
  
@@ -4159,13 +4175,13 @@ index 3660e03..b7fd425 100644
 +                min_d=config.get('min_d', 0),
 +            )
 +        return {}
- 
--    example_batch = train_dataset.sample(1)
++
 +    def _sample_dataset(dataset, batch_size, *, idxs=None, evaluation=False):
 +        sample_kwargs = dict(idxs=idxs, evaluation=evaluation)
 +        sample_kwargs.update(_dataset_sample_kwargs())
 +        return dataset.sample(batch_size, **sample_kwargs)
-+
+ 
+-    example_batch = train_dataset.sample(1)
 +    # Initialize agent.
 +    example_batch = _sample_dataset(train_dataset, 1)
      if config['discrete']:
@@ -5625,7 +5641,7 @@ index 3660e03..b7fd425 100644
 +                        dump_dict[f'critic_softmix_weight_step_{idx}_final'] = step_weights
 +        np.savez_compressed(os.path.join(refine_dir, f'step_{step:09d}.npz'), **dump_dict)
 +
-+    def run_evaluation(*, step: int, eval_agent, mark_final: bool = False):
++    def _run_evaluation_impl(*, step: int, eval_agent, mark_final: bool = False):
 +        nonlocal eval_count, last_eval_step
 +        eval_start = time.time()
 +        renders = []
@@ -5869,6 +5885,10 @@ index 3660e03..b7fd425 100644
 +        _add_compute_metrics(eval_metrics, step=step, total_time=eval_metrics['time/total_time'])
 +        wandb.log(_filter_metrics_for_wandb(eval_metrics, stage='eval'), step=step)
 +        eval_logger.log(eval_metrics, step=step)
++
++    def run_evaluation(*, step: int, eval_agent, mark_final: bool = False):
++        with _maybe_preserve_np_random_state(FLAGS.preserve_training_rng_on_eval):
++            return _run_evaluation_impl(step=step, eval_agent=eval_agent, mark_final=mark_final)
  
      # Train agent.
      train_logger = CsvLogger(os.path.join(FLAGS.save_dir, 'train.csv'))
@@ -5961,20 +5981,21 @@ index 3660e03..b7fd425 100644
 +            train_metrics.update(static_param_metrics)
 +            train_metrics.update({f'training/{k}': v for k, v in update_info.items()})
 +            if val_dataset is not None and i % validation_log_interval == 0:
-+                if config['agent_name'] == 'cgivl':
-+                    val_batch = _sample_dataset(val_dataset, config['batch_size'], evaluation=True)
-+                    _, val_info = agent.total_loss(
-+                        val_batch,
-+                        grad_params=None,
-+                        value_update=True,
-+                        low_actor_update=True,
-+                        high_actor_update=i >= FLAGS.value_warmup_steps,
-+                        goaldistance_update=i >= FLAGS.value_warmup_steps,
-+                        init_goal_rep=config.get('init_goal_rep', False),
-+                    )
-+                else:
-+                    val_batch = _sample_dataset(val_dataset, config['batch_size'], evaluation=True)
-+                    _, val_info = agent.total_loss(val_batch, grad_params=None)
++                with _maybe_preserve_np_random_state(FLAGS.preserve_training_rng_on_eval):
++                    if config['agent_name'] == 'cgivl':
++                        val_batch = _sample_dataset(val_dataset, config['batch_size'], evaluation=True)
++                        _, val_info = agent.total_loss(
++                            val_batch,
++                            grad_params=None,
++                            value_update=True,
++                            low_actor_update=True,
++                            high_actor_update=i >= FLAGS.value_warmup_steps,
++                            goaldistance_update=i >= FLAGS.value_warmup_steps,
++                            init_goal_rep=config.get('init_goal_rep', False),
++                        )
++                    else:
++                        val_batch = _sample_dataset(val_dataset, config['batch_size'], evaluation=True)
++                        _, val_info = agent.total_loss(val_batch, grad_params=None)
 +                # Validation metrics are agent-specific (e.g. HIQL uses value/low_actor/high_actor keys),
 +                # so log every scalar-like entry instead of a CRL-specific allowlist.
 +                validation_metrics = {}
