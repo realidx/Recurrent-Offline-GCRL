@@ -6,7 +6,7 @@ This project should be framed as a **critic-architecture paper for long-horizon 
 
 The central claim is:
 
-> Long-horizon offline GCRL is bottlenecked in part by value learning. Prior work mainly attacks this through algorithmic changes such as multi-step objectives, hierarchy, or policy extraction changes. We study a complementary axis: critic architecture. Standard MLP critics can produce diffuse and low-margin value signals on hard long-horizon state-goal pairs, while an iterative SwiGLU critic with FiLM, LayerScale, and pre-LN can produce sharper and more useful value signals at similar parameter or compute budgets.
+> Long-horizon offline GCRL is bottlenecked in part by value learning. Prior work mainly attacks this through algorithmic changes such as multi-step objectives, hierarchy, or policy extraction changes. We study a complementary axis: critic architecture. Standard MLP critics can produce diffuse and low-margin value signals on hard long-horizon state-goal pairs, while an iterative SwiGLU critic with LayerScale and pre-LN can produce sharper and more useful value signals at similar parameter or compute budgets.
 
 This is already enough for a full paper. The plan should stay centered on this claim.
 
@@ -32,7 +32,7 @@ The paper should not try to equally prove all three at full strength.
 
 The strongest concise framing is:
 
-> Long-horizon offline GCRL is hard. Existing work mostly attacks this through algorithmic changes. We study the critic architecture instead. Standard MLP critics become diffuse on hard state-goal pairs. Iterative refinement with SwiGLU, FiLM, LayerScale, and pre-LN produces sharper value signals at better efficiency, which improves downstream actor learning and transfers across value-based offline GCRL methods.
+> Long-horizon offline GCRL is hard. Existing work mostly attacks this through algorithmic changes. We study the critic architecture instead. Standard MLP critics become diffuse on hard state-goal pairs. Iterative refinement with SwiGLU, LayerScale, and pre-LN produces sharper value signals at better efficiency, which improves downstream actor learning and transfers across value-based offline GCRL methods.
 
 This keeps the paper centered on **critic architecture as a neglected axis** rather than claiming to solve every bottleneck in offline GCRL.
 
@@ -52,7 +52,7 @@ On hard tasks, a plain MLP critic produces a diffuse, low-margin, or ambiguous s
 
 ### 4. Method
 
-Use iterative refinement over the same `(s, g)` pair with a SwiGLU update block and FiLM conditioning, stabilized by LayerScale and pre-LN. The point is not to change the TD rule. The point is to iteratively sharpen the critic prediction.
+Use iterative refinement over the same `(s, g)` pair with a SwiGLU update block, stabilized by LayerScale and pre-LN. The point is not to change the TD rule. The point is to iteratively sharpen the critic prediction.
 
 ### 5. Main Result
 
@@ -301,22 +301,21 @@ What not to claim:
 - do not claim the model solves sparse long-horizon exploration or all offline GCRL bottlenecks
 - do not claim the mechanism is better global maze geometry unless graph-distance metrics support it
 - do not reduce the story to "margin goes up"
-- do not make input injection or output soft mixture part of the final mechanism because current evidence does not show benefit
+- keep only the current fixed-depth recurrent value mechanism in the final mechanism
 
 Final recurrent model for the mechanism story:
 
 - tied iterative refinement over a critic/value hidden state
 - SwiGLU update block
 - step embedding or step conditioning
-- FiLM modulation when enabled by the chosen config
+- the current fixed-depth recurrent value configuration
 - LayerScale stabilization
 - pre-LN recurrent update
 - fixed iteration count, with `iter4` as the current default final model
 
 The final model does not include:
 
-- repeated input injection into every recurrent step
-- output soft mixture over all recurrent steps
+- retired recurrent architecture variants
 
 Those variants can remain in appendix or design-search notes, but they should not be central mechanism figures.
 
@@ -481,8 +480,7 @@ Mechanism logging to track during training and evaluation:
 
 Metrics to demote:
 
-- input-injection ratios
-- soft-mixture weights or entropy
+- retired recurrent variant diagnostics
 - absolute Q/value magnitude without paired ranking or margin interpretation
 - duplicate percentiles for every metric
 - per-ensemble min/max debug metrics unless diagnosing instability
@@ -506,7 +504,7 @@ What not to claim:
 - do not claim that iterative refinement simply learns a uniformly better maze metric
 - do not claim that every geometry statistic must improve
 - do not reduce the mechanism story to "margin goes up"
-- do not claim that input injection or output soft mixture are part of the final mechanism
+- do not claim that retired recurrent variants are part of the final mechanism
 
 Preferred conclusion of this section:
 
@@ -721,7 +719,7 @@ You need at least one control showing the gain is from iterative refinement rath
 
 Recommended controls:
 
-- 1-step version of the same SwiGLU + FiLM + LayerScale + pre-LN block
+- 1-step version of the same SwiGLU + LayerScale + pre-LN block
 - if feasible, a small untied or unrolled feedforward control
 
 This helps isolate:

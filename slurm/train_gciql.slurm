@@ -91,16 +91,8 @@ RECUR_MAX_ITERS="${RECUR_MAX_ITERS:-${KTRAIN}}"
 RECUR_LN_MODE="${RECUR_LN_MODE:-per_layer_final}"
 RECUR_BLOCK_TYPE="${RECUR_BLOCK_TYPE:-dense}"
 RECUR_USE_STEP_INFO="${RECUR_USE_STEP_INFO:-1}"
-RECUR_SINUSOIDAL="${RECUR_SINUSOIDAL:-0}"
-RECUR_USE_FILM="${RECUR_USE_FILM:-0}"
-RECUR_FILM_MODE="${RECUR_FILM_MODE:-hidden}"
-RECUR_USE_INPUT_INJECTION="${RECUR_USE_INPUT_INJECTION:-0}"
-RECUR_USE_SOFT_MIXTURE="${RECUR_USE_SOFT_MIXTURE:-0}"
 RECUR_USE_LAYERSCALE="${RECUR_USE_LAYERSCALE:-1}"
 RECUR_SWIGLU_PRE_LN="${RECUR_SWIGLU_PRE_LN:-1}"
-RECUR_USE_ACT="${RECUR_USE_ACT:-0}"
-RECUR_ACT_EPSILON="${RECUR_ACT_EPSILON:-0.01}"
-RECUR_ACT_MIN_ITERS="${RECUR_ACT_MIN_ITERS:-1}"
 LAYERSCALE_INIT="${LAYERSCALE_INIT:-1e-2}"
 
 # Seeds controlled via env var: SEEDS="0 1 2"
@@ -266,10 +258,6 @@ append_recurrent_flags() {
         echo "Error: RECUR_BLOCK_TYPE=swiglu requires RECUR_NUM_DENSE_LAYERS=2." >&2
         exit 2
       fi
-      if [[ ! "${RECUR_FILM_MODE}" =~ ^(hidden|context|hidden_context)$ ]]; then
-        echo "Error: RECUR_FILM_MODE='${RECUR_FILM_MODE}' is invalid." >&2
-        exit 2
-      fi
       AGENT_FLAGS+=(
         "--agent.${module_name}_recur_iters=${KTRAIN}"
         "--agent.${module_name}_recur_num_dense_layers=${RECUR_NUM_DENSE_LAYERS}"
@@ -277,16 +265,8 @@ append_recurrent_flags() {
         "--agent.${module_name}_recur_max_iters=${RECUR_MAX_ITERS}"
         "--agent.${module_name}_recur_ln_mode=${RECUR_LN_MODE}"
         "--agent.${module_name}_recur_use_step_info=${RECUR_USE_STEP_INFO}"
-        "--agent.${module_name}_recur_sinusoidal=${RECUR_SINUSOIDAL}"
-        "--agent.${module_name}_recur_use_film=${RECUR_USE_FILM}"
-        "--agent.${module_name}_recur_film_mode=${RECUR_FILM_MODE}"
-        "--agent.${module_name}_recur_use_input_injection=${RECUR_USE_INPUT_INJECTION}"
-        "--agent.${module_name}_recur_use_soft_mixture=${RECUR_USE_SOFT_MIXTURE}"
         "--agent.${module_name}_recur_use_layerscale=${RECUR_USE_LAYERSCALE}"
         "--agent.${module_name}_recur_swiglu_pre_ln=${RECUR_SWIGLU_PRE_LN}"
-        "--agent.${module_name}_recur_use_act=${RECUR_USE_ACT}"
-        "--agent.${module_name}_recur_act_epsilon=${RECUR_ACT_EPSILON}"
-        "--agent.${module_name}_recur_act_min_iters=${RECUR_ACT_MIN_ITERS}"
         "--agent.${module_name}_layerscale_init=${LAYERSCALE_INIT}"
       )
       ;;

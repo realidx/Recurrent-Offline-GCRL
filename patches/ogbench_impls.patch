@@ -26,10 +26,10 @@ index 4596fe2..bab8556 100644
  )
 diff --git a/impls/agents/cgivl.py b/impls/agents/cgivl.py
 new file mode 100644
-index 0000000..441bfaf
+index 0000000..56ed36b
 --- /dev/null
 +++ b/impls/agents/cgivl.py
-@@ -0,0 +1,537 @@
+@@ -0,0 +1,525 @@
 +import copy
 +from functools import partial
 +from typing import Any
@@ -428,13 +428,7 @@ index 0000000..441bfaf
 +                recur_max_iters=int(config.get('value_recur_max_iters', 4)),
 +                recur_ln_mode=str(config.get('value_recur_ln_mode', 'per_layer_final')),
 +                recur_use_step_info=bool(config.get('value_recur_use_step_info', False)),
-+                recur_sinusoidal=bool(config.get('value_recur_sinusoidal', False)),
-+                recur_use_film=bool(config.get('value_recur_use_film', True)),
-+                recur_film_mode=str(config.get('value_recur_film_mode', 'hidden')),
 +                recur_use_layerscale=bool(config.get('value_recur_use_layerscale', True)),
-+                recur_use_act=bool(config.get('value_recur_use_act', False)),
-+                recur_act_epsilon=float(config.get('value_recur_act_epsilon', 0.01)),
-+                recur_act_min_iters=int(config.get('value_recur_act_min_iters', 1)),
 +                layerscale_init=float(config.get('value_layerscale_init', 1e-2)),
 +            )
 +            value_def = GCRecurrentValue(gc_encoder=value_encoder_def, **recur_value_kwargs)
@@ -525,13 +519,7 @@ index 0000000..441bfaf
 +            value_recur_max_iters=4,
 +            value_recur_ln_mode='per_layer_final',
 +            value_recur_use_step_info=False,
-+            value_recur_sinusoidal=False,
-+            value_recur_use_film=True,
-+            value_recur_film_mode='hidden',
 +            value_recur_use_layerscale=True,
-+            value_recur_use_act=False,
-+            value_recur_act_epsilon=0.01,
-+            value_recur_act_min_iters=1,
 +            value_layerscale_init=1e-2,
 +            low_actor_rep_grad=False,
 +            const_std=True,
@@ -568,10 +556,10 @@ index 0000000..441bfaf
 +    )
 +    return config
 diff --git a/impls/agents/crl.py b/impls/agents/crl.py
-index 53109ab..d4f7a7b 100644
+index 53109ab..2849e87 100644
 --- a/impls/agents/crl.py
 +++ b/impls/agents/crl.py
-@@ -21,52 +21,183 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -21,10 +21,18 @@ class CRLAgent(flax.struct.PyTreeNode):
      network: Any
      config: Any = nonpytree_field()
  
@@ -581,58 +569,18 @@ index 53109ab..d4f7a7b 100644
 +
      def contrastive_loss(self, batch, grad_params, module_name='critic'):
 -        """Compute the contrastive value loss for the Q or V function."""
+-        batch_size = batch['observations'].shape[0]
 +        """Compute the contrastive value loss for the Q or V function.
-+
+ 
 +        Supports two loss variants controlled by config['contrastive_loss_type']:
 +        - 'bce': Sigmoid binary cross-entropy (default, treats pairs independently)
 +        - 'infonce': InfoNCE with softmax (normalizes across all negatives)
 +        """
-         batch_size = batch['observations'].shape[0]
-+        use_aux = bool(
-+            self._is_recurrent_backbone(self.config.get('critic_backbone'))
-+            and (
-+                self.config.get('critic_recur_use_act', False)
-+                or self.config.get('critic_recur_use_soft_mixture', False)
-+                or self.config.get('critic_recur_use_input_injection', False)
-+            )
-+        )
-+
-+        def _step_mean_vector(step_values):
-+            arr = jnp.asarray(step_values)
-+            if arr.ndim < 2:
-+                return arr.reshape(-1)
-+            reduce_axes = tuple(i for i in range(arr.ndim) if i != arr.ndim - 2)
-+            return jnp.mean(arr, axis=reduce_axes)
- 
++        batch_size = batch['observations'].shape[0]
          if module_name == 'critic':
              actions = batch['actions']
          else:
-             actions = None
--        v, phi, psi = self.network.select(module_name)(
--            batch['observations'],
--            batch['value_goals'],
--            actions=actions,
--            info=True,
--            params=grad_params,
--        )
-+        act_aux = {}
-+        if use_aux:
-+            v, phi, psi, act_aux = self.network.select(module_name)(
-+                batch['observations'],
-+                batch['value_goals'],
-+                actions=actions,
-+                info=True,
-+                params=grad_params,
-+                return_aux=True,
-+            )
-+        else:
-+            v, phi, psi = self.network.select(module_name)(
-+                batch['observations'],
-+                batch['value_goals'],
-+                actions=actions,
-+                info=True,
-+                params=grad_params,
-+            )
+@@ -39,34 +47,65 @@ class CRLAgent(flax.struct.PyTreeNode):
          if len(phi.shape) == 2:  # Non-ensemble.
              phi = phi[None, ...]
              psi = psi[None, ...]
@@ -680,12 +628,6 @@ index 53109ab..d4f7a7b 100644
 +                out_axes=-1,
 +            )(logits)
 +            contrastive_loss = jnp.mean(contrastive_loss)
-+
-+        act_expected_steps_total = act_aux.get('act_expected_steps_total')
-+        act_ponder_loss = jnp.asarray(0.0, dtype=contrastive_loss.dtype)
-+        if act_expected_steps_total is not None:
-+            act_ponder_loss = float(self.config.get('critic_recur_act_ponder_weight', 0.0)) * act_expected_steps_total.mean()
-+            contrastive_loss = contrastive_loss + act_ponder_loss
  
          # Compute additional statistics.
 -        v = jnp.exp(v)
@@ -712,70 +654,11 @@ index 53109ab..d4f7a7b 100644
 +            'score_margin': score_margin,
 +            'ensemble_disagreement': ensemble_disagreement,
          }
-+        if act_expected_steps_total is not None:
-+            info['act_expected_steps_phi_mean'] = act_aux['act_expected_steps_phi'].mean()
-+            info['act_expected_steps_psi_mean'] = act_aux['act_expected_steps_psi'].mean()
-+            info['act_expected_steps_total_mean'] = act_expected_steps_total.mean()
-+            info['act_ponder_loss'] = act_ponder_loss
-+        hidden_drift_mean = act_aux.get('hidden_drift_mean')
-+        if hidden_drift_mean is not None:
-+            if 'hidden_drift_phi' in act_aux:
-+                info['hidden_drift_phi_mean'] = act_aux['hidden_drift_phi'].mean()
-+            if 'hidden_drift_psi' in act_aux:
-+                info['hidden_drift_psi_mean'] = act_aux['hidden_drift_psi'].mean()
-+            info['hidden_drift_mean'] = hidden_drift_mean.mean()
-+        input_ratio_mean = act_aux.get('input_injection_ratio_mean')
-+        if input_ratio_mean is not None:
-+            if 'input_injection_ratio_phi' in act_aux:
-+                info['input_injection_ratio_phi_mean'] = act_aux['input_injection_ratio_phi'].mean()
-+            if 'input_injection_ratio_psi' in act_aux:
-+                info['input_injection_ratio_psi_mean'] = act_aux['input_injection_ratio_psi'].mean()
-+            info['input_injection_ratio_mean'] = input_ratio_mean.mean()
-+        anchor_alignment_mean = act_aux.get('anchor_alignment_mean')
-+        if anchor_alignment_mean is not None:
-+            if 'anchor_alignment_phi' in act_aux:
-+                info['anchor_alignment_phi_mean'] = act_aux['anchor_alignment_phi'].mean()
-+            if 'anchor_alignment_psi' in act_aux:
-+                info['anchor_alignment_psi_mean'] = act_aux['anchor_alignment_psi'].mean()
-+            info['anchor_alignment_mean'] = anchor_alignment_mean.mean()
-+        softmix_expected_steps_total = act_aux.get('softmix_expected_steps_total')
-+        if softmix_expected_steps_total is not None:
-+            info['softmix_expected_steps_phi_mean'] = act_aux['softmix_expected_steps_phi'].mean()
-+            info['softmix_expected_steps_psi_mean'] = act_aux['softmix_expected_steps_psi'].mean()
-+            info['softmix_expected_steps_total_mean'] = softmix_expected_steps_total.mean()
-+            if 'softmix_expected_steps_mean' in act_aux:
-+                info['softmix_expected_steps_mean'] = act_aux['softmix_expected_steps_mean'].mean()
-+            if 'softmix_entropy_phi' in act_aux:
-+                info['softmix_entropy_phi_mean'] = act_aux['softmix_entropy_phi'].mean()
-+            if 'softmix_entropy_psi' in act_aux:
-+                info['softmix_entropy_psi_mean'] = act_aux['softmix_entropy_psi'].mean()
-+            if 'softmix_last_step_weight_phi' in act_aux:
-+                info['softmix_last_step_weight_phi_mean'] = act_aux['softmix_last_step_weight_phi'].mean()
-+            if 'softmix_last_step_weight_psi' in act_aux:
-+                info['softmix_last_step_weight_psi_mean'] = act_aux['softmix_last_step_weight_psi'].mean()
-+            if 'softmix_late_step_mass_phi' in act_aux:
-+                info['softmix_late_step_mass_phi_mean'] = act_aux['softmix_late_step_mass_phi'].mean()
-+            if 'softmix_late_step_mass_psi' in act_aux:
-+                info['softmix_late_step_mass_psi_mean'] = act_aux['softmix_late_step_mass_psi'].mean()
-+            if 'softmix_late_step_mass_mean' in act_aux:
-+                info['softmix_late_step_mass_mean'] = act_aux['softmix_late_step_mass_mean'].mean()
-+            if 'softmix_step_weights_phi' in act_aux:
-+                phi_step_means = _step_mean_vector(act_aux['softmix_step_weights_phi'])
-+                for step_idx, value in enumerate(phi_step_means, start=1):
-+                    info[f'softmix_weight_step_{step_idx}_phi_mean'] = value
-+            if 'softmix_step_weights_psi' in act_aux:
-+                psi_step_means = _step_mean_vector(act_aux['softmix_step_weights_psi'])
-+                for step_idx, value in enumerate(psi_step_means, start=1):
-+                    info[f'softmix_weight_step_{step_idx}_psi_mean'] = value
-+            if 'softmix_step_weights_mean' in act_aux:
-+                total_step_means = _step_mean_vector(act_aux['softmix_step_weights_mean'])
-+                for step_idx, value in enumerate(total_step_means, start=1):
-+                    info[f'softmix_weight_step_{step_idx}_mean'] = value
 +        return contrastive_loss, info
  
      def actor_loss(self, batch, grad_params, rng=None):
          """Compute the actor loss (AWR or DDPG+BC)."""
-@@ -104,6 +235,7 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -104,6 +143,7 @@ class CRLAgent(flax.struct.PyTreeNode):
              assert not self.config['discrete']
  
              dist = self.network.select('actor')(batch['observations'], batch['actor_goals'], params=grad_params)
@@ -783,7 +666,7 @@ index 53109ab..d4f7a7b 100644
              if self.config['const_std']:
                  q_actions = jnp.clip(dist.mode(), -1, 1)
              else:
-@@ -124,10 +256,7 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -124,10 +164,7 @@ class CRLAgent(flax.struct.PyTreeNode):
                  'q_loss': q_loss,
                  'bc_loss': bc_loss,
                  'q_mean': q.mean(),
@@ -795,7 +678,7 @@ index 53109ab..d4f7a7b 100644
              }
          else:
              raise ValueError(f'Unsupported actor loss: {self.config["actor_loss"]}')
-@@ -231,6 +360,29 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -231,6 +268,21 @@ class CRLAgent(flax.struct.PyTreeNode):
                  state_encoder=encoders.get('critic_state'),
                  goal_encoder=encoders.get('critic_goal'),
                  action_dim=action_dim,
@@ -811,21 +694,13 @@ index 53109ab..d4f7a7b 100644
 +                recur_max_iters=config['critic_recur_max_iters'],
 +                recur_ln_mode=str(config.get('critic_recur_ln_mode', 'per_layer_final')),
 +                recur_use_step_info=bool(config.get('critic_recur_use_step_info', False)),
-+                recur_sinusoidal=bool(config.get('critic_recur_sinusoidal', False)),
-+                recur_use_film=bool(config.get('critic_recur_use_film', True)),
-+                recur_film_mode=str(config.get('critic_recur_film_mode', 'hidden')),
-+                recur_use_input_injection=bool(config.get('critic_recur_use_input_injection', False)),
-+                recur_use_soft_mixture=bool(config.get('critic_recur_use_soft_mixture', False)),
 +                recur_use_layerscale=bool(config.get('critic_recur_use_layerscale', True)),
 +                recur_swiglu_pre_ln=bool(config.get('critic_recur_swiglu_pre_ln', True)),
-+                recur_use_act=bool(config.get('critic_recur_use_act', False)),
-+                recur_act_epsilon=float(config.get('critic_recur_act_epsilon', 0.01)),
-+                recur_act_min_iters=int(config.get('critic_recur_act_min_iters', 1)),
 +                layerscale_init=config['critic_layerscale_init'],
              )
          else:
              critic_def = GCBilinearValue(
-@@ -241,6 +393,29 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -241,6 +293,21 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
                  state_encoder=encoders.get('critic_state'),
                  goal_encoder=encoders.get('critic_goal'),
@@ -841,21 +716,13 @@ index 53109ab..d4f7a7b 100644
 +                recur_max_iters=config['critic_recur_max_iters'],
 +                recur_ln_mode=str(config.get('critic_recur_ln_mode', 'per_layer_final')),
 +                recur_use_step_info=bool(config.get('critic_recur_use_step_info', False)),
-+                recur_sinusoidal=bool(config.get('critic_recur_sinusoidal', False)),
-+                recur_use_film=bool(config.get('critic_recur_use_film', True)),
-+                recur_film_mode=str(config.get('critic_recur_film_mode', 'hidden')),
-+                recur_use_input_injection=bool(config.get('critic_recur_use_input_injection', False)),
-+                recur_use_soft_mixture=bool(config.get('critic_recur_use_soft_mixture', False)),
 +                recur_use_layerscale=bool(config.get('critic_recur_use_layerscale', True)),
 +                recur_swiglu_pre_ln=bool(config.get('critic_recur_swiglu_pre_ln', True)),
-+                recur_use_act=bool(config.get('critic_recur_use_act', False)),
-+                recur_act_epsilon=float(config.get('critic_recur_act_epsilon', 0.01)),
-+                recur_act_min_iters=int(config.get('critic_recur_act_min_iters', 1)),
 +                layerscale_init=config['critic_layerscale_init'],
              )
  
          if config['actor_loss'] == 'awr':
-@@ -253,6 +428,29 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -253,6 +320,21 @@ class CRLAgent(flax.struct.PyTreeNode):
                  value_exp=False,
                  state_encoder=encoders.get('value_state'),
                  goal_encoder=encoders.get('value_goal'),
@@ -871,21 +738,13 @@ index 53109ab..d4f7a7b 100644
 +                recur_max_iters=config['critic_recur_max_iters'],
 +                recur_ln_mode=str(config.get('critic_recur_ln_mode', 'per_layer_final')),
 +                recur_use_step_info=bool(config.get('critic_recur_use_step_info', False)),
-+                recur_sinusoidal=bool(config.get('critic_recur_sinusoidal', False)),
-+                recur_use_film=bool(config.get('critic_recur_use_film', True)),
-+                recur_film_mode=str(config.get('critic_recur_film_mode', 'hidden')),
-+                recur_use_input_injection=bool(config.get('critic_recur_use_input_injection', False)),
-+                recur_use_soft_mixture=bool(config.get('critic_recur_use_soft_mixture', False)),
 +                recur_use_layerscale=bool(config.get('critic_recur_use_layerscale', True)),
 +                recur_swiglu_pre_ln=bool(config.get('critic_recur_swiglu_pre_ln', True)),
-+                recur_use_act=bool(config.get('critic_recur_use_act', False)),
-+                recur_act_epsilon=float(config.get('critic_recur_act_epsilon', 0.01)),
-+                recur_act_min_iters=int(config.get('critic_recur_act_min_iters', 1)),
 +                layerscale_init=config['critic_layerscale_init'],
              )
  
          if config['discrete']:
-@@ -260,6 +458,10 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -260,6 +342,10 @@ class CRLAgent(flax.struct.PyTreeNode):
                  hidden_dims=config['actor_hidden_dims'],
                  action_dim=action_dim,
                  gc_encoder=encoders.get('actor'),
@@ -896,7 +755,7 @@ index 53109ab..d4f7a7b 100644
              )
          else:
              actor_def = GCActor(
-@@ -268,6 +470,10 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -268,6 +354,10 @@ class CRLAgent(flax.struct.PyTreeNode):
                  state_dependent_std=False,
                  const_std=config['const_std'],
                  gc_encoder=encoders.get('actor'),
@@ -907,7 +766,7 @@ index 53109ab..d4f7a7b 100644
              )
  
          network_info = dict(
-@@ -282,7 +488,15 @@ class CRLAgent(flax.struct.PyTreeNode):
+@@ -282,7 +372,15 @@ class CRLAgent(flax.struct.PyTreeNode):
          network_args = {k: v[1] for k, v in network_info.items()}
  
          network_def = ModuleDict(networks)
@@ -924,7 +783,7 @@ index 53109ab..d4f7a7b 100644
          network_params = network_def.init(init_rng, **network_args)['params']
          network = TrainState.create(network_def, network_params, tx=network_tx)
  
-@@ -295,8 +509,13 @@ def get_config():
+@@ -295,8 +393,13 @@ def get_config():
              # Agent hyperparameters.
              agent_name='crl',  # Agent name.
              lr=3e-4,  # Learning rate.
@@ -938,7 +797,7 @@ index 53109ab..d4f7a7b 100644
              value_hidden_dims=(512, 512, 512),  # Value network hidden dimensions.
              latent_dim=512,  # Latent dimension for phi and psi.
              layer_norm=True,  # Whether to use layer normalization.
-@@ -306,6 +525,28 @@ def get_config():
+@@ -306,6 +409,19 @@ def get_config():
              const_std=True,  # Whether to use constant standard deviation for the actor.
              discrete=False,  # Whether the action space is discrete.
              encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
@@ -953,21 +812,12 @@ index 53109ab..d4f7a7b 100644
 +            critic_layerscale_init=1e-2,  # LayerScale init for recur_tied.
 +            critic_recur_ln_mode='per_layer_final',  # 'pre_loop' | 'per_layer' | 'per_layer_final' | 'pre_loop_per_layer' for recur_tied LayerNorm placement.
 +            critic_recur_use_step_info=False,  # Inject loop-step information into recur_tied.
-+            critic_recur_sinusoidal=False,  # Use sinusoidal positional encoding (extrapolatable) instead of discrete step_embed.
-+            critic_recur_use_film=True,  # Enable FiLM modulation inside recur_tied.
-+            critic_recur_film_mode='hidden',  # One of: hidden | context | hidden_context.
-+            critic_recur_use_input_injection=False,  # Add a projected copy of the original critic input to every recurrent step.
-+            critic_recur_use_soft_mixture=False,  # Read out every recurrent step with a shared head and soft-mix them.
 +            critic_recur_use_layerscale=True,  # Use learnable residual scaling alpha_k in recur_tied.
 +            critic_recur_swiglu_pre_ln=True,  # Apply the single pre-loop LayerNorm in the SwiGLU recurrent cell.
-+            critic_recur_use_act=False,  # Enable ACT halting for recur_tied critic/value backbones.
-+            critic_recur_act_epsilon=0.01,  # ACT halting threshold slack for recur_tied critic/value backbones.
-+            critic_recur_act_min_iters=1,  # Minimum recurrent critic/value updates before ACT may halt.
-+            critic_recur_act_ponder_weight=0.0,  # Ponder-cost weight for recur_tied critic/value ACT.
              # Dataset hyperparameters.
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
-@@ -319,6 +560,9 @@ def get_config():
+@@ -319,6 +435,9 @@ def get_config():
              gc_negative=False,  # Unused (defined for compatibility with GCDataset).
              p_aug=0.0,  # Probability of applying image augmentation.
              frame_stack=ml_collections.config_dict.placeholder(int),  # Number of frames to stack.
@@ -978,7 +828,7 @@ index 53109ab..d4f7a7b 100644
      )
      return config
 diff --git a/impls/agents/gciql.py b/impls/agents/gciql.py
-index 559df71..b51d35a 100644
+index 559df71..b491919 100644
 --- a/impls/agents/gciql.py
 +++ b/impls/agents/gciql.py
 @@ -8,7 +8,7 @@ import ml_collections
@@ -1013,7 +863,7 @@ index 559df71..b51d35a 100644
                  'bc_log_prob': log_prob.mean(),
              }
              if not self.config['discrete']:
-@@ -214,15 +226,47 @@ class GCIQLAgent(flax.struct.PyTreeNode):
+@@ -214,15 +226,39 @@ class GCIQLAgent(flax.struct.PyTreeNode):
              encoders['critic'] = GCEncoder(concat_encoder=encoder_module())
              encoders['actor'] = GCEncoder(concat_encoder=encoder_module())
  
@@ -1038,16 +888,8 @@ index 559df71..b51d35a 100644
 +                    recur_max_iters=int(config.get(f'{module_name}_recur_max_iters', 16)),
 +                    recur_ln_mode=str(config.get(f'{module_name}_recur_ln_mode', 'per_layer_final')),
 +                    recur_use_step_info=bool(config.get(f'{module_name}_recur_use_step_info', False)),
-+                    recur_sinusoidal=bool(config.get(f'{module_name}_recur_sinusoidal', False)),
-+                    recur_use_film=bool(config.get(f'{module_name}_recur_use_film', True)),
-+                    recur_film_mode=str(config.get(f'{module_name}_recur_film_mode', 'hidden')),
-+                    recur_use_input_injection=bool(config.get(f'{module_name}_recur_use_input_injection', False)),
-+                    recur_use_soft_mixture=bool(config.get(f'{module_name}_recur_use_soft_mixture', False)),
 +                    recur_use_layerscale=bool(config.get(f'{module_name}_recur_use_layerscale', True)),
 +                    recur_swiglu_pre_ln=bool(config.get(f'{module_name}_recur_swiglu_pre_ln', True)),
-+                    recur_use_act=bool(config.get(f'{module_name}_recur_use_act', False)),
-+                    recur_act_epsilon=float(config.get(f'{module_name}_recur_act_epsilon', 0.01)),
-+                    recur_act_min_iters=int(config.get(f'{module_name}_recur_act_min_iters', 1)),
 +                    layerscale_init=float(config.get(f'{module_name}_layerscale_init', 1e-2)),
 +                )
 +            raise ValueError(f"Unsupported {module_name}_backbone={backbone!r}. Use 'mlp' or 'recur_tied'.")
@@ -1067,7 +909,7 @@ index 559df71..b51d35a 100644
              critic_def = GCDiscreteCritic(
                  hidden_dims=config['value_hidden_dims'],
                  layer_norm=config['layer_norm'],
-@@ -231,12 +275,7 @@ class GCIQLAgent(flax.struct.PyTreeNode):
+@@ -231,12 +267,7 @@ class GCIQLAgent(flax.struct.PyTreeNode):
                  action_dim=action_dim,
              )
          else:
@@ -1081,7 +923,7 @@ index 559df71..b51d35a 100644
  
          if config['discrete']:
              actor_def = GCDiscreteActor(
-@@ -291,6 +330,43 @@ def get_config():
+@@ -291,6 +322,27 @@ def get_config():
              const_std=True,  # Whether to use constant standard deviation for the actor.
              discrete=False,  # Whether the action space is discrete.
              encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
@@ -1093,16 +935,8 @@ index 559df71..b51d35a 100644
 +            value_recur_max_iters=16,
 +            value_recur_ln_mode='per_layer_final',
 +            value_recur_use_step_info=False,
-+            value_recur_sinusoidal=False,
-+            value_recur_use_film=True,
-+            value_recur_film_mode='hidden',
-+            value_recur_use_input_injection=False,
-+            value_recur_use_soft_mixture=False,
 +            value_recur_use_layerscale=True,
 +            value_recur_swiglu_pre_ln=True,
-+            value_recur_use_act=False,
-+            value_recur_act_epsilon=0.01,
-+            value_recur_act_min_iters=1,
 +            value_layerscale_init=1e-2,
 +            critic_backbone='mlp',  # 'mlp' | 'recur_tied'.
 +            critic_recur_iters=4,
@@ -1111,22 +945,14 @@ index 559df71..b51d35a 100644
 +            critic_recur_max_iters=16,
 +            critic_recur_ln_mode='per_layer_final',
 +            critic_recur_use_step_info=False,
-+            critic_recur_sinusoidal=False,
-+            critic_recur_use_film=True,
-+            critic_recur_film_mode='hidden',
-+            critic_recur_use_input_injection=False,
-+            critic_recur_use_soft_mixture=False,
 +            critic_recur_use_layerscale=True,
 +            critic_recur_swiglu_pre_ln=True,
-+            critic_recur_use_act=False,
-+            critic_recur_act_epsilon=0.01,
-+            critic_recur_act_min_iters=1,
 +            critic_layerscale_init=1e-2,
              # Dataset hyperparameters.
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.2,  # Probability of using the current state as the value goal.
 diff --git a/impls/agents/hiql.py b/impls/agents/hiql.py
-index 63e5dee..6a89703 100644
+index 63e5dee..ead92d2 100644
 --- a/impls/agents/hiql.py
 +++ b/impls/agents/hiql.py
 @@ -8,7 +8,7 @@ import ml_collections
@@ -1138,7 +964,7 @@ index 63e5dee..6a89703 100644
  
  
  class HIQLAgent(flax.struct.PyTreeNode):
-@@ -18,12 +18,82 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -18,12 +18,24 @@ class HIQLAgent(flax.struct.PyTreeNode):
      network: Any
      config: Any = nonpytree_field()
  
@@ -1152,25 +978,6 @@ index 63e5dee..6a89703 100644
          weight = jnp.where(adv >= 0, expectile, (1 - expectile))
          return weight * (diff**2)
  
-+    @staticmethod
-+    def _summarize_vector(values, prefix):
-+        """Return compact scalar summaries for a batch vector."""
-+        return {
-+            f'{prefix}_mean': values.mean(),
-+            f'{prefix}_std': values.std(),
-+            f'{prefix}_p10': jnp.quantile(values, 0.10),
-+            f'{prefix}_p50': jnp.quantile(values, 0.50),
-+            f'{prefix}_p90': jnp.quantile(values, 0.90),
-+        }
-+
-+    @staticmethod
-+    def _repeat_batch(tree, repeats):
-+        """Repeat a batch-shaped pytree along a new axis then flatten it back."""
-+        return jax.tree_util.tree_map(
-+            lambda x: jnp.repeat(x[:, None, ...], repeats, axis=1).reshape((x.shape[0] * repeats,) + x.shape[1:]),
-+            tree,
-+        )
-+
 +    def _mean_value(self, observations, goals, num_iters=None):
 +        """Return the ensemble-averaged value prediction."""
 +        if num_iters is None:
@@ -1179,141 +986,20 @@ index 63e5dee..6a89703 100644
 +            v1, v2 = self.network.select('value')(observations, goals, num_iters=num_iters)
 +        return (v1 + v2) / 2
 +
-+    def _actor_value_num_iters(self, actor_name):
-+        """Return the fixed recurrent value depth used for actor AWR, or None for default final depth."""
-+        if not self._is_recurrent_backbone(self.config.get('value_backbone')):
-+            return None
-+        specific = int(self.config.get(f'{actor_name}_actor_value_num_iters', 0))
-+        shared = int(self.config.get('actor_value_num_iters', 0))
-+        num_iters = specific if specific > 0 else shared
-+        return num_iters if num_iters > 0 else None
-+
-+    def _compute_actor_confidence(self, observations, goals):
-+        """Compute a stop-gradient confidence score from positive-vs-negative goal separation."""
-+        num_negatives = max(1, int(self.config.get('actor_confidence_num_negatives', 4)))
-+        negative_goals = jnp.stack([jnp.roll(goals, shift=offset, axis=0) for offset in range(1, num_negatives + 1)], axis=1)
-+
-+        pos_v = self._mean_value(observations, goals)
-+        flat_observations = self._repeat_batch(observations, num_negatives)
-+        flat_negative_goals = negative_goals.reshape((goals.shape[0] * num_negatives,) + goals.shape[1:])
-+        neg_v = self._mean_value(flat_observations, flat_negative_goals).reshape(goals.shape[0], num_negatives)
-+        neg_lse = jax.scipy.special.logsumexp(neg_v, axis=1)
-+
-+        margin = pos_v - neg_lse
-+        margin_norm = (margin - margin.mean()) / (margin.std() + 1e-6)
-+        confidence = float(self.config.get('actor_confidence_min', 0.1)) + (
-+            1.0 - float(self.config.get('actor_confidence_min', 0.1))
-+        ) * jax.nn.sigmoid(
-+            (margin_norm - float(self.config.get('actor_confidence_tau', 0.0)))
-+            / float(self.config.get('actor_confidence_temperature', 1.0))
-+        )
-+
-+        confidence_info = {}
-+        confidence_info.update(self._summarize_vector(margin, 'margin'))
-+        confidence_info.update(self._summarize_vector(margin_norm, 'margin_norm'))
-+        confidence_info.update(self._summarize_vector(confidence, 'confidence'))
-+        confidence_info['confidence_low_saturation_frac'] = jnp.mean((confidence <= 0.15).astype(jnp.float32))
-+        confidence_info['confidence_high_saturation_frac'] = jnp.mean((confidence >= 0.95).astype(jnp.float32))
-+        confidence_info['pos_value_mean'] = pos_v.mean()
-+        confidence_info['neg_lse_mean'] = neg_lse.mean()
-+        return jax.lax.stop_gradient(confidence), confidence_info
-+
      def value_loss(self, batch, grad_params):
          """Compute the IVL value loss.
  
-@@ -43,30 +113,110 @@ class HIQLAgent(flax.struct.PyTreeNode):
- 
-         q1 = batch['rewards'] + self.config['discount'] * batch['masks'] * next_v1_t
-         q2 = batch['rewards'] + self.config['discount'] * batch['masks'] * next_v2_t
--        (v1, v2) = self.network.select('value')(batch['observations'], batch['value_goals'], params=grad_params)
-+        value_use_aux = bool(
-+            self._is_recurrent_backbone(self.config.get('value_backbone'))
-+            and (
-+                self.config.get('value_recur_use_act', False)
-+                or self.config.get('value_recur_use_soft_mixture', False)
-+                or self.config.get('value_recur_deep_supervision', False)
-+            )
-+        )
-+        value_aux = {}
-+        if value_use_aux:
-+            (v1, v2), value_aux = self.network.select('value')(
-+                batch['observations'],
-+                batch['value_goals'],
-+                params=grad_params,
-+                return_aux=True,
-+            )
-+        else:
-+            (v1, v2) = self.network.select('value')(batch['observations'], batch['value_goals'], params=grad_params)
-         v = (v1 + v2) / 2
- 
-         value_loss1 = self.expectile_loss(adv, q1 - v1, self.config['expectile']).mean()
+@@ -50,19 +62,18 @@ class HIQLAgent(flax.struct.PyTreeNode):
          value_loss2 = self.expectile_loss(adv, q2 - v2, self.config['expectile']).mean()
          value_loss = value_loss1 + value_loss2
--
+ 
 -        return value_loss, {
-+        deep_supervision_loss = None
-+        step_losses = None
-+        if self.config.get('value_recur_deep_supervision', False):
-+            step_values = value_aux.get('value_step_outputs')
-+            if step_values is None:
-+                raise ValueError('value_recur_deep_supervision=True requires recurrent value_step_outputs aux.')
-+            step_values = jnp.squeeze(step_values, axis=-1)
-+            step_v1 = step_values[0]
-+            step_v2 = step_values[1]
-+            num_steps = step_v1.shape[0]
-+            include_final = bool(self.config.get('value_recur_deep_supervision_include_final', False))
-+            num_supervised_steps = num_steps if include_final else max(num_steps - 1, 0)
-+            if num_supervised_steps > 0:
-+                step_v1 = step_v1[:num_supervised_steps]
-+                step_v2 = step_v2[:num_supervised_steps]
-+                step_loss1 = self.expectile_loss(
-+                    adv[None, :], q1[None, :] - step_v1, self.config['expectile']
-+                ).mean(axis=-1)
-+                step_loss2 = self.expectile_loss(
-+                    adv[None, :], q2[None, :] - step_v2, self.config['expectile']
-+                ).mean(axis=-1)
-+                step_losses = step_loss1 + step_loss2
-+                scheme = str(self.config.get('value_recur_deep_supervision_scheme', 'linear'))
-+                if scheme == 'uniform':
-+                    step_weights = jnp.ones((num_supervised_steps,), dtype=step_losses.dtype)
-+                elif scheme == 'linear':
-+                    step_weights = jnp.arange(1, num_supervised_steps + 1, dtype=step_losses.dtype)
-+                else:
-+                    raise ValueError(
-+                        f"Unsupported value_recur_deep_supervision_scheme={scheme!r}. Use 'uniform' or 'linear'."
-+                    )
-+                step_weights = step_weights / jnp.mean(step_weights)
-+                deep_supervision_loss = jnp.mean(step_weights * step_losses)
-+                value_loss = value_loss + float(self.config.get('value_recur_deep_supervision_weight', 1.0)) * deep_supervision_loss
-+        act_expected_steps = value_aux.get('act_expected_steps')
-+        ponder_loss = jnp.asarray(0.0, dtype=v.dtype)
-+        if act_expected_steps is not None:
-+            ponder_loss = float(self.config.get('value_recur_act_ponder_weight', 0.0)) * act_expected_steps.mean()
-+            value_loss = value_loss + ponder_loss
-+
 +        info = {
              'value_loss': value_loss,
              'v_mean': v.mean(),
              'v_max': v.max(),
              'v_min': v.min(),
          }
-+        if act_expected_steps is not None:
-+            info['act_expected_steps_mean'] = act_expected_steps.mean()
-+            info['act_ponder_loss'] = ponder_loss
-+        if deep_supervision_loss is not None:
-+            info['deep_supervision_loss'] = deep_supervision_loss
-+            info['deep_supervision_weighted_loss'] = (
-+                float(self.config.get('value_recur_deep_supervision_weight', 1.0)) * deep_supervision_loss
-+            )
-+            for step_idx in range(step_losses.shape[0]):
-+                info[f'deep_supervision_step_{step_idx + 1}_loss'] = step_losses[step_idx]
-+        softmix_expected_steps = value_aux.get('softmix_expected_steps')
-+        if softmix_expected_steps is not None:
-+            info['softmix_expected_steps_mean'] = softmix_expected_steps.mean()
-+            if 'softmix_entropy' in value_aux:
-+                info['softmix_entropy_mean'] = value_aux['softmix_entropy'].mean()
-+            if 'softmix_last_step_weight' in value_aux:
-+                info['softmix_last_step_weight_mean'] = value_aux['softmix_last_step_weight'].mean()
 +        return value_loss, info
  
      def low_actor_loss(self, batch, grad_params):
@@ -1322,26 +1008,12 @@ index 63e5dee..6a89703 100644
 -        nv1, nv2 = self.network.select('value')(batch['next_observations'], batch['low_actor_goals'])
 -        v = (v1 + v2) / 2
 -        nv = (nv1 + nv2) / 2
-+        actor_value_num_iters = self._actor_value_num_iters('low')
-+        v = self._mean_value(batch['observations'], batch['low_actor_goals'], num_iters=actor_value_num_iters)
-+        nv = self._mean_value(batch['next_observations'], batch['low_actor_goals'], num_iters=actor_value_num_iters)
++        v = self._mean_value(batch['observations'], batch['low_actor_goals'])
++        nv = self._mean_value(batch['next_observations'], batch['low_actor_goals'])
          adv = nv - v
  
--        exp_a = jnp.exp(adv * self.config['low_alpha'])
--        exp_a = jnp.minimum(exp_a, 100.0)
-+        confidence = jnp.ones_like(adv)
-+        confidence_info = {}
-+        if self.config.get('actor_confidence_gate', False):
-+            confidence, confidence_info = self._compute_actor_confidence(
-+                batch['observations'], batch['low_actor_goals']
-+            )
-+
-+        exp_a = jnp.exp(adv * self.config['low_alpha'] * confidence)
-+        exp_a = jnp.minimum(exp_a, float(self.config.get('actor_confidence_weight_clip', 100.0)))
- 
-         # Compute the goal representations of the subgoals.
-         goal_reps = self.network.select('goal_rep')(
-@@ -80,12 +230,26 @@ class HIQLAgent(flax.struct.PyTreeNode):
+         exp_a = jnp.exp(adv * self.config['low_alpha'])
+@@ -80,10 +91,22 @@ class HIQLAgent(flax.struct.PyTreeNode):
          log_prob = dist.log_prob(batch['actions'])
  
          actor_loss = -(exp_a * log_prob).mean()
@@ -1361,14 +1033,10 @@ index 63e5dee..6a89703 100644
 +            'awr_weight_mean': exp_a.mean(),
 +            'awr_weight_max': exp_a.max(),
 +            'awr_weight_ess_frac': weight_ess_frac,
-+            'value_num_iters': 0 if actor_value_num_iters is None else actor_value_num_iters,
              'bc_log_prob': log_prob.mean(),
          }
-+        actor_info.update(confidence_info)
          if not self.config['discrete']:
-             actor_info.update(
-                 {
-@@ -98,14 +262,20 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -98,10 +121,8 @@ class HIQLAgent(flax.struct.PyTreeNode):
  
      def high_actor_loss(self, batch, grad_params):
          """Compute the high-level actor loss."""
@@ -1376,26 +1044,12 @@ index 63e5dee..6a89703 100644
 -        nv1, nv2 = self.network.select('value')(batch['high_actor_targets'], batch['high_actor_goals'])
 -        v = (v1 + v2) / 2
 -        nv = (nv1 + nv2) / 2
-+        actor_value_num_iters = self._actor_value_num_iters('high')
-+        v = self._mean_value(batch['observations'], batch['high_actor_goals'], num_iters=actor_value_num_iters)
-+        nv = self._mean_value(batch['high_actor_targets'], batch['high_actor_goals'], num_iters=actor_value_num_iters)
++        v = self._mean_value(batch['observations'], batch['high_actor_goals'])
++        nv = self._mean_value(batch['high_actor_targets'], batch['high_actor_goals'])
          adv = nv - v
  
--        exp_a = jnp.exp(adv * self.config['high_alpha'])
--        exp_a = jnp.minimum(exp_a, 100.0)
-+        confidence = jnp.ones_like(adv)
-+        confidence_info = {}
-+        if self.config.get('actor_confidence_gate', False):
-+            confidence, confidence_info = self._compute_actor_confidence(
-+                batch['observations'], batch['high_actor_goals']
-+            )
-+
-+        exp_a = jnp.exp(adv * self.config['high_alpha'] * confidence)
-+        exp_a = jnp.minimum(exp_a, float(self.config.get('actor_confidence_weight_clip', 100.0)))
- 
-         dist = self.network.select('high_actor')(batch['observations'], batch['high_actor_goals'], params=grad_params)
-         target = self.network.select('goal_rep')(
-@@ -114,14 +284,29 @@ class HIQLAgent(flax.struct.PyTreeNode):
+         exp_a = jnp.exp(adv * self.config['high_alpha'])
+@@ -114,14 +135,27 @@ class HIQLAgent(flax.struct.PyTreeNode):
          log_prob = dist.log_prob(target)
  
          actor_loss = -(exp_a * log_prob).mean()
@@ -1416,17 +1070,15 @@ index 63e5dee..6a89703 100644
 +            'awr_weight_mean': exp_a.mean(),
 +            'awr_weight_max': exp_a.max(),
 +            'awr_weight_ess_frac': weight_ess_frac,
-+            'value_num_iters': 0 if actor_value_num_iters is None else actor_value_num_iters,
              'bc_log_prob': log_prob.mean(),
              'mse': jnp.mean((dist.mode() - target) ** 2),
              'std': jnp.mean(dist.scale_diag),
          }
-+        actor_info.update(confidence_info)
 +        return actor_loss, actor_info
  
      @jax.jit
      def total_loss(self, batch, grad_params, rng=None):
-@@ -259,18 +444,45 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -259,18 +293,37 @@ class HIQLAgent(flax.struct.PyTreeNode):
              high_actor_encoder_def = None
  
          # Define value and actor networks.
@@ -1465,16 +1117,8 @@ index 63e5dee..6a89703 100644
 +                recur_ln_mode=str(config.get('value_recur_ln_mode', 'per_layer_final')),
 +                recur_use_step_info=bool(config.get('value_recur_use_step_info', False)),
 +                recur_step_info_inner_mode=str(config.get('value_recur_step_info_inner_mode', 'all')),
-+                recur_sinusoidal=bool(config.get('value_recur_sinusoidal', False)),
-+                recur_use_film=bool(config.get('value_recur_use_film', True)),
-+                recur_film_mode=str(config.get('value_recur_film_mode', 'hidden')),
-+                recur_use_input_injection=bool(config.get('value_recur_use_input_injection', False)),
-+                recur_use_soft_mixture=bool(config.get('value_recur_use_soft_mixture', False)),
 +                recur_use_layerscale=bool(config.get('value_recur_use_layerscale', True)),
 +                recur_use_inner_residual=bool(config.get('value_recur_use_inner_residual', True)),
-+                recur_use_act=bool(config.get('value_recur_use_act', False)),
-+                recur_act_epsilon=float(config.get('value_recur_act_epsilon', 0.01)),
-+                recur_act_min_iters=int(config.get('value_recur_act_min_iters', 1)),
 +                layerscale_init=float(config.get('value_layerscale_init', 1e-2)),
 +            )
 +            value_def = GCRecurrentValue(gc_encoder=value_encoder_def, **recur_value_kwargs)
@@ -1484,7 +1128,7 @@ index 63e5dee..6a89703 100644
  
          if config['discrete']:
              low_actor_def = GCDiscreteActor(
-@@ -306,7 +518,15 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -306,7 +359,15 @@ class HIQLAgent(flax.struct.PyTreeNode):
          network_args = {k: v[1] for k, v in network_info.items()}
  
          network_def = ModuleDict(networks)
@@ -1501,7 +1145,7 @@ index 63e5dee..6a89703 100644
          network_params = network_def.init(init_rng, **network_args)['params']
          network = TrainState.create(network_def, network_params, tx=network_tx)
  
-@@ -322,9 +542,12 @@ def get_config():
+@@ -322,9 +383,12 @@ def get_config():
              # Agent hyperparameters.
              agent_name='hiql',  # Agent name.
              lr=3e-4,  # Learning rate.
@@ -1514,7 +1158,7 @@ index 63e5dee..6a89703 100644
              layer_norm=True,  # Whether to use layer normalization.
              discount=0.99,  # Discount factor.
              tau=0.005,  # Target network update rate.
-@@ -333,6 +556,38 @@ def get_config():
+@@ -333,6 +397,16 @@ def get_config():
              high_alpha=3.0,  # High-level AWR temperature.
              subgoal_steps=25,  # Subgoal steps.
              rep_dim=10,  # Goal representation dimension.
@@ -1525,39 +1169,17 @@ index 63e5dee..6a89703 100644
 +            value_recur_ln_mode='per_layer_final',  # 'pre_loop' | 'per_layer' | 'per_layer_final' | 'pre_loop_per_layer' recurrent value LayerNorm placement.
 +            value_recur_use_step_info=False,  # Inject step information into the recurrent HIQL value.
 +            value_recur_step_info_inner_mode='all',  # 'all' | 'first' inner block placement for stacked SwiGLU step information.
-+            value_recur_sinusoidal=False,  # Use sinusoidal step encoding for recurrent HIQL value.
-+            value_recur_use_film=True,  # Enable FiLM inside the recurrent HIQL value.
-+            value_recur_film_mode='hidden',  # One of: hidden | context | hidden_context.
-+            value_recur_use_input_injection=False,  # Add a projected copy of the original value input to every recurrent step.
-+            value_recur_use_soft_mixture=False,  # Read out every recurrent step with a shared head and soft-mix them.
 +            value_recur_use_layerscale=True,  # Use LayerScale in the recurrent HIQL value.
 +            value_recur_use_inner_residual=True,  # Use residual connections between inner stacked SwiGLU blocks.
-+            value_recur_use_act=False,  # Enable ACT halting for recurrent HIQL value.
-+            value_recur_act_epsilon=0.01,  # ACT halting threshold slack for recurrent HIQL value.
-+            value_recur_act_min_iters=1,  # Minimum recurrent updates before HIQL value may halt.
-+            value_recur_act_ponder_weight=0.0,  # Ponder-cost weight for recurrent HIQL value ACT.
-+            value_recur_deep_supervision=False,  # Add auxiliary expectile losses on recurrent value exits.
-+            value_recur_deep_supervision_weight=1.0,  # Multiplier for auxiliary recurrent-exit value losses.
-+            value_recur_deep_supervision_scheme='linear',  # 'uniform' | 'linear' weights over supervised exits.
-+            value_recur_deep_supervision_include_final=False,  # Also supervise final exit in the auxiliary loss.
-+            actor_value_num_iters=0,  # Recurrent value depth for both HIQL actor AWR weights (0 = final/default).
-+            low_actor_value_num_iters=0,  # Optional low-actor AWR value-depth override (0 = shared/default).
-+            high_actor_value_num_iters=0,  # Optional high-actor AWR value-depth override (0 = shared/default).
 +            value_layerscale_init=1e-2,  # LayerScale init for recurrent HIQL value.
-+            actor_confidence_gate=False,  # Whether to confidence-scale HIQL AWR weights.
-+            actor_confidence_num_negatives=4,  # Number of in-batch rolled negatives for the confidence margin.
-+            actor_confidence_tau=0.0,  # Confidence gate threshold in normalized-margin space.
-+            actor_confidence_temperature=1.0,  # Confidence gate temperature in normalized-margin space.
-+            actor_confidence_min=0.1,  # Minimum confidence floor to preserve some policy improvement signal.
-+            actor_confidence_weight_clip=100.0,  # Clip for confidence-scaled AWR weights.
              low_actor_rep_grad=False,  # Whether low-actor gradients flow to goal representation (use True for pixels).
              const_std=True,  # Whether to use constant standard deviation for the actors.
              discrete=False,  # Whether the action space is discrete.
 diff --git a/impls/agents/qrl.py b/impls/agents/qrl.py
-index 79852cb..cc4fa11 100644
+index 79852cb..970c38f 100644
 --- a/impls/agents/qrl.py
 +++ b/impls/agents/qrl.py
-@@ -234,6 +234,29 @@ class QRLAgent(flax.struct.PyTreeNode):
+@@ -234,6 +234,21 @@ class QRLAgent(flax.struct.PyTreeNode):
                  latent_dim=config['latent_dim'],
                  layer_norm=config['layer_norm'],
                  encoder=encoders.get('value'),
@@ -1573,21 +1195,13 @@ index 79852cb..cc4fa11 100644
 +                recur_max_iters=config['critic_recur_max_iters'],
 +                recur_ln_mode=str(config.get('critic_recur_ln_mode', 'per_layer_final')),
 +                recur_use_step_info=bool(config.get('critic_recur_use_step_info', False)),
-+                recur_sinusoidal=bool(config.get('critic_recur_sinusoidal', False)),
-+                recur_use_film=bool(config.get('critic_recur_use_film', True)),
-+                recur_film_mode=str(config.get('critic_recur_film_mode', 'hidden')),
-+                recur_use_input_injection=bool(config.get('critic_recur_use_input_injection', False)),
-+                recur_use_soft_mixture=bool(config.get('critic_recur_use_soft_mixture', False)),
 +                recur_use_layerscale=bool(config.get('critic_recur_use_layerscale', True)),
 +                recur_swiglu_pre_ln=bool(config.get('critic_recur_swiglu_pre_ln', True)),
-+                recur_use_act=bool(config.get('critic_recur_use_act', False)),
-+                recur_act_epsilon=float(config.get('critic_recur_act_epsilon', 0.01)),
-+                recur_act_min_iters=int(config.get('critic_recur_act_min_iters', 1)),
 +                layerscale_init=config['critic_layerscale_init'],
              )
          elif config['quasimetric_type'] == 'iqe':
              value_def = GCIQEValue(
-@@ -242,6 +265,29 @@ class QRLAgent(flax.struct.PyTreeNode):
+@@ -242,6 +257,21 @@ class QRLAgent(flax.struct.PyTreeNode):
                  dim_per_component=8,
                  layer_norm=config['layer_norm'],
                  encoder=encoders.get('value'),
@@ -1603,21 +1217,13 @@ index 79852cb..cc4fa11 100644
 +                recur_max_iters=config['critic_recur_max_iters'],
 +                recur_ln_mode=str(config.get('critic_recur_ln_mode', 'per_layer_final')),
 +                recur_use_step_info=bool(config.get('critic_recur_use_step_info', False)),
-+                recur_sinusoidal=bool(config.get('critic_recur_sinusoidal', False)),
-+                recur_use_film=bool(config.get('critic_recur_use_film', True)),
-+                recur_film_mode=str(config.get('critic_recur_film_mode', 'hidden')),
-+                recur_use_input_injection=bool(config.get('critic_recur_use_input_injection', False)),
-+                recur_use_soft_mixture=bool(config.get('critic_recur_use_soft_mixture', False)),
 +                recur_use_layerscale=bool(config.get('critic_recur_use_layerscale', True)),
 +                recur_swiglu_pre_ln=bool(config.get('critic_recur_swiglu_pre_ln', True)),
-+                recur_use_act=bool(config.get('critic_recur_use_act', False)),
-+                recur_act_epsilon=float(config.get('critic_recur_act_epsilon', 0.01)),
-+                recur_act_min_iters=int(config.get('critic_recur_act_min_iters', 1)),
 +                layerscale_init=config['critic_layerscale_init'],
              )
          else:
              raise ValueError(f'Unsupported quasimetric type: {config["quasimetric_type"]}')
-@@ -310,6 +356,28 @@ def get_config():
+@@ -310,6 +340,19 @@ def get_config():
              const_std=True,  # Whether to use constant standard deviation for the actor.
              discrete=False,  # Whether the action space is discrete.
              encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
@@ -1632,26 +1238,17 @@ index 79852cb..cc4fa11 100644
 +            critic_layerscale_init=1e-2,  # LayerScale init for recur_tied.
 +            critic_recur_ln_mode='per_layer_final',  # 'pre_loop' | 'per_layer' | 'per_layer_final' | 'pre_loop_per_layer' for recur_tied LayerNorm placement.
 +            critic_recur_use_step_info=False,  # Inject loop-step information into recur_tied.
-+            critic_recur_sinusoidal=False,  # Use sinusoidal positional encoding instead of discrete step_embed.
-+            critic_recur_use_film=True,  # Enable FiLM modulation inside recur_tied.
-+            critic_recur_film_mode='hidden',  # One of: hidden | context | hidden_context.
-+            critic_recur_use_input_injection=False,  # Add a projected copy of the original critic input to every recurrent step.
-+            critic_recur_use_soft_mixture=False,  # Read out every recurrent step with a shared head and soft-mix them.
 +            critic_recur_use_layerscale=True,  # Use learnable residual scaling alpha_k in recur_tied.
 +            critic_recur_swiglu_pre_ln=True,  # Apply the single pre-loop LayerNorm in the SwiGLU recurrent cell.
-+            critic_recur_use_act=False,  # Enable ACT halting for recur_tied quasimetric value backbones.
-+            critic_recur_act_epsilon=0.01,  # ACT halting threshold slack for recur_tied quasimetric value backbones.
-+            critic_recur_act_min_iters=1,  # Minimum recurrent value updates before ACT may halt.
-+            critic_recur_act_ponder_weight=0.0,  # Accepted for launcher compatibility; QRL currently does not add a ponder-cost term.
              # Dataset hyperparameters.
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
 diff --git a/impls/agents/saw.py b/impls/agents/saw.py
 new file mode 100644
-index 0000000..4e17508
+index 0000000..4f224eb
 --- /dev/null
 +++ b/impls/agents/saw.py
-@@ -0,0 +1,430 @@
+@@ -0,0 +1,382 @@
 +import copy
 +from typing import Any
 +
@@ -1695,33 +1292,12 @@ index 0000000..4e17508
 +
 +        q1 = batch['rewards'] + self.config['discount'] * batch['masks'] * next_v1_t
 +        q2 = batch['rewards'] + self.config['discount'] * batch['masks'] * next_v2_t
-+        value_use_aux = bool(
-+            self._is_recurrent_backbone(self.config.get('value_backbone'))
-+            and (
-+                self.config.get('value_recur_use_act', False)
-+                or self.config.get('value_recur_use_soft_mixture', False)
-+            )
-+        )
-+        value_aux = {}
-+        if value_use_aux:
-+            (v1, v2), value_aux = self.network.select('value')(
-+                batch['observations'],
-+                batch['value_goals'],
-+                params=grad_params,
-+                return_aux=True,
-+            )
-+        else:
-+            (v1, v2) = self.network.select('value')(batch['observations'], batch['value_goals'], params=grad_params)
++        (v1, v2) = self.network.select('value')(batch['observations'], batch['value_goals'], params=grad_params)
 +        v = (v1 + v2) / 2
 +
 +        value_loss1 = self.expectile_loss(adv, q1 - v1, self.config['expectile']).mean()
 +        value_loss2 = self.expectile_loss(adv, q2 - v2, self.config['expectile']).mean()
 +        value_loss = value_loss1 + value_loss2
-+        act_expected_steps = value_aux.get('act_expected_steps')
-+        ponder_loss = jnp.asarray(0.0, dtype=v.dtype)
-+        if act_expected_steps is not None:
-+            ponder_loss = float(self.config.get('value_recur_act_ponder_weight', 0.0)) * act_expected_steps.mean()
-+            value_loss = value_loss + ponder_loss
 +
 +        info = {
 +            'value_loss': value_loss,
@@ -1729,16 +1305,6 @@ index 0000000..4e17508
 +            'v_max': v.max(),
 +            'v_min': v.min(),
 +        }
-+        if act_expected_steps is not None:
-+            info['act_expected_steps_mean'] = act_expected_steps.mean()
-+            info['act_ponder_loss'] = ponder_loss
-+        softmix_expected_steps = value_aux.get('softmix_expected_steps')
-+        if softmix_expected_steps is not None:
-+            info['softmix_expected_steps_mean'] = softmix_expected_steps.mean()
-+            if 'softmix_entropy' in value_aux:
-+                info['softmix_entropy_mean'] = value_aux['softmix_entropy'].mean()
-+            if 'softmix_last_step_weight' in value_aux:
-+                info['softmix_last_step_weight_mean'] = value_aux['softmix_last_step_weight'].mean()
 +        return value_loss, info
 +
 +    def target_actor_loss(self, batch, grad_params):
@@ -1953,15 +1519,7 @@ index 0000000..4e17508
 +                recur_max_iters=int(config.get('value_recur_max_iters', 16)),
 +                recur_ln_mode=str(config.get('value_recur_ln_mode', 'per_layer_final')),
 +                recur_use_step_info=bool(config.get('value_recur_use_step_info', False)),
-+                recur_sinusoidal=bool(config.get('value_recur_sinusoidal', False)),
-+                recur_use_film=bool(config.get('value_recur_use_film', True)),
-+                recur_film_mode=str(config.get('value_recur_film_mode', 'hidden')),
-+                recur_use_input_injection=bool(config.get('value_recur_use_input_injection', False)),
-+                recur_use_soft_mixture=bool(config.get('value_recur_use_soft_mixture', False)),
 +                recur_use_layerscale=bool(config.get('value_recur_use_layerscale', True)),
-+                recur_use_act=bool(config.get('value_recur_use_act', False)),
-+                recur_act_epsilon=float(config.get('value_recur_act_epsilon', 0.01)),
-+                recur_act_min_iters=int(config.get('value_recur_act_min_iters', 1)),
 +                layerscale_init=float(config.get('value_layerscale_init', 1e-2)),
 +            )
 +            value_def = GCRecurrentValue(gc_encoder=encoders.get('value'), **recur_value_kwargs)
@@ -2043,16 +1601,7 @@ index 0000000..4e17508
 +            value_recur_max_iters=16,
 +            value_recur_ln_mode='per_layer_final',  # 'pre_loop' | 'per_layer' | 'per_layer_final' | 'pre_loop_per_layer'
 +            value_recur_use_step_info=False,
-+            value_recur_sinusoidal=False,
-+            value_recur_use_film=True,
-+            value_recur_film_mode='hidden',  # One of: hidden | context | hidden_context.
-+            value_recur_use_input_injection=False,
-+            value_recur_use_soft_mixture=False,
 +            value_recur_use_layerscale=True,
-+            value_recur_use_act=False,
-+            value_recur_act_epsilon=0.01,
-+            value_recur_act_min_iters=1,
-+            value_recur_act_ponder_weight=0.0,
 +            value_layerscale_init=1e-2,
 +            discount=0.99,
 +            tau=0.005,
@@ -3825,16 +3374,15 @@ index 0000000..60716d2
 +if __name__ == '__main__':
 +    main()
 diff --git a/impls/main.py b/impls/main.py
-index 3660e03..4ac3e19 100644
+index 3660e03..9cb4528 100644
 --- a/impls/main.py
 +++ b/impls/main.py
-@@ -1,51 +1,308 @@
+@@ -1,51 +1,239 @@
 +import glob
 +import hashlib
 +import re
  import json
  import os
-+import pickle
 +import platform
  import random
 +import signal
@@ -3940,67 +3488,6 @@ index 3660e03..4ac3e19 100644
 +        raise ValueError(
 +            f'Invalid step specification {spec!r}; expected comma-, colon-, or whitespace-separated integers.'
 +        ) from e
-+
-+
-+def _infer_latest_epoch_from_dir(restore_dir: str) -> int | None:
-+    try:
-+        epochs = []
-+        for p in glob.glob(os.path.join(restore_dir, 'params_*.pkl')):
-+            base = os.path.basename(p)
-+            try:
-+                epochs.append(int(base.split('_', 1)[1].split('.', 1)[0]))
-+            except Exception:
-+                continue
-+        return max(epochs) if epochs else None
-+    except Exception:
-+        return None
-+
-+
-+def _deep_has_key(obj, pred) -> bool:
-+    if isinstance(obj, dict):
-+        for k, v in obj.items():
-+            try:
-+                if pred(k):
-+                    return True
-+            except Exception:
-+                pass
-+            if _deep_has_key(v, pred):
-+                return True
-+        return False
-+    if isinstance(obj, (list, tuple)):
-+        return any(_deep_has_key(v, pred) for v in obj)
-+    return False
-+
-+def _infer_recur_sinusoidal_from_ckpt(restore_dir: str, restore_epoch: int | None) -> bool | None:
-+    """Infer whether the checkpoint used sinusoidal step encoding (no 'step_embed' param) or discrete lookup."""
-+    epoch = restore_epoch if restore_epoch is not None else _infer_latest_epoch_from_dir(restore_dir)
-+    if epoch is None:
-+        return None
-+    params_path = os.path.join(restore_dir, f'params_{epoch}.pkl')
-+    if not os.path.exists(params_path):
-+        return None
-+    try:
-+        with open(params_path, 'rb') as f:
-+            load_dict = pickle.load(f)
-+    except Exception:
-+        return None
-+
-+    agent_state = load_dict.get('agent', {})
-+    try:
-+        phi = agent_state.get('network', {}).get('params', {}).get('modules_critic', {}).get('phi', None)
-+    except Exception:
-+        phi = None
-+
-+    if isinstance(phi, dict):
-+        if 'step_embed' in phi:
-+            return False
-+        # If step_embed is absent for an iterative backbone, we assume sinusoidal mode.
-+        return True
-+
-+    # Fallback: deep search within the agent state.
-+    if _deep_has_key(agent_state, lambda k: k == 'step_embed'):
-+        return False
-+    return None
 +
 +
 +def _count_params(param_tree) -> int:
@@ -4123,13 +3610,6 @@ index 3660e03..4ac3e19 100644
 +                            if k in cfg:
 +                                cfg[k] = v
 +
-+                        # Similar to tied-LN: step encoding mode changes the parameter tree (discrete step_embed vs none).
-+                        # If flags.json disagrees with the checkpoint, infer from params_{epoch}.pkl so restore works.
-+                        if _is_recurrent_backbone(restore_agent_cfg.get('critic_backbone')) and 'critic_recur_sinusoidal' in cfg:
-+                            inferred = _infer_recur_sinusoidal_from_ckpt(restore_dir, FLAGS.restore_epoch)
-+                            if inferred is not None:
-+                                cfg['critic_recur_sinusoidal'] = bool(inferred)
-+
      # Set up logger.
 -    exp_name = get_exp_name(FLAGS.seed)
 -    setup_wandb(project='OGBench', group=FLAGS.run_group, name=exp_name)
@@ -4140,7 +3620,7 @@ index 3660e03..4ac3e19 100644
  
      FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, FLAGS.run_group, exp_name)
      os.makedirs(FLAGS.save_dir, exist_ok=True)
-@@ -53,108 +310,1974 @@ def main(_):
+@@ -53,108 +241,1911 @@ def main(_):
      with open(os.path.join(FLAGS.save_dir, 'flags.json'), 'w') as f:
          json.dump(flag_dict, f)
  
@@ -4355,13 +3835,7 @@ index 3660e03..4ac3e19 100644
 +                'training/critic/logits_pos',
 +                'training/critic/logits_neg',
 +                'training/critic/ensemble_disagreement',
-+                'training/critic/input_lambda_abs_mean',
-+                'training/critic/input_injection_ratio_mean',
 +                'training/critic/hidden_drift_mean',
-+                'training/critic/anchor_alignment_mean',
-+                'training/critic/softmix_expected_steps_mean',
-+                'training/critic/softmix_expected_steps_total_mean',
-+                'training/critic/softmix_late_step_mass_mean',
 +                'training/actor/actor_loss',
 +                'training/actor/bc_loss',
 +                'training/actor/q_loss',
@@ -4383,10 +3857,6 @@ index 3660e03..4ac3e19 100644
 +                'training/low_actor/awr_weight_mean',
 +                'training/low_actor/awr_weight_max',
 +                'training/low_actor/awr_weight_ess_frac',
-+                'training/low_actor/confidence_mean',
-+                'training/low_actor/confidence_std',
-+                'training/low_actor/margin_mean',
-+                'training/low_actor/margin_std',
 +                'training/low_actor/bc_log_prob',
 +                'training/low_actor/mse',
 +                'training/high_actor/adv_mean',
@@ -4395,10 +3865,6 @@ index 3660e03..4ac3e19 100644
 +                'training/high_actor/awr_weight_mean',
 +                'training/high_actor/awr_weight_max',
 +                'training/high_actor/awr_weight_ess_frac',
-+                'training/high_actor/confidence_mean',
-+                'training/high_actor/confidence_std',
-+                'training/high_actor/margin_mean',
-+                'training/high_actor/margin_std',
 +                'training/high_actor/bc_log_prob',
 +                'training/high_actor/mse',
 +                'training/grad/global_norm',
@@ -4870,7 +4336,7 @@ index 3660e03..4ac3e19 100644
 +                num_iters=num_iters,
 +            )
 +            adv = next_v - start_v
-+            scaled_adv = np.minimum(float(alpha) * adv, np.log(float(config.get('actor_confidence_weight_clip', 100.0))))
++            scaled_adv = np.minimum(float(alpha) * adv, np.log(100.0))
 +            awr_weight = np.exp(scaled_adv)
 +            weight_sum = np.sum(awr_weight)
 +            ess = (weight_sum**2) / (np.sum(awr_weight**2) + 1e-8)
@@ -5459,18 +4925,6 @@ index 3660e03..4ac3e19 100644
 +                        eval_metrics[f'evaluation/refine/critic_hidden_drift_step_{k}_mean'] = float(
 +                            np.mean(hidden_drift)
 +                        )
-+                    input_ratio = critic_aux_k.get('input_injection_ratio_mean')
-+                    if input_ratio is not None:
-+                        input_ratio = _reduce_aux_per_example(input_ratio)
-+                        eval_metrics[f'evaluation/refine/critic_input_injection_ratio_step_{k}_mean'] = float(
-+                            np.mean(input_ratio)
-+                        )
-+                    anchor_alignment = critic_aux_k.get('anchor_alignment_mean')
-+                    if anchor_alignment is not None:
-+                        anchor_alignment = _reduce_aux_per_example(anchor_alignment)
-+                        eval_metrics[f'evaluation/refine/critic_anchor_alignment_step_{k}_mean'] = float(
-+                            np.mean(anchor_alignment)
-+                        )
 +                    if k == total_iters:
 +                        critic_final_aux = {
 +                            key: np.asarray(value)
@@ -5531,12 +4985,6 @@ index 3660e03..4ac3e19 100644
 +            if critic_final_aux is not None:
 +                scalar_aux_metrics = {
 +                    'evaluation/refine/critic_hidden_drift': 'hidden_drift_mean',
-+                    'evaluation/refine/critic_input_injection_ratio': 'input_injection_ratio_mean',
-+                    'evaluation/refine/critic_anchor_alignment': 'anchor_alignment_mean',
-+                    'evaluation/refine/critic_softmix/expected_steps': 'softmix_expected_steps_mean',
-+                    'evaluation/refine/critic_softmix/late_step_mass': 'softmix_late_step_mass_mean',
-+                    'evaluation/refine/critic_softmix/entropy_phi': 'softmix_entropy_phi',
-+                    'evaluation/refine/critic_softmix/entropy_psi': 'softmix_entropy_psi',
 +                }
 +                for metric_prefix, aux_key in scalar_aux_metrics.items():
 +                    values = critic_final_aux.get(aux_key)
@@ -5548,25 +4996,6 @@ index 3660e03..4ac3e19 100644
 +                        _reduce_aux_per_example(values),
 +                        batch=probe_batch,
 +                        goal_prefix='value',
-+                    )
-+                softmix_weights = critic_final_aux.get('softmix_step_weights_mean')
-+                if softmix_weights is not None:
-+                    softmix_weights = _reduce_aux_stepwise(softmix_weights)
-+                    for step_idx, step_weights in enumerate(softmix_weights, start=1):
-+                        _log_scalar_metrics(
-+                            eval_metrics,
-+                            f'evaluation/refine/critic_softmix/weight_step_{step_idx}',
-+                            step_weights,
-+                            batch=probe_batch,
-+                            goal_prefix='value',
-+                        )
-+                late_step_mass = critic_final_aux.get('softmix_late_step_mass_mean')
-+                if late_step_mass is not None and len(critic_margin_steps) >= 2:
-+                    late_step_mass = _reduce_aux_per_example(late_step_mass)
-+                    margin_gain = critic_margin_steps[-1] - critic_margin_steps[0]
-+                    eval_metrics['evaluation/refine/critic_softmix/late_step_mass_vs_margin_gain_corr'] = _pearson_corr(
-+                        late_step_mass,
-+                        margin_gain,
 +                    )
 +
 +        should_dump = False
@@ -5625,20 +5054,11 @@ index 3660e03..4ac3e19 100644
 +            if critic_final_aux is not None:
 +                final_dump_scalars = {
 +                    'critic_hidden_drift_final': 'hidden_drift_mean',
-+                    'critic_input_injection_ratio_final': 'input_injection_ratio_mean',
-+                    'critic_anchor_alignment_final': 'anchor_alignment_mean',
-+                    'critic_softmix_expected_steps_final': 'softmix_expected_steps_mean',
-+                    'critic_softmix_late_step_mass_final': 'softmix_late_step_mass_mean',
 +                }
 +                for dump_key, aux_key in final_dump_scalars.items():
 +                    values = critic_final_aux.get(aux_key)
 +                    if values is not None:
 +                        dump_dict[dump_key] = _reduce_aux_per_example(values)
-+                softmix_weights = critic_final_aux.get('softmix_step_weights_mean')
-+                if softmix_weights is not None:
-+                    softmix_weights = _reduce_aux_stepwise(softmix_weights)
-+                    for idx, step_weights in enumerate(softmix_weights, start=1):
-+                        dump_dict[f'critic_softmix_weight_step_{idx}_final'] = step_weights
 +        np.savez_compressed(os.path.join(refine_dir, f'step_{step:09d}.npz'), **dump_dict)
 +
 +    def _run_evaluation_impl(*, step: int, eval_agent, mark_final: bool = False):
@@ -5828,10 +5248,7 @@ index 3660e03..4ac3e19 100644
 +            'evaluation/18_policy_behavior_l2_mean': 'evaluation/policy_behavior/l2_mean',
 +            'evaluation/19_graph_corr': 'evaluation/critic_geometry/graph_corr',
 +            'evaluation/20_refine_margin_gain_mean': f'evaluation/refine/critic_margin_gain_1_to_{final_critic_refine_step}_mean',
-+            'evaluation/21_refine_input_ratio_mean': 'evaluation/refine/critic_input_injection_ratio_mean',
 +            'evaluation/22_refine_hidden_drift_mean': 'evaluation/refine/critic_hidden_drift_mean',
-+            'evaluation/23_refine_softmix_expected_steps_mean': 'evaluation/refine/critic_softmix/expected_steps_mean',
-+            'evaluation/24_refine_softmix_late_step_mass_mean': 'evaluation/refine/critic_softmix/late_step_mass_mean',
 +            'evaluation/30_refine_critic_step1_margin_mean': 'evaluation/refine/critic_step_1_signal/margin_mean',
 +            'evaluation/31_refine_critic_step2_margin_mean': 'evaluation/refine/critic_step_2_signal/margin_mean',
 +            'evaluation/32_refine_critic_step3_margin_mean': 'evaluation/refine/critic_step_3_signal/margin_mean',
@@ -6978,16 +6395,14 @@ index 9c421dd..bd55171 100644
  
      return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..c2d5de7 100644
+index 4ee2b26..c27caee 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
-@@ -6,12 +6,21 @@ import flax.linen as nn
+@@ -6,12 +6,18 @@ import flax.linen as nn
  import jax
  import jax.numpy as jnp
  
-+from .positional_encoding import sinusoidal_step_encoding
-+
- 
+-
  def default_init(scale=1.0):
      """Default kernel initializer."""
      return nn.initializers.variance_scaling(scale, 'fan_avg', 'uniform')
@@ -7003,7 +6418,7 @@ index 4ee2b26..c2d5de7 100644
  def ensemblize(cls, num_qs, out_axes=0, **kwargs):
      """Ensemblize a module."""
      return nn.vmap(
-@@ -60,6 +69,677 @@ class MLP(nn.Module):
+@@ -60,6 +66,484 @@ class MLP(nn.Module):
          return x
  
  
@@ -7011,22 +6426,11 @@ index 4ee2b26..c2d5de7 100644
 +    hidden_dim: int
 +    layer_norm: bool = True
 +    layerscale_init: float = 1e-2
-+    use_film: bool = False
 +    activations: Any = nn.gelu
 +
 +    @nn.compact
-+    def __call__(self, h, step_embed=None):
++    def __call__(self, h):
 +        h1 = h
-+        if self.use_film:
-+            if step_embed is None:
-+                raise ValueError('ResNetBlock with use_film=True requires step_embed.')
-+            step_proj = nn.Dense(self.hidden_dim, use_bias=False, name='film_fc1_step')
-+            h_proj = nn.Dense(self.hidden_dim, name='film_fc1_h')
-+            film_fc2 = nn.Dense(2 * self.hidden_dim, name='film_fc2')
-+            fc1_out = step_proj(step_embed) + h_proj(h1)
-+            film = film_fc2(self.activations(fc1_out))
-+            gamma, beta = jnp.split(film, 2, axis=-1)
-+            h1 = (1.0 + gamma) * h1 + beta
 +        u = h1
 +        for layer_idx in range(4):
 +            u = nn.Dense(self.hidden_dim, name=f'fc_{layer_idx + 1}')(u)
@@ -7042,29 +6446,19 @@ index 4ee2b26..c2d5de7 100644
 +    num_blocks: int
 +    layer_norm: bool = True
 +    layerscale_init: float = 1e-2
-+    use_film: bool = False
 +    activations: Any = nn.gelu
 +
 +    @nn.compact
 +    def __call__(self, x):
 +        h = nn.Dense(self.hidden_dim)(x)
-+        block_embed = None
-+        if self.use_film:
-+            block_embed = self.param(
-+                'block_embed',
-+                nn.initializers.normal(stddev=0.02),
-+                (int(self.num_blocks), self.hidden_dim),
-+            )
 +        for block_idx in range(int(self.num_blocks)):
-+            step_embed = None if block_embed is None else block_embed[block_idx]
 +            h = ResNetBlock(
 +                self.hidden_dim,
 +                layer_norm=self.layer_norm,
 +                layerscale_init=self.layerscale_init,
-+                use_film=self.use_film,
 +                activations=self.activations,
 +                name=f'resblock_{block_idx + 1}',
-+            )(h, step_embed)
++            )(h)
 +        return nn.Dense(self.out_dim)(h)
 +
 +
@@ -7176,20 +6570,13 @@ index 4ee2b26..c2d5de7 100644
 +    ln_mode: str = 'per_layer_final'
 +    layerscale_init: float = 1e-2
 +    use_step_info: bool = False
-+    use_sinusoidal_step_encoding: bool = False  # Enable continuous positional encoding
-+    use_film: bool = True
-+    film_mode: str = 'hidden'  # one of: hidden | context | hidden_context
-+    use_input_injection: bool = False
-+    use_soft_mixture: bool = False
 +    use_layerscale: bool = True
 +    swiglu_pre_ln: bool = True
-+    use_act: bool = False
-+    act_epsilon: float = 0.01
-+    act_min_iters: int = 1
 +    activations: Any = nn.gelu
 +
 +    @nn.compact
 +    def __call__(self, x, num_iters=None, return_aux=False, context=None):
++        del context
 +        iters = self.num_iters if num_iters is None else int(num_iters)
 +        num_dense_layers = int(self.num_dense_layers)
 +        block_type = str(self.block_type)
@@ -7206,59 +6593,25 @@ index 4ee2b26..c2d5de7 100644
 +            raise ValueError(
 +                f"Unsupported ln_mode={self.ln_mode!r}. Use 'pre_loop', 'per_layer', 'per_layer_final', or 'pre_loop_per_layer'."
 +            )
-+        act_min_iters = int(self.act_min_iters)
-+        if self.use_act and (act_min_iters <= 0 or act_min_iters > iters):
-+            raise ValueError(f'act_min_iters must be in [1, num_iters]. Got act_min_iters={act_min_iters} num_iters={iters}.')
 +
-+        has_discrete_step_params = self.use_step_info and not self.use_sinusoidal_step_encoding
-+        has_input_lambda = self.use_input_injection
++        has_discrete_step_params = self.use_step_info
 +        has_per_iter_alpha = self.use_layerscale
-+        requires_iter_bound = has_discrete_step_params or has_per_iter_alpha or has_input_lambda
++        requires_iter_bound = has_discrete_step_params or has_per_iter_alpha
 +        if requires_iter_bound and iters > self.max_iters:
 +            raise ValueError(
 +                f'num_iters={iters} exceeds max_iters={self.max_iters} for recur_tied with per-iteration parameters'
 +            )
 +
-+        film_mode = str(self.film_mode)
-+        if self.use_film and film_mode not in ('hidden', 'context', 'hidden_context'):
-+            raise ValueError(f"Unsupported film_mode={film_mode!r}. Use 'hidden', 'context', or 'hidden_context'.")
-+        if self.use_input_injection and self.use_film:
-+            raise ValueError('Additive input injection is intended as a no-FiLM mechanism. Disable FiLM to use it.')
-+        if self.use_soft_mixture and self.use_act:
-+            raise ValueError('Soft-mixture and ACT are alternative adaptive-depth mechanisms; do not enable both together.')
-+
 +        h = nn.Dense(self.hidden_dim, name='input_state_proj')(x)
 +        initial_h = h
-+        input_anchor = None
-+        input_lambda = None
-+        if self.use_input_injection:
-+            # Split the input path into:
-+            # - a stable anchor reused at every recurrent step
-+            # - the initial hidden state h_0, initialized separately above
-+            input_anchor = nn.Dense(self.hidden_dim, name='input_anchor_proj')(x)
-+            input_anchor = nn.LayerNorm(name='input_anchor_ln')(input_anchor)
-+            input_lambda = self.param('input_lambda', nn.initializers.constant(0.0), (self.max_iters,))
-+        use_hidden_film = self.use_film and film_mode in ('hidden', 'hidden_context')
-+        use_context_film = self.use_film and film_mode in ('context', 'hidden_context')
-+        if use_context_film:
-+            if context is None:
-+                raise ValueError(
-+                    'RecurTiedBackbone with context-based FiLM requires a context tensor.'
-+                )
-+            context_proj = nn.Dense(self.hidden_dim, name='film_fc1_ctx')(context)
-+        else:
-+            context_proj = None
 +
-+        # Step embeddings: discrete lookup table OR continuous sinusoidal encoding
-+        if self.use_step_info and not self.use_sinusoidal_step_encoding:
-+            # Discrete: learnable lookup table (current approach)
++        if self.use_step_info:
 +            step_embed = self.param(
 +                'step_embed',
 +                nn.initializers.normal(stddev=0.02),
 +                (self.max_iters, self.hidden_dim),
 +            )
 +        else:
-+            # Either no step info or continuous sinusoidal encoding (computed on-the-fly)
 +            step_embed = None
 +
 +        alpha = None
@@ -7266,20 +6619,7 @@ index 4ee2b26..c2d5de7 100644
 +            alpha = self.param('alpha', nn.initializers.constant(self.layerscale_init), (self.max_iters,))
 +
 +        step_proj = nn.Dense(self.hidden_dim, use_bias=False, name='step_proj') if self.use_step_info else None
-+        film_fc1_h = nn.Dense(self.hidden_dim) if use_hidden_film else None
-+        film_fc2 = nn.Dense(2 * self.hidden_dim) if self.use_film else None
-+        act_halting = nn.Dense(1, name='act_halting') if self.use_act else None
 +        output_proj = nn.Dense(self.out_dim, name='output_proj')
-+        softmix_gate = (
-+            nn.Dense(
-+                1,
-+                name='softmix_gate',
-+                kernel_init=nn.initializers.zeros,
-+                bias_init=nn.initializers.zeros,
-+            )
-+            if self.use_soft_mixture
-+            else None
-+        )
 +
 +        tied_layers = None
 +        swiglu_gate = None
@@ -7314,22 +6654,13 @@ index 4ee2b26..c2d5de7 100644
 +                    ln_name = 'ln' if layer_index == 0 else f'ln_{layer_index + 1}'
 +                    tied_layer_norms.append(nn.LayerNorm(name=ln_name))
 +
-+        if self.use_step_info and not self.use_sinusoidal_step_encoding:
++        if self.use_step_info:
 +            step_contributions = step_proj(step_embed)  # (max_iters, hidden_dim)
 +        else:
 +            step_contributions = None
 +
-+        act_expected_steps = None
-+        act_accumulated = None
-+        act_weighted_h = None
-+        if self.use_act:
-+            act_expected_steps = jnp.zeros(h.shape[:-1], dtype=h.dtype)
-+            act_accumulated = jnp.zeros(h.shape[:-1], dtype=h.dtype)
-+            act_weighted_h = jnp.zeros_like(h)
-+        hidden_steps = [] if (self.use_soft_mixture or return_aux) else None
++        hidden_steps = [] if return_aux else None
 +        hidden_drift_steps = []
-+        input_injection_ratio_steps = [] if input_anchor is not None else None
-+        anchor_alignment_steps = [] if input_anchor is not None else None
 +
 +        for k in range(iters):
 +            h1 = h
@@ -7340,31 +6671,13 @@ index 4ee2b26..c2d5de7 100644
 +                h1 = swiglu_pre_ln(h1)
 +
 +            if self.use_step_info:
-+                if not self.use_sinusoidal_step_encoding:
-+                    step_contrib_k = step_contributions[k]
-+                else:
-+                    step_emb_k = sinusoidal_step_encoding(k, self.max_iters, self.hidden_dim)
-+                    step_contrib_k = step_proj(step_emb_k)
++                step_contrib_k = step_contributions[k]
 +            else:
 +                step_contrib_k = None
 +
-+            if self.use_film:
-+                fc1_out = film_fc1_h(h1) if film_fc1_h is not None else None
-+                if context_proj is not None:
-+                    fc1_out = context_proj if fc1_out is None else fc1_out + context_proj
-+                if step_contrib_k is not None:
-+                    fc1_out = step_contrib_k if fc1_out is None else fc1_out + step_contrib_k
-+                if fc1_out is None:
-+                    fc1_out = jnp.zeros_like(h1)
-+                film = film_fc2(self.activations(fc1_out))
-+                gamma, beta = jnp.split(film, 2, axis=-1)
-+                u = (1.0 + gamma) * h1 + beta
-+            else:
-+                u = h1
-+                if input_anchor is not None:
-+                    u = u + input_lambda[k] * input_anchor
-+                if step_contrib_k is not None:
-+                    u = u + step_contrib_k
++            u = h1
++            if step_contrib_k is not None:
++                u = u + step_contrib_k
 +
 +            if block_type == 'dense':
 +                for layer_index, layer in enumerate(tied_layers):
@@ -7396,83 +6709,22 @@ index 4ee2b26..c2d5de7 100644
 +            initial_h_norm = jnp.linalg.norm(initial_h, axis=-1)
 +            hidden_drift = jnp.linalg.norm(h_next - initial_h, axis=-1) / (initial_h_norm + 1e-8)
 +            hidden_drift_steps.append(hidden_drift)
-+            if input_anchor is not None:
-+                anchor_norm = jnp.linalg.norm(input_anchor, axis=-1)
-+                pre_update_norm = jnp.linalg.norm(h1, axis=-1)
-+                input_injection_ratio_steps.append((jnp.abs(input_lambda[k]) * anchor_norm) / (pre_update_norm + 1e-8))
-+                anchor_alignment_steps.append(
-+                    jnp.sum(h_next * input_anchor, axis=-1)
-+                    / (jnp.linalg.norm(h_next, axis=-1) * anchor_norm + 1e-8)
-+                )
-+
-+            if self.use_act:
-+                still_running = (act_accumulated < (1.0 - self.act_epsilon)).astype(h.dtype)
-+                if k + 1 < act_min_iters:
-+                    halt_prob = jnp.zeros(h.shape[:-1], dtype=h.dtype)
-+                elif k + 1 == iters:
-+                    halt_prob = jnp.ones(h.shape[:-1], dtype=h.dtype)
-+                else:
-+                    halt_prob = nn.sigmoid(act_halting(h_next)).squeeze(-1)
-+                remaining = jnp.maximum(1.0 - act_accumulated, 0.0)
-+                will_halt = ((act_accumulated + halt_prob) >= (1.0 - self.act_epsilon)) | (k + 1 == iters)
-+                halt_weight = jnp.where(will_halt, remaining, halt_prob) * still_running
-+                act_accumulated = act_accumulated + halt_weight
-+                act_expected_steps = act_expected_steps + halt_weight * float(k + 1)
-+                act_weighted_h = act_weighted_h + halt_weight[..., None] * h_next
 +
 +            h = h_next
 +            if hidden_steps is not None:
 +                hidden_steps.append(h_next)
 +
-+        softmix_expected_steps = None
-+        softmix_entropy = None
-+        softmix_last_step_weight = None
-+        softmix_late_step_mass = None
-+        softmix_step_weights = None
-+        if self.use_soft_mixture:
-+            hidden_stack = jnp.stack(hidden_steps, axis=0)
-+            step_outputs = output_proj(hidden_stack)
-+            step_logits = softmix_gate(hidden_stack).squeeze(-1)
-+            step_weights = nn.softmax(step_logits, axis=0)
-+            softmix_step_weights = step_weights
-+            outputs = jnp.sum(step_weights[..., None] * step_outputs, axis=0)
-+            step_ids = jnp.arange(1, iters + 1, dtype=outputs.dtype)
-+            reshape = (iters,) + (1,) * (step_weights.ndim - 1)
-+            step_ids = step_ids.reshape(reshape)
-+            softmix_expected_steps = jnp.sum(step_weights * step_ids, axis=0)
-+            softmix_entropy = -jnp.sum(step_weights * jnp.log(jnp.maximum(step_weights, 1e-8)), axis=0)
-+            softmix_last_step_weight = step_weights[-1]
-+            late_start = min(max(iters // 2, 0), iters - 1)
-+            softmix_late_step_mass = jnp.sum(step_weights[late_start:], axis=0)
-+            final_h = jnp.sum(step_weights[..., None] * hidden_stack, axis=0)
-+        else:
-+            final_h = act_weighted_h if self.use_act else h
-+            outputs = output_proj(final_h)
++        final_h = h
++        outputs = output_proj(final_h)
 +
 +        if return_aux:
 +            aux = {}
-+            if self.use_act:
-+                aux['act_expected_steps'] = act_expected_steps
-+            if self.use_soft_mixture:
-+                aux['softmix_expected_steps'] = softmix_expected_steps
-+                aux['softmix_entropy'] = softmix_entropy
-+                aux['softmix_last_step_weight'] = softmix_last_step_weight
-+                aux['softmix_late_step_mass'] = softmix_late_step_mass
-+                aux['softmix_step_weights'] = softmix_step_weights
 +            if hidden_steps is not None:
 +                hidden_stack = jnp.stack(hidden_steps, axis=0)
 +                aux['value_step_outputs'] = output_proj(hidden_stack)
 +            hidden_drift_steps = jnp.stack(hidden_drift_steps, axis=0)
 +            aux['hidden_drift_steps'] = hidden_drift_steps
 +            aux['hidden_drift'] = hidden_drift_steps[-1]
-+            if input_injection_ratio_steps is not None:
-+                input_injection_ratio_steps = jnp.stack(input_injection_ratio_steps, axis=0)
-+                aux['input_injection_ratio_steps'] = input_injection_ratio_steps
-+                aux['input_injection_ratio'] = input_injection_ratio_steps[-1]
-+            if anchor_alignment_steps is not None:
-+                anchor_alignment_steps = jnp.stack(anchor_alignment_steps, axis=0)
-+                aux['anchor_alignment_steps'] = anchor_alignment_steps
-+                aux['anchor_alignment'] = anchor_alignment_steps[-1]
 +            aux['final_hidden_norm'] = jnp.linalg.norm(final_h, axis=-1)
 +            return outputs, aux
 +
@@ -7491,7 +6743,6 @@ index 4ee2b26..c2d5de7 100644
 +    layerscale_init: float = 1e-2
 +    use_step_info: bool = False
 +    step_info_inner_mode: str = 'all'
-+    use_sinusoidal_step_encoding: bool = False
 +    use_layerscale: bool = True
 +    use_inner_residual: bool = True
 +
@@ -7508,7 +6759,7 @@ index 4ee2b26..c2d5de7 100644
 +                f"Unsupported step_info_inner_mode={step_info_inner_mode!r}. Use 'all' or 'first'."
 +            )
 +
-+        has_discrete_step_params = self.use_step_info and not self.use_sinusoidal_step_encoding
++        has_discrete_step_params = self.use_step_info
 +        has_per_iter_alpha = self.use_layerscale
 +        if (has_discrete_step_params or has_per_iter_alpha) and iters > self.max_iters:
 +            raise ValueError(
@@ -7518,7 +6769,7 @@ index 4ee2b26..c2d5de7 100644
 +        h = nn.Dense(self.hidden_dim, name='input_state_proj')(x)
 +        initial_h = h
 +
-+        if self.use_step_info and not self.use_sinusoidal_step_encoding:
++        if self.use_step_info:
 +            step_embed = self.param(
 +                'step_embed',
 +                nn.initializers.normal(stddev=0.02),
@@ -7542,7 +6793,7 @@ index 4ee2b26..c2d5de7 100644
 +        swiglu_out_layers = [nn.Dense(self.hidden_dim, name=f'swiglu_fc_o_{layer_index + 1}') for layer_index in range(num_layers)]
 +        output_proj = nn.Dense(self.out_dim, name='output_proj')
 +
-+        if self.use_step_info and not self.use_sinusoidal_step_encoding:
++        if self.use_step_info:
 +            step_contributions = step_proj(step_embed)
 +        else:
 +            step_contributions = None
@@ -7551,11 +6802,7 @@ index 4ee2b26..c2d5de7 100644
 +        hidden_drift_steps = []
 +        for k in range(iters):
 +            if self.use_step_info:
-+                if not self.use_sinusoidal_step_encoding:
-+                    step_contrib_k = step_contributions[k]
-+                else:
-+                    step_emb_k = sinusoidal_step_encoding(k, self.max_iters, self.hidden_dim)
-+                    step_contrib_k = step_proj(step_emb_k)
++                step_contrib_k = step_contributions[k]
 +            else:
 +                step_contrib_k = None
 +
@@ -7613,16 +6860,8 @@ index 4ee2b26..c2d5de7 100644
 +    layer_norm,
 +    ln_mode,
 +    use_step_info,
-+    use_sinusoidal_step_encoding,
-+    use_film,
-+    film_mode,
-+    use_input_injection,
-+    use_soft_mixture,
 +    use_layerscale,
 +    swiglu_pre_ln,
-+    use_act,
-+    act_epsilon,
-+    act_min_iters,
 +    layerscale_init,
 +    step_info_inner_mode='all',
 +    use_inner_residual=True,
@@ -7639,28 +6878,12 @@ index 4ee2b26..c2d5de7 100644
 +            layer_norm=layer_norm,
 +            ln_mode=str(ln_mode),
 +            use_step_info=bool(use_step_info),
-+            use_sinusoidal_step_encoding=bool(use_sinusoidal_step_encoding),
-+            use_film=bool(use_film),
-+            film_mode=str(film_mode),
-+            use_input_injection=bool(use_input_injection),
-+            use_soft_mixture=bool(use_soft_mixture),
 +            use_layerscale=bool(use_layerscale),
 +            swiglu_pre_ln=bool(swiglu_pre_ln),
-+            use_act=bool(use_act),
-+            act_epsilon=float(act_epsilon),
-+            act_min_iters=int(act_min_iters),
 +            layerscale_init=layerscale_init,
 +            activations=nn.gelu,
 +        )
 +    if backbone == 'recur_stacked_swiglu':
-+        if use_film:
-+            raise ValueError("backbone='recur_stacked_swiglu' does not support FiLM.")
-+        if use_input_injection:
-+            raise ValueError("backbone='recur_stacked_swiglu' does not support input injection.")
-+        if use_soft_mixture:
-+            raise ValueError("backbone='recur_stacked_swiglu' does not support soft-mixture readout.")
-+        if use_act:
-+            raise ValueError("backbone='recur_stacked_swiglu' does not support ACT halting.")
 +        return RecurStackedSwiGLUBackbone, dict(
 +            hidden_dim=hidden_dim,
 +            out_dim=out_dim,
@@ -7671,7 +6894,6 @@ index 4ee2b26..c2d5de7 100644
 +            layerscale_init=layerscale_init,
 +            use_step_info=bool(use_step_info),
 +            step_info_inner_mode=str(step_info_inner_mode),
-+            use_sinusoidal_step_encoding=bool(use_sinusoidal_step_encoding),
 +            use_layerscale=bool(use_layerscale),
 +            use_inner_residual=bool(use_inner_residual),
 +        )
@@ -7681,7 +6903,7 @@ index 4ee2b26..c2d5de7 100644
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -164,9 +844,43 @@ class GCActor(nn.Module):
+@@ -164,9 +648,40 @@ class GCActor(nn.Module):
      const_std: bool = True
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -7713,9 +6935,6 @@ index 4ee2b26..c2d5de7 100644
 +                layer_norm=self.layer_norm,
 +                ln_mode='pre_loop',
 +                use_step_info=True,
-+                use_sinusoidal_step_encoding=False,
-+                use_film=False,
-+                film_mode='hidden',
 +                use_layerscale=True,
 +                swiglu_pre_ln=True,
 +                layerscale_init=1e-2,
@@ -7726,7 +6945,7 @@ index 4ee2b26..c2d5de7 100644
          self.mean_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
          if self.state_dependent_std:
              self.log_std_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
-@@ -196,7 +910,10 @@ class GCActor(nn.Module):
+@@ -196,7 +711,10 @@ class GCActor(nn.Module):
              if goals is not None:
                  inputs.append(goals)
              inputs = jnp.concatenate(inputs, axis=-1)
@@ -7738,7 +6957,7 @@ index 4ee2b26..c2d5de7 100644
  
          means = self.mean_net(outputs)
          if self.state_dependent_std:
-@@ -230,9 +947,43 @@ class GCDiscreteActor(nn.Module):
+@@ -230,9 +748,40 @@ class GCDiscreteActor(nn.Module):
      action_dim: int
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -7770,9 +6989,6 @@ index 4ee2b26..c2d5de7 100644
 +                layer_norm=self.layer_norm,
 +                ln_mode='pre_loop',
 +                use_step_info=True,
-+                use_sinusoidal_step_encoding=False,
-+                use_film=False,
-+                film_mode='hidden',
 +                use_layerscale=True,
 +                swiglu_pre_ln=True,
 +                layerscale_init=1e-2,
@@ -7783,7 +6999,7 @@ index 4ee2b26..c2d5de7 100644
          self.logit_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
  
      def __call__(
-@@ -257,7 +1008,10 @@ class GCDiscreteActor(nn.Module):
+@@ -257,7 +806,10 @@ class GCDiscreteActor(nn.Module):
              if goals is not None:
                  inputs.append(goals)
              inputs = jnp.concatenate(inputs, axis=-1)
@@ -7795,7 +7011,7 @@ index 4ee2b26..c2d5de7 100644
  
          logits = self.logit_net(outputs)
  
-@@ -282,14 +1036,22 @@ class GCValue(nn.Module):
+@@ -282,14 +834,22 @@ class GCValue(nn.Module):
      layer_norm: bool = True
      ensemble: bool = True
      gc_encoder: nn.Module = None
@@ -7823,7 +7039,7 @@ index 4ee2b26..c2d5de7 100644
  
      def __call__(self, observations, goals=None, actions=None):
          """Return the value/critic function.
-@@ -314,6 +1076,81 @@ class GCValue(nn.Module):
+@@ -314,6 +874,65 @@ class GCValue(nn.Module):
          return v
  
  
@@ -7842,17 +7058,9 @@ index 4ee2b26..c2d5de7 100644
 +    recur_ln_mode: str = 'per_layer_final'
 +    recur_use_step_info: bool = False
 +    recur_step_info_inner_mode: str = 'all'
-+    recur_sinusoidal: bool = False
-+    recur_use_film: bool = True
-+    recur_film_mode: str = 'hidden'
-+    recur_use_input_injection: bool = False
-+    recur_use_soft_mixture: bool = False
 +    recur_use_layerscale: bool = True
 +    recur_use_inner_residual: bool = True
 +    recur_swiglu_pre_ln: bool = True
-+    recur_use_act: bool = False
-+    recur_act_epsilon: float = 0.01
-+    recur_act_min_iters: int = 1
 +    layerscale_init: float = 1e-2
 +
 +    def setup(self):
@@ -7869,17 +7077,9 @@ index 4ee2b26..c2d5de7 100644
 +            ln_mode=self.recur_ln_mode,
 +            use_step_info=self.recur_use_step_info,
 +            step_info_inner_mode=self.recur_step_info_inner_mode,
-+            use_sinusoidal_step_encoding=self.recur_sinusoidal,
-+            use_film=self.recur_use_film,
-+            film_mode=self.recur_film_mode,
-+            use_input_injection=self.recur_use_input_injection,
-+            use_soft_mixture=self.recur_use_soft_mixture,
 +            use_layerscale=self.recur_use_layerscale,
 +            use_inner_residual=self.recur_use_inner_residual,
 +            swiglu_pre_ln=self.recur_swiglu_pre_ln,
-+            use_act=self.recur_use_act,
-+            act_epsilon=self.recur_act_epsilon,
-+            act_min_iters=self.recur_act_min_iters,
 +            layerscale_init=self.layerscale_init,
 +        )
 +        if self.ensemble:
@@ -7905,7 +7105,7 @@ index 4ee2b26..c2d5de7 100644
  class GCDiscreteCritic(GCValue):
      """Goal-conditioned critic for discrete actions."""
  
-@@ -347,16 +1184,90 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +966,66 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
@@ -7917,16 +7117,8 @@ index 4ee2b26..c2d5de7 100644
 +    recur_max_iters: int = 16
 +    recur_ln_mode: str = 'per_layer_final'
 +    recur_use_step_info: bool = False
-+    recur_sinusoidal: bool = False  # Use sinusoidal positional encoding for recur_tied
-+    recur_use_film: bool = True
-+    recur_film_mode: str = 'hidden'
-+    recur_use_input_injection: bool = False
-+    recur_use_soft_mixture: bool = False
 +    recur_use_layerscale: bool = True
 +    recur_swiglu_pre_ln: bool = True
-+    recur_use_act: bool = False
-+    recur_act_epsilon: float = 0.01
-+    recur_act_min_iters: int = 1
 +    layerscale_init: float = 1e-2
  
      def setup(self):
@@ -7949,16 +7141,8 @@ index 4ee2b26..c2d5de7 100644
 +                layer_norm=self.layer_norm,
 +                ln_mode=self.recur_ln_mode,
 +                use_step_info=self.recur_use_step_info,
-+                use_sinusoidal_step_encoding=self.recur_sinusoidal,
-+                use_film=self.recur_use_film,
-+                film_mode=self.recur_film_mode,
-+                use_input_injection=self.recur_use_input_injection,
-+                use_soft_mixture=self.recur_use_soft_mixture,
 +                use_layerscale=self.recur_use_layerscale,
 +                swiglu_pre_ln=self.recur_swiglu_pre_ln,
-+                use_act=self.recur_use_act,
-+                act_epsilon=self.recur_act_epsilon,
-+                act_min_iters=self.recur_act_min_iters,
 +                layerscale_init=self.layerscale_init,
 +            )
 +            _, psi_kwargs = recurrent_backbone_cls_and_kwargs(
@@ -7972,16 +7156,8 @@ index 4ee2b26..c2d5de7 100644
 +                layer_norm=self.layer_norm,
 +                ln_mode=self.recur_ln_mode,
 +                use_step_info=self.recur_use_step_info,
-+                use_sinusoidal_step_encoding=self.recur_sinusoidal,
-+                use_film=self.recur_use_film,
-+                film_mode=self.recur_film_mode,
-+                use_input_injection=self.recur_use_input_injection,
-+                use_soft_mixture=self.recur_use_soft_mixture,
 +                use_layerscale=self.recur_use_layerscale,
 +                swiglu_pre_ln=self.recur_swiglu_pre_ln,
-+                use_act=self.recur_use_act,
-+                act_epsilon=self.recur_act_epsilon,
-+                act_min_iters=self.recur_act_min_iters,
 +                layerscale_init=self.layerscale_init,
 +            )
 +        else:
@@ -8001,7 +7177,7 @@ index 4ee2b26..c2d5de7 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +1275,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +1033,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -8009,7 +7185,7 @@ index 4ee2b26..c2d5de7 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,16 +1287,127 @@ class GCBilinearValue(nn.Module):
+@@ -375,16 +1045,52 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
@@ -8020,40 +7196,12 @@ index 4ee2b26..c2d5de7 100644
 +            # IMPORTANT: nn.vmap does not support kwargs; pass iterative args positionally.
 +            phi, phi_aux = self.phi(phi_inputs, num_iters, True, phi_inputs)
 +            psi, psi_aux = self.psi(goals, num_iters, True, goals)
-+            phi_steps = phi_aux.get('act_expected_steps')
-+            psi_steps = psi_aux.get('act_expected_steps')
 +            phi_hidden_norm = phi_aux.get('final_hidden_norm')
 +            psi_hidden_norm = psi_aux.get('final_hidden_norm')
 +            phi_hidden_drift = phi_aux.get('hidden_drift')
 +            psi_hidden_drift = psi_aux.get('hidden_drift')
 +            phi_hidden_drift_steps = phi_aux.get('hidden_drift_steps')
 +            psi_hidden_drift_steps = psi_aux.get('hidden_drift_steps')
-+            phi_input_ratio = phi_aux.get('input_injection_ratio')
-+            psi_input_ratio = psi_aux.get('input_injection_ratio')
-+            phi_input_ratio_steps = phi_aux.get('input_injection_ratio_steps')
-+            psi_input_ratio_steps = psi_aux.get('input_injection_ratio_steps')
-+            phi_anchor_alignment = phi_aux.get('anchor_alignment')
-+            psi_anchor_alignment = psi_aux.get('anchor_alignment')
-+            phi_anchor_alignment_steps = phi_aux.get('anchor_alignment_steps')
-+            psi_anchor_alignment_steps = psi_aux.get('anchor_alignment_steps')
-+            phi_softmix_steps = phi_aux.get('softmix_expected_steps')
-+            psi_softmix_steps = psi_aux.get('softmix_expected_steps')
-+            phi_softmix_entropy = phi_aux.get('softmix_entropy')
-+            psi_softmix_entropy = psi_aux.get('softmix_entropy')
-+            phi_softmix_last = phi_aux.get('softmix_last_step_weight')
-+            psi_softmix_last = psi_aux.get('softmix_last_step_weight')
-+            phi_softmix_late = phi_aux.get('softmix_late_step_mass')
-+            psi_softmix_late = psi_aux.get('softmix_late_step_mass')
-+            phi_softmix_weights = phi_aux.get('softmix_step_weights')
-+            psi_softmix_weights = psi_aux.get('softmix_step_weights')
-+            if phi_steps is not None and psi_steps is not None:
-+                aux.update(
-+                    {
-+                        'act_expected_steps_phi': phi_steps,
-+                        'act_expected_steps_psi': psi_steps,
-+                        'act_expected_steps_total': phi_steps + psi_steps,
-+                    }
-+                )
 +            if phi_hidden_norm is not None:
 +                aux['final_hidden_norm_phi'] = phi_hidden_norm
 +            if psi_hidden_norm is not None:
@@ -8070,53 +7218,6 @@ index 4ee2b26..c2d5de7 100644
 +                aux['hidden_drift_steps_phi'] = phi_hidden_drift_steps
 +            if psi_hidden_drift_steps is not None:
 +                aux['hidden_drift_steps_psi'] = psi_hidden_drift_steps
-+            if phi_input_ratio is not None:
-+                aux['input_injection_ratio_phi'] = phi_input_ratio
-+            if psi_input_ratio is not None:
-+                aux['input_injection_ratio_psi'] = psi_input_ratio
-+            if phi_input_ratio is not None and psi_input_ratio is not None:
-+                aux['input_injection_ratio_mean'] = 0.5 * (phi_input_ratio + psi_input_ratio)
-+            if phi_input_ratio_steps is not None:
-+                aux['input_injection_ratio_steps_phi'] = phi_input_ratio_steps
-+            if psi_input_ratio_steps is not None:
-+                aux['input_injection_ratio_steps_psi'] = psi_input_ratio_steps
-+            if phi_anchor_alignment is not None:
-+                aux['anchor_alignment_phi'] = phi_anchor_alignment
-+            if psi_anchor_alignment is not None:
-+                aux['anchor_alignment_psi'] = psi_anchor_alignment
-+            if phi_anchor_alignment is not None and psi_anchor_alignment is not None:
-+                aux['anchor_alignment_mean'] = 0.5 * (phi_anchor_alignment + psi_anchor_alignment)
-+            if phi_anchor_alignment_steps is not None:
-+                aux['anchor_alignment_steps_phi'] = phi_anchor_alignment_steps
-+            if psi_anchor_alignment_steps is not None:
-+                aux['anchor_alignment_steps_psi'] = psi_anchor_alignment_steps
-+            if phi_softmix_steps is not None:
-+                aux['softmix_expected_steps_phi'] = phi_softmix_steps
-+            if psi_softmix_steps is not None:
-+                aux['softmix_expected_steps_psi'] = psi_softmix_steps
-+            if phi_softmix_steps is not None and psi_softmix_steps is not None:
-+                aux['softmix_expected_steps_total'] = phi_softmix_steps + psi_softmix_steps
-+                aux['softmix_expected_steps_mean'] = 0.5 * (phi_softmix_steps + psi_softmix_steps)
-+            if phi_softmix_entropy is not None:
-+                aux['softmix_entropy_phi'] = phi_softmix_entropy
-+            if psi_softmix_entropy is not None:
-+                aux['softmix_entropy_psi'] = psi_softmix_entropy
-+            if phi_softmix_last is not None:
-+                aux['softmix_last_step_weight_phi'] = phi_softmix_last
-+            if psi_softmix_last is not None:
-+                aux['softmix_last_step_weight_psi'] = psi_softmix_last
-+            if phi_softmix_late is not None:
-+                aux['softmix_late_step_mass_phi'] = phi_softmix_late
-+            if psi_softmix_late is not None:
-+                aux['softmix_late_step_mass_psi'] = psi_softmix_late
-+            if phi_softmix_late is not None and psi_softmix_late is not None:
-+                aux['softmix_late_step_mass_mean'] = 0.5 * (phi_softmix_late + psi_softmix_late)
-+            if phi_softmix_weights is not None:
-+                aux['softmix_step_weights_phi'] = phi_softmix_weights
-+            if psi_softmix_weights is not None:
-+                aux['softmix_step_weights_psi'] = psi_softmix_weights
-+            if phi_softmix_weights is not None and psi_softmix_weights is not None:
-+                aux['softmix_step_weights_mean'] = 0.5 * (phi_softmix_weights + psi_softmix_weights)
 +        elif is_recurrent_backbone(self.backbone):
 +            # IMPORTANT: nn.vmap does not support kwargs; pass iterative args positionally.
 +            phi = self.phi(phi_inputs, num_iters, False, phi_inputs)
@@ -8139,7 +7240,7 @@ index 4ee2b26..c2d5de7 100644
          else:
              return v
  
-@@ -394,9 +1417,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+@@ -394,9 +1100,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
  
      action_dim: int = None
  
@@ -8151,7 +7252,7 @@ index 4ee2b26..c2d5de7 100644
  
  
  class GCMRNValue(nn.Module):
-@@ -416,11 +1439,65 @@ class GCMRNValue(nn.Module):
+@@ -416,11 +1122,49 @@ class GCMRNValue(nn.Module):
      latent_dim: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -8162,16 +7263,8 @@ index 4ee2b26..c2d5de7 100644
 +    recur_max_iters: int = 16
 +    recur_ln_mode: str = 'per_layer_final'
 +    recur_use_step_info: bool = False
-+    recur_sinusoidal: bool = False
-+    recur_use_film: bool = True
-+    recur_film_mode: str = 'hidden'
-+    recur_use_input_injection: bool = False
-+    recur_use_soft_mixture: bool = False
 +    recur_use_layerscale: bool = True
 +    recur_swiglu_pre_ln: bool = True
-+    recur_use_act: bool = False
-+    recur_act_epsilon: float = 0.01
-+    recur_act_min_iters: int = 1
 +    layerscale_init: float = 1e-2
  
      def setup(self):
@@ -8197,16 +7290,8 @@ index 4ee2b26..c2d5de7 100644
 +                layer_norm=self.layer_norm,
 +                ln_mode=self.recur_ln_mode,
 +                use_step_info=self.recur_use_step_info,
-+                use_sinusoidal_step_encoding=self.recur_sinusoidal,
-+                use_film=self.recur_use_film,
-+                film_mode=self.recur_film_mode,
-+                use_input_injection=self.recur_use_input_injection,
-+                use_soft_mixture=self.recur_use_soft_mixture,
 +                use_layerscale=self.recur_use_layerscale,
 +                swiglu_pre_ln=self.recur_swiglu_pre_ln,
-+                use_act=self.recur_use_act,
-+                act_epsilon=self.recur_act_epsilon,
-+                act_min_iters=self.recur_act_min_iters,
 +                layerscale_init=self.layerscale_init,
 +            )
 +        else:
@@ -8219,7 +7304,7 @@ index 4ee2b26..c2d5de7 100644
          """Return the MRN value function.
  
          Args:
-@@ -436,8 +1513,12 @@ class GCMRNValue(nn.Module):
+@@ -436,8 +1180,12 @@ class GCMRNValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)
@@ -8234,7 +7319,7 @@ index 4ee2b26..c2d5de7 100644
  
          sym_s = phi_s[..., : self.latent_dim // 2]
          sym_g = phi_g[..., : self.latent_dim // 2]
-@@ -471,12 +1552,66 @@ class GCIQEValue(nn.Module):
+@@ -471,12 +1219,50 @@ class GCIQEValue(nn.Module):
      dim_per_component: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -8245,16 +7330,8 @@ index 4ee2b26..c2d5de7 100644
 +    recur_max_iters: int = 16
 +    recur_ln_mode: str = 'per_layer_final'
 +    recur_use_step_info: bool = False
-+    recur_sinusoidal: bool = False
-+    recur_use_film: bool = True
-+    recur_film_mode: str = 'hidden'
-+    recur_use_input_injection: bool = False
-+    recur_use_soft_mixture: bool = False
 +    recur_use_layerscale: bool = True
 +    recur_swiglu_pre_ln: bool = True
-+    recur_use_act: bool = False
-+    recur_act_epsilon: float = 0.01
-+    recur_act_min_iters: int = 1
 +    layerscale_init: float = 1e-2
  
      def setup(self):
@@ -8280,16 +7357,8 @@ index 4ee2b26..c2d5de7 100644
 +                layer_norm=self.layer_norm,
 +                ln_mode=self.recur_ln_mode,
 +                use_step_info=self.recur_use_step_info,
-+                use_sinusoidal_step_encoding=self.recur_sinusoidal,
-+                use_film=self.recur_use_film,
-+                film_mode=self.recur_film_mode,
-+                use_input_injection=self.recur_use_input_injection,
-+                use_soft_mixture=self.recur_use_soft_mixture,
 +                use_layerscale=self.recur_use_layerscale,
 +                swiglu_pre_ln=self.recur_swiglu_pre_ln,
-+                use_act=self.recur_use_act,
-+                act_epsilon=self.recur_act_epsilon,
-+                act_min_iters=self.recur_act_min_iters,
 +                layerscale_init=self.layerscale_init,
 +            )
 +        else:
@@ -8303,7 +7372,7 @@ index 4ee2b26..c2d5de7 100644
          """Return the IQE value function.
  
          Args:
-@@ -493,8 +1628,12 @@ class GCIQEValue(nn.Module):
+@@ -493,8 +1279,12 @@ class GCIQEValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)
@@ -8318,33 +7387,6 @@ index 4ee2b26..c2d5de7 100644
  
          x = jnp.reshape(phi_s, (*phi_s.shape[:-1], -1, self.dim_per_component))
          y = jnp.reshape(phi_g, (*phi_g.shape[:-1], -1, self.dim_per_component))
-diff --git a/impls/utils/positional_encoding.py b/impls/utils/positional_encoding.py
-new file mode 100644
-index 0000000..5f5a5e4
---- /dev/null
-+++ b/impls/utils/positional_encoding.py
-@@ -0,0 +1,21 @@
-+import jax.numpy as jnp
-+
-+
-+def sinusoidal_step_encoding(step, max_steps, dim):
-+    """Return a sinusoidal encoding vector of shape (dim,)."""
-+    del max_steps  # Kept for API compatibility with current callers.
-+
-+    step = jnp.asarray(step, dtype=jnp.float32)
-+    half_dim = dim // 2
-+    if half_dim == 0:
-+        return jnp.zeros((dim,), dtype=jnp.float32)
-+
-+    freq = jnp.arange(half_dim, dtype=jnp.float32)
-+    scale = jnp.maximum(1, half_dim - 1)
-+    inv_freq = jnp.exp(-jnp.log(10000.0) * freq / scale)
-+    angles = step * inv_freq
-+
-+    embedding = jnp.concatenate([jnp.sin(angles), jnp.cos(angles)], axis=0)
-+    if dim % 2 == 1:
-+        embedding = jnp.pad(embedding, (0, 1))
-+    return embedding
 diff --git a/ogbench/locomaze/maze.py b/ogbench/locomaze/maze.py
 index 6ec8769..ddd6ab6 100644
 --- a/ogbench/locomaze/maze.py

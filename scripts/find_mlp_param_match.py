@@ -12,9 +12,7 @@ Example:
     --set critic_backbone=recur_tied \
     --set critic_recur_iters=4 \
     --set critic_recur_num_dense_layers=2 \
-    --set critic_recur_block_type=swiglu \
-    --set critic_recur_use_film=true \
-    --set critic_recur_film_mode=hidden_context
+    --set critic_recur_block_type=swiglu
 """
 
 from __future__ import annotations

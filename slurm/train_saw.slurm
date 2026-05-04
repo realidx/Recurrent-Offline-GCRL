@@ -79,16 +79,7 @@ VALUE_RECUR_BLOCK_TYPE="${VALUE_RECUR_BLOCK_TYPE:-dense}"
 VALUE_RECUR_MAX_ITERS="${VALUE_RECUR_MAX_ITERS:-16}"
 VALUE_RECUR_LN_MODE="${VALUE_RECUR_LN_MODE:-per_layer_final}"
 VALUE_RECUR_USE_STEP_INFO="${VALUE_RECUR_USE_STEP_INFO:-1}"
-VALUE_RECUR_SINUSOIDAL="${VALUE_RECUR_SINUSOIDAL:-0}"
-VALUE_RECUR_USE_FILM="${VALUE_RECUR_USE_FILM:-0}"
-VALUE_RECUR_FILM_MODE="${VALUE_RECUR_FILM_MODE:-hidden}"
-VALUE_RECUR_USE_INPUT_INJECTION="${VALUE_RECUR_USE_INPUT_INJECTION:-0}"
-VALUE_RECUR_USE_SOFT_MIXTURE="${VALUE_RECUR_USE_SOFT_MIXTURE:-0}"
 VALUE_RECUR_USE_LAYERSCALE="${VALUE_RECUR_USE_LAYERSCALE:-1}"
-VALUE_RECUR_USE_ACT="${VALUE_RECUR_USE_ACT:-0}"
-VALUE_RECUR_ACT_EPSILON="${VALUE_RECUR_ACT_EPSILON:-0.01}"
-VALUE_RECUR_ACT_MIN_ITERS="${VALUE_RECUR_ACT_MIN_ITERS:-1}"
-VALUE_RECUR_ACT_PONDER_WEIGHT="${VALUE_RECUR_ACT_PONDER_WEIGHT:-0.0}"
 VALUE_LAYERSCALE_INIT="${VALUE_LAYERSCALE_INIT:-1e-2}"
 
 VALUE_P_CURGOAL="${VALUE_P_CURGOAL:-0.2}"
@@ -213,28 +204,6 @@ case "${VALUE_BACKBONE}" in
       echo "Error: VALUE_RECUR_BLOCK_TYPE=swiglu requires VALUE_RECUR_NUM_DENSE_LAYERS=2." >&2
       exit 2
     fi
-    if [[ ! "${VALUE_RECUR_FILM_MODE}" =~ ^(hidden|context|hidden_context)$ ]]; then
-      echo "Error: VALUE_RECUR_FILM_MODE='${VALUE_RECUR_FILM_MODE}' is invalid. Use hidden, context, or hidden_context." >&2
-      exit 2
-    fi
-    if [[ "${VALUE_BACKBONE}" == "recur_stacked_swiglu" ]]; then
-      if [[ "${VALUE_RECUR_USE_FILM}" != "0" ]]; then
-        echo "Error: VALUE_BACKBONE=recur_stacked_swiglu does not support VALUE_RECUR_USE_FILM." >&2
-        exit 2
-      fi
-      if [[ "${VALUE_RECUR_USE_INPUT_INJECTION}" != "0" ]]; then
-        echo "Error: VALUE_BACKBONE=recur_stacked_swiglu does not support VALUE_RECUR_USE_INPUT_INJECTION." >&2
-        exit 2
-      fi
-      if [[ "${VALUE_RECUR_USE_SOFT_MIXTURE}" != "0" ]]; then
-        echo "Error: VALUE_BACKBONE=recur_stacked_swiglu does not support VALUE_RECUR_USE_SOFT_MIXTURE." >&2
-        exit 2
-      fi
-      if [[ "${VALUE_RECUR_USE_ACT}" != "0" ]]; then
-        echo "Error: VALUE_BACKBONE=recur_stacked_swiglu does not support VALUE_RECUR_USE_ACT." >&2
-        exit 2
-      fi
-    fi
     value_recur_block_type_flag="${VALUE_RECUR_BLOCK_TYPE}"
     if [[ "${VALUE_BACKBONE}" == "recur_stacked_swiglu" ]]; then
       value_recur_block_type_flag="swiglu"
@@ -246,16 +215,7 @@ case "${VALUE_BACKBONE}" in
       "--agent.value_recur_max_iters=${VALUE_RECUR_MAX_ITERS}"
       "--agent.value_recur_ln_mode=${VALUE_RECUR_LN_MODE}"
       "--agent.value_recur_use_step_info=${VALUE_RECUR_USE_STEP_INFO}"
-      "--agent.value_recur_sinusoidal=${VALUE_RECUR_SINUSOIDAL}"
-      "--agent.value_recur_use_film=${VALUE_RECUR_USE_FILM}"
-      "--agent.value_recur_film_mode=${VALUE_RECUR_FILM_MODE}"
-      "--agent.value_recur_use_input_injection=${VALUE_RECUR_USE_INPUT_INJECTION}"
-      "--agent.value_recur_use_soft_mixture=${VALUE_RECUR_USE_SOFT_MIXTURE}"
       "--agent.value_recur_use_layerscale=${VALUE_RECUR_USE_LAYERSCALE}"
-      "--agent.value_recur_use_act=${VALUE_RECUR_USE_ACT}"
-      "--agent.value_recur_act_epsilon=${VALUE_RECUR_ACT_EPSILON}"
-      "--agent.value_recur_act_min_iters=${VALUE_RECUR_ACT_MIN_ITERS}"
-      "--agent.value_recur_act_ponder_weight=${VALUE_RECUR_ACT_PONDER_WEIGHT}"
       "--agent.value_layerscale_init=${VALUE_LAYERSCALE_INIT}"
     )
     ;;

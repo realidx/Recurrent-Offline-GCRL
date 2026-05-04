@@ -17,11 +17,11 @@
 #      slurm/phase4_train_crl_generic_array.slurm
 #
 # 2) CRL recurrent 2x4 on humanoidmaze-large-stitch (2 dense layers per recurrent update, 4 iterations):
-#    sbatch --array=0-2 --export="ALL,SEEDS='0 1 2',ENV_NAME=humanoidmaze-large-stitch-v0,RUN_GROUP=P4_HumanoidLargeStitch_Recur3x4,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=3,RECUR_MAX_ITERS=24,SINUSOIDAL=1,TIED_LN=1,ALPHA=0.1,DISCOUNT=0.995,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online" \
+#    sbatch --array=0-2 --export="ALL,SEEDS='0 1 2',ENV_NAME=humanoidmaze-large-stitch-v0,RUN_GROUP=P4_HumanoidLargeStitch_Recur3x4,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=3,RECUR_MAX_ITERS=24,TIED_LN=1,ALPHA=0.1,DISCOUNT=0.995,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online" \
 #      slurm/phase4_train_crl_generic_array.slurm
 #
 # 3) CRL recurrent with an 8-dense-layer tied residual branch repeated 4 times:
-#    sbatch --array=0-2 --export="ALL,SEEDS='0 1 2',ENV_NAME=humanoidmaze-large-stitch-v0,RUN_GROUP=P4_HumanoidLargeStitch_Recur6x4,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=6,RECUR_MAX_ITERS=24,SINUSOIDAL=1,TIED_LN=1,ALPHA=0.1,DISCOUNT=0.995,WANDB_MODE=online" \
+#    sbatch --array=0-2 --export="ALL,SEEDS='0 1 2',ENV_NAME=humanoidmaze-large-stitch-v0,RUN_GROUP=P4_HumanoidLargeStitch_Recur6x4,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=6,RECUR_MAX_ITERS=24,TIED_LN=1,ALPHA=0.1,DISCOUNT=0.995,WANDB_MODE=online" \
 #      slurm/phase4_train_crl_generic_array.slurm
 #
 # 4) MLP critic + 32-layer actor without typing 32 copies of 512:
@@ -115,17 +115,8 @@ RECUR_NUM_BLOCKS="${RECUR_NUM_BLOCKS:-1}"   # Deprecated fallback: number of 2-l
 RECUR_MAX_ITERS="${RECUR_MAX_ITERS:-4}"
 CRITIC_RECUR_LN_MODE="${CRITIC_RECUR_LN_MODE:-per_layer_final}"
 RECUR_USE_STEP_INFO="${RECUR_USE_STEP_INFO:-1}"
-RECUR_SINUSOIDAL="${RECUR_SINUSOIDAL:-0}"
-CRITIC_RECUR_USE_FILM="${CRITIC_RECUR_USE_FILM:-0}"
-CRITIC_RECUR_FILM_MODE="${CRITIC_RECUR_FILM_MODE:-hidden_context}"
-CRITIC_RECUR_USE_INPUT_INJECTION="${CRITIC_RECUR_USE_INPUT_INJECTION:-0}"
-CRITIC_RECUR_USE_SOFT_MIXTURE="${CRITIC_RECUR_USE_SOFT_MIXTURE:-0}"
 CRITIC_RECUR_USE_LAYERSCALE="${CRITIC_RECUR_USE_LAYERSCALE:-1}"
 CRITIC_RECUR_SWIGLU_PRE_LN="${CRITIC_RECUR_SWIGLU_PRE_LN:-1}"
-RECUR_USE_ACT="${RECUR_USE_ACT:-0}"
-RECUR_ACT_EPSILON="${RECUR_ACT_EPSILON:-0.01}"
-RECUR_ACT_MIN_ITERS="${RECUR_ACT_MIN_ITERS:-1}"
-RECUR_ACT_PONDER_WEIGHT="${RECUR_ACT_PONDER_WEIGHT:-0.0}"
 
 # actor recurrent tied options.
 ACTOR_RECUR_ITERS="${ACTOR_RECUR_ITERS:-${KTRAIN}}"
@@ -338,28 +329,6 @@ case "${CRITIC_BACKBONE}" in
       echo "Error: CRITIC_RECUR_BLOCK_TYPE=swiglu requires RECUR_NUM_DENSE_LAYERS=2." >&2
       exit 2
     fi
-    if [[ ! "${CRITIC_RECUR_FILM_MODE}" =~ ^(hidden|context|hidden_context)$ ]]; then
-      echo "Error: CRITIC_RECUR_FILM_MODE='${CRITIC_RECUR_FILM_MODE}' is invalid. Use hidden, context, or hidden_context." >&2
-      exit 2
-    fi
-    if [[ "${CRITIC_BACKBONE}" == "recur_stacked_swiglu" ]]; then
-      if [[ "${CRITIC_RECUR_USE_FILM}" != "0" ]]; then
-        echo "Error: CRITIC_BACKBONE=recur_stacked_swiglu does not support CRITIC_RECUR_USE_FILM." >&2
-        exit 2
-      fi
-      if [[ "${CRITIC_RECUR_USE_INPUT_INJECTION}" != "0" ]]; then
-        echo "Error: CRITIC_BACKBONE=recur_stacked_swiglu does not support CRITIC_RECUR_USE_INPUT_INJECTION." >&2
-        exit 2
-      fi
-      if [[ "${CRITIC_RECUR_USE_SOFT_MIXTURE}" != "0" ]]; then
-        echo "Error: CRITIC_BACKBONE=recur_stacked_swiglu does not support CRITIC_RECUR_USE_SOFT_MIXTURE." >&2
-        exit 2
-      fi
-      if [[ "${RECUR_USE_ACT}" != "0" ]]; then
-        echo "Error: CRITIC_BACKBONE=recur_stacked_swiglu does not support RECUR_USE_ACT." >&2
-        exit 2
-      fi
-    fi
     critic_recur_block_type_flag="${CRITIC_RECUR_BLOCK_TYPE:-dense}"
     if [[ "${CRITIC_BACKBONE}" == "recur_stacked_swiglu" ]]; then
       critic_recur_block_type_flag="swiglu"
@@ -371,17 +340,8 @@ case "${CRITIC_BACKBONE}" in
       "--agent.critic_recur_max_iters=${RECUR_MAX_ITERS}"
       "--agent.critic_recur_ln_mode=${CRITIC_RECUR_LN_MODE}"
       "--agent.critic_recur_use_step_info=${RECUR_USE_STEP_INFO}"
-      "--agent.critic_recur_sinusoidal=${RECUR_SINUSOIDAL}"
-      "--agent.critic_recur_use_film=${CRITIC_RECUR_USE_FILM}"
-      "--agent.critic_recur_film_mode=${CRITIC_RECUR_FILM_MODE}"
-      "--agent.critic_recur_use_input_injection=${CRITIC_RECUR_USE_INPUT_INJECTION}"
-      "--agent.critic_recur_use_soft_mixture=${CRITIC_RECUR_USE_SOFT_MIXTURE}"
       "--agent.critic_recur_use_layerscale=${CRITIC_RECUR_USE_LAYERSCALE}"
       "--agent.critic_recur_swiglu_pre_ln=${CRITIC_RECUR_SWIGLU_PRE_LN}"
-      "--agent.critic_recur_use_act=${RECUR_USE_ACT}"
-      "--agent.critic_recur_act_epsilon=${RECUR_ACT_EPSILON}"
-      "--agent.critic_recur_act_min_iters=${RECUR_ACT_MIN_ITERS}"
-      "--agent.critic_recur_act_ponder_weight=${RECUR_ACT_PONDER_WEIGHT}"
     )
     ;;
   *)

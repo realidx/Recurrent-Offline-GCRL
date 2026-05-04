@@ -1,6 +1,3 @@
-% !TeX program = pdflatex
-% !TeX root = neurips_2026.tex
-
 \documentclass{article}
 
 % if you need to pass options to natbib, use, e.g.:
@@ -10,6 +7,7 @@
 % The authors should use one of these tracks.
 % Before accepting by the NeurIPS conference, select one of the options below.
 % 0. "default" for submission
+\PassOptionsToPackage{numbers, compress}{natbib}
 \usepackage{neurips_2026}
 % the "default" option is equal to the "main" option, which is used for the Main Track with double-blind reviewing.
 % 1. "main" option is used for the Main Track
@@ -18,7 +16,7 @@
 %  \usepackage[position]{neurips_2026}
 % 3. "eandd" option is used for the Evaluations & Datasets Track
  % \usepackage[eandd]{neurips_2026}
- % if you want to opt-in for a de-anomymized submission (not recommended, but OK):
+ % if you need to opt-in for a single-blind submission in the E&D track:
  %\usepackage[eandd, nonanonymous]{neurips_2026}
 % 4. "creativeai" option is used for the Creative AI Track
 %  \usepackage[creativeai]{neurips_2026}
@@ -55,13 +53,16 @@
 \usepackage{hyperref}       % hyperlinks
 \usepackage{url}            % simple URL typesetting
 \usepackage{booktabs}       % professional-quality tables
+\usepackage{amsmath}        % math environments
 \usepackage{amsfonts}       % blackboard math symbols
 \usepackage{nicefrac}       % compact symbols for 1/2, etc.
 \usepackage{microtype}      % microtypography
 \usepackage{xcolor}         % colors
-
+\usepackage{graphicx} 
+\usepackage{subcaption}
 % Note. For the workshop paper template, both \title{} and \workshoptitle{} are required, with the former indicating the paper title shown in the title and the latter indicating the workshop title displayed in the footnote. 
-\title{Formatting Instructions For NeurIPS 2026}
+\title{Iterative Latent Refinement for Value Learning \\in Offline Goal-Conditioned RL}
+%\title{Iterative Latent Refinement for Value Learning \\in Offline Goal-Conditioned Reinforcement Learning}
 
 
 % The \author macro works with any number of authors. There are two commands
@@ -112,8 +113,566 @@
 
 
 \begin{abstract}
-  The abstract paragraph should be indented \nicefrac{1}{2}~inch (3~picas) on both the left- and right-hand margins. Use 10~point type, with a vertical spacing (leading) of 11~points. The word \textbf{Abstract} must be centered, bold, and in point size 12. Two line spaces precede the abstract. The abstract must be limited to one paragraph.
+Offline goal-conditioned reinforcement learning (GCRL) often faces an imperfect value-learning bottleneck: the agent must infer long-horizon reachability from fixed data and then extract a policy from the learned value or score. We study whether iterative latent refinement can improve this value-learning interface. Our model replaces a one-shot value or critic network with a recurrent module that repeatedly updates a latent representation before the algorithm consumes the resulting signal. We insert this refinement module into several offline GCRL algorithms and observe clear gains across multiple settings. Diagnostic experiments show that refinement changes the learned signal in ways that are useful for policy extraction. We further analyze how the effect depends on two design choices: how many refinement steps are used, and how expressive each recurrent update is. The results reveal a tradeoff between iterative depth and per-step expressivity, suggesting that effective recurrent refinement depends on how computation is allocated within the value network.
 \end{abstract}
+
+\section{Introduction}
+%是否需要加入一点脑科学的背景？
+Many difficult prediction problems are better viewed as iterative inference than as one-shot regression. Rather than mapping an input directly to an answer in a single feedforward pass, a model can maintain a latent state, repeatedly revise it, and expose deeper computation through repeated application of a shared update rule. This idea appears in recurrent-depth sequence models such as Universal Transformers, adaptive computation methods, implicit fixed-point models, and recurrent reasoning systems that solve supervised tasks through repeated latent refinement \citep{universal_transformer, act, deq, recurrent_relational_networks, energy_diffusion, hrm, trm, urm}. These developments suggest a broader architectural question: can iterative refinement also serve as a useful computation principle for reinforcement learning?
+
+Recent architecture work shows that network design can substantially affect RL performance. Increasing depth, width, regularization, or residual feedforward capacity has improved several online and self-supervised RL settings \citep{thousand_layers, bro, simba}. However, offline goal-conditioned RL (GCRL) appears to be a different regime. The same depth-scaling study that reports large online goal-reaching gains also finds that directly scaling feedforward depth on offline GCRL does not reliably help \citep{thousand_layers}. This contrast suggests that the missing ingredient may not be capacity alone. In offline GCRL, extra computation must be useful for a specific fixed-data inference problem: deciding which goals are reachable, which behavioral fragments can be stitched, and which learned signals can safely support policy extraction.
+
+This makes offline GCRL a natural stress test for iterative refinement. The agent receives only a fixed dataset of trajectories and must learn goal-reaching behavior without further interaction. Benchmarks such as OGBench are designed to expose long-horizon reasoning, trajectory stitching, state-goal generalization, and policy-extraction difficulties under this fixed-data constraint \citep{ogbench}. Recent analyses suggest that the bottleneck in offline GCRL is not unique: value learning, policy extraction, and generalization can all limit offline RL and offline GCRL depending on the method and task \citep{ogbench, value_bottleneck}. In this paper, we focus on the value-learning side of this decomposition: whether the learned value or compatibility signal itself can be improved by iterative latent refinement before policy extraction. 
+
+To instantiate the idea, we build recurrent modules using standard stabilizing components from modern deep networks, including SwiGLU updates, recurrent step embeddings, LayerNorm, and LayerScale \citep{shazeer_glu, universal_transformer, layer_norm, layerscale}. We then evaluate refinement across several algorithmic settings, while using Contrastive RL (CRL) as the main diagnostic case because its learned score is especially exposed: CRL trains a goal-conditioned compatibility function and then trains the actor to choose actions that score well under that function \citep{crl}. This lets us ask not only whether refinement improves offline GCRL, but also how it changes the learned signal that policy extraction relies on.
+
+The paper makes four contributions. First, it introduces iterative latent refinement as an architectural principle for offline GCRL and instantiates it in recurrent network modules for goal-conditioned learning. Second, it shows that refinement gives its clearest gains on stitching-heavy OGBench tasks, where long-horizon reachability judgments are central. Third, it provides diagnostic evidence, especially in CRL, that the gain is mediated by a more actor-usable value signal rather than by a uniformly larger raw margin or a better global graph-distance model. Fourth, it tests the scope of the idea through iteration-depth studies, ablations, feedforward capacity controls, actor-side replacements, other offline GCRL algorithms, and an online CRL extension.
+
+
+\section{Related Work}
+%4.29 这个是不是最好写成加粗短语+对应分段的形式 比如Offline goal-conditioned RL/iterative refinement/
+Many areas of machine learning have recently explored architectures that allocate computation through repeated latent updates rather than a single feedforward pass. Universal Transformers apply recurrence over depth with shared transition functions and adaptive computation \citep{universal_transformer, act}, while Deep Equilibrium Models formulate prediction as convergence to an implicit fixed point \citep{deq}. A broader family of recurrent and iterative reasoning methods similarly performs multiple rounds of latent correction before producing a final prediction \citep{recurrent_relational_networks, energy_diffusion}. More recent systems such as HRM, TRM, and URM have renewed interest in this direction by showing that compact recurrent computation can be effective on supervised reasoning tasks \citep{hrm, trm, urm}. Reinforcement learning has also seen growing interest in architecture and scaling. Recent work has improved online RL agents by increasing network depth or width, adding residual structure, or otherwise strengthening feedforward actor-critic backbones \citep{thousand_layers, bro, simba}. These results suggest that value-function architecture can be an important factor in control performance. However, offline goal-conditioned RL poses a different scaling problem. In this setting, conventional feedforward architecture changes do not necessarily yield consistent gains, because the agent must infer goal reachability from a fixed dataset rather than repair value errors through additional interaction.
+
+Offline goal-conditioned RL is particularly challenging because it combines long-horizon reasoning with the distributional constraints of offline learning. OGBench was introduced to study these difficulties through tasks that require stitching across trajectories, generalization over state-goal pairs, and robust policy extraction from learned value estimates \citep{ogbench}. Recent analyses further suggest that the main bottleneck in offline GCRL is not unique: value learning, policy extraction, and generalization can all limit performance depending on the algorithm and task \citep{ogbench, value_bottleneck}. 
+
+Existing offline GCRL algorithms address these challenges from several directions. Contrastive RL learns a goal-conditioned compatibility score and trains the actor to optimize that score, providing a simple non-hierarchical actor-critic formulation \citep{crl, ogbench}. Hierarchical methods such as HIQL introduce temporal abstraction to improve long-horizon goal reaching \citep{hiql}. Other recent approaches, including SAW-style methods, focus on improving policy extraction or actor-side goal-conditioned learning under fixed datasets \citep{saw}. These directions are complementary to ours, as our work targets the value-learning side of this picture.
+
+
+
+
+
+
+
+\section{Preliminaries}
+\label{sec:preliminaries}
+\paragraph{Offline goal-conditioned RL}
+We consider an offline goal-conditioned Markov decision process with state space $\mathcal{S}$, action space $\mathcal{A}$, transition kernel $P$, and goal space $\mathcal{G}$. The learner is given a fixed dataset of trajectories $\mathcal{D}=\{\tau^{(n)}\}_{n=1}^{N}$, with $\tau=(s_0,a_0,s_1,\ldots,s_T)$, and receives no further environment interaction during training. Given an initial state and goal $g$, the objective is to learn a goal-conditioned policy $\pi(a\mid s,g)$ that maximizes the discounted goal-reaching return
+\(
+J(\pi)=
+\mathbb{E}_{g \sim p(g),\, \tau \sim p^{\pi}(\tau \mid g)}
+\left[
+\sum_{t=0}^{\infty} \gamma^t r_g(s_t,a_t,s_{t+1})
+\right],
+\)
+where $r_g$ is the sparse goal-reaching reward or its environment-specific analogue. During training, goals are sampled from the dataset, with future states providing positive reachability supervision and other dataset states providing contrastive comparisons.
+
+\paragraph{Contrastive RL}
+Contrastive RL (CRL) learns a goal-conditioned compatibility score and then extracts a policy from that score \citep{crl}. We write the critic as $f_{\phi,\psi}(s,a,g)$ and the actor as $\pi_\theta(a\mid s,g)$. CRL can be written as a binary-NCE objective that contrasts a future goal $g$ against a random goal $g^-$ \citep{ma_collins_binary_nce, crl}:
+\begin{equation}
+\mathcal{J}_{\mathrm{CRL}}(f)
+=
+\mathbb{E}_{(s,a)\sim p_{\mathcal{D}},\,g\sim p_{\mathcal{D}}^{\mathrm{future}}(\cdot\mid s,a),\,g^-\sim p_{\mathcal{D}}}
+\left[
+\log\sigma(f(s,a,g))+\log(1-\sigma(f(s,a,g^-)))
+\right].
+\end{equation}
+In our experiments, the score is parameterized as a scaled inner product
+\(f_{\phi,\psi}(s,a,g)=\phi(s,a)^\top\psi(g)/\sqrt{d}\).
+For policy extraction, continuous-action CRL uses the DDPG+BC objective from OGBench, replacing $Q$ with the learned CRL score:
+\begin{equation}
+\mathcal{J}_{\mathrm{actor}}(\pi_\theta)
+=
+\mathbb{E}_{(s,a)\sim p_{\mathcal{D}},\,g\sim p_{\mathcal{D}}(\cdot\mid s)}
+\left[
+f_{\phi,\psi}(s,\pi_\theta^\mu(s,g),g)
++ \alpha \log \pi_\theta(a\mid s,g)
+\right],
+\end{equation}
+where $\pi_\theta^\mu(s,g)$ is the mean action of the policy \citep{td3bc, ogbench}. Thus policy extraction depends directly on the learned score while remaining regularized toward behavior support. This direct score-to-actor interface is why CRL is our main diagnostic setting for studying how refinement changes value learning. We use the same CRL setup as OGBench to keep the comparison straightforward.
+
+
+
+\section{Recurrent Latent Refinement}
+\label{sec:architecture}
+Our goal is to test iterative refinement as cleanly as possible, not to introduce a heavily engineered backbone. We therefore use a recurrent module that can replace a feedforward value or critic block while keeping the surrounding algorithm, losses, replay data, and optimization procedure unchanged. Given an input representation $x$, the module initializes a latent state $h^{(0)}$ and refines it through $K$ outer iterations. Each outer iteration performs $m$ inner update blocks before exposing the next latent state. This separates two design axes: $K$ controls how many times the representation is revised, while $m$ controls how expressive each revision is.
+
+Each inner block uses the same stabilizing components as the simpler tied module: pre-layer normalization, a learned outer-step embedding, a SwiGLU channel update, and residual computation \citep{layer_norm, universal_transformer, shazeer_glu}. Let $h^{(k,0)}=h^{(k)}$ denote the start of outer refinement step $k$. For inner block $j=1,\ldots,m$, we compute
+\begin{equation}
+h^{(k,j)}
+=
+h^{(k,j-1)}
++
+W_{o,j}\,\mathrm{SwiGLU}_{j}
+\!\left(\mathrm{LN}_{j}(h^{(k,j-1)}) + E_k\right),
+\end{equation}
+where $E_k$ is a learned embedding for the outer refinement step. The inner block weights are reused across outer iterations but are not tied across inner depth $j$, so increasing $m$ increases the capacity of a single refinement update without changing the number of outer revisions. After the $m$ inner updates, an outer LayerScale coefficient controls how much of the proposed update is accepted:
+\begin{equation}
+h^{(k+1)}
+=
+h^{(k)}
++
+\alpha_k\left(h^{(k,m)}-h^{(k)}\right),
+\qquad k=0,\ldots,K-1.
+\end{equation}
+Here $\alpha_k$ is initialized small and learned separately for each outer step, stabilizing repeated residual computation \citep{layerscale}. The case $m=1$ recovers the single-update refinement block used in the tied recurrent backbone, while $m>1$ gives a more expressive stacked-SwiGLU update within each refinement step. This design makes the architectural hypothesis explicit: offline GCRL may benefit not only from repeated revisions, but also from allocating enough computation inside each revision before the algorithm consumes the resulting value, score, or policy signal.
+l setup, so the method section only specifies the shared refinement principle.
+
+
+\begin{figure}[t]
+\centering
+\fbox{%
+  \parbox[c][1.8in][c]{0.9\linewidth}{%
+    \centering
+    Placeholder for recurrent CRL critic diagram.\\
+    Show input projection, tied recurrent SwiGLU refinement steps,\\
+    step embeddings, LayerScale residual updates, and output projection\\
+    for both $\phi(s,a)$ and $\psi(g)$ towers.
+  }%
+}
+\caption{Placeholder for the recurrent CRL critic architecture. The final version will include a model diagram showing the tied iterative refinement block used inside the $\phi$ and $\psi$ towers.}
+\label{fig:recurrent-crl-critic}
+\end{figure}
+
+% \paragraph{Why recurrence helps}
+% We do not attribute the advantage of the recurrent critic to increased
+% expressivity, as an untied MLP can represent the unrolled computation
+% \(Q \approx f_\theta(s,a,g)\). Instead, the difference is structural.
+% In goal-conditioned RL, evaluating state-action--goal compatibility often
+% requires implicit multi-step reasoning over the dataset, which can be
+% viewed as approximating a compositional mapping \(Q^\star \approx T^K \circ \Phi\).
+% A one-shot MLP must approximate this process in a single mapping, which
+% entangles different stages of computation.
+
+% In contrast, a recurrent critic performs iterative refinement
+% \(h_{k+1} = h_k + F_\theta(h_k)\), and can be viewed as learning a local
+% update rule that incrementally improves the representation. In this sense,
+% it only needs to learn a direction of improvement that is locally correct
+% (e.g., reducing a residual \(\|h_k - h^\star\|\)), while an MLP must
+% represent a globally consistent mapping in one pass. When the target
+% function admits a progressive refinement structure, such local updates can
+% be substantially easier to learn than fitting \(f_\theta\) directly.
+% This parameter sharing across steps therefore acts as a useful inductive
+% bias, improving data efficiency and stability. This advantage is
+% conditional and depends on the presence of such iterative structure.
+
+
+\section{Experiments}
+\subsection{Experiment Setup}
+\paragraph{Environments and evaluation protocol}
+We evaluate on OGBench \citep{ogbench}, a benchmark designed specifically for offline goal-conditioned RL. In this setting the agent receives a fixed dataset of trajectories and must learn to reach new evaluation goals without any additional environment interaction. OGBench provides standardized datasets and multiple held-out state-goal evaluation pairs for each task, making it useful for testing long-horizon reachability, trajectory stitching, state-goal generalization, and policy extraction from offline data. The benchmark spans locomotion and manipulation domains: locomotion tasks require simulated agents to navigate mazes of different sizes and dataset types, while manipulation tasks require reaching object configurations or compositional scene goals. Following the benchmark protocol, we report average success over the five OGBench evaluation tasks for each dataset, with 50 episodes per task.
+
+
+\paragraph{Algorithms and architecture}
+We study recurrent latent refinement as an architecture-level replacement inside existing offline GCRL algorithms, rather than as a new loss or data-generation procedure. Our experiments include CRL, HIQL, and SAW as the main algorithmic settings. These methods cover complementary regimes: CRL exposes a contrastive state-action-goal critic, HIQL and SAW represent hierarchical or subgoal-based policy-extraction approaches for long-horizon tasks. In each comparison, the recurrent variant replaces the relevant MLP value or critic backbone with the tied refinement module from Section~\ref{sec:architecture}. The surrounding algorithm is otherwise held fixed, including the actor architecture, replay data, goal sampling, losses, batch size, optimizer, and evaluation protocol. Exact hyperparameters and insertion points are reported in the appendix. Unless otherwise noted, the default recurrent module uses 4 refinement steps; Section~\ref{sec:depth} studies this choice directly.
+
+
+\subsection{Main Results}
+The main recurrent-versus-MLP comparison across locomotion and manipulation datasets and across the evaluated offline GCRL algorithms is shown in Table~\ref{tab:main_results}. We use a unified row format so that each result keeps its algorithm, recurrent configuration, and dataset setting explicit.
+\begin{table*}[h]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lllccc}
+\toprule
+Algorithm & Recurrent config & Dataset group & MLP & Recurrent & $\Delta$ \\
+\midrule
+CRL  & $K=4,\,m=1$ & AMS & 0.608 & \textbf{0.954} & +0.346 \\
+CRL  & $K=4,\,m=1$ & ALS & 0.184 & \textbf{0.479} & +0.295 \\
+CRL  & $K=4,\,m=1$ & ATS & 0.310 & \textbf{0.362} & +0.052 \\
+CRL  & $K=4,\,m=1$ & AMN & 0.950 & \textbf{0.963} & +0.013 \\
+CRL  & $K=4,\,m=1$ & ALN & 0.830 & \textbf{0.893} & +0.063 \\
+CRL  & $K=4,\,m=1$ & AGN & 0.136 & \textbf{0.340} & +0.204 \\
+CRL  & $K=4,\,m=1$ & ATN & 0.200 & \textbf{0.557} & +0.357 \\
+CRL  & $K=4,\,m=1$ & HMS & 0.360 & \textbf{0.657} & +0.297 \\
+CRL  & $K=4,\,m=1$ & HMN & 0.600 & \textbf{0.632} & +0.032 \\
+CRL  & $K=4,\,m=1$ & CSP & 0.100 & \textbf{0.205} & +0.105 \\
+CRL  & $K=4,\,m=1$ & SP  & 0.190 & \textbf{0.300} & +0.110 \\
+\midrule
+HIQL & $K=4,\,m=2$ & ALS & 0.650 & \textbf{0.736} & +0.086 \\
+HIQL & $K=4,\,m=2$ & AGN & 0.670 & \textbf{0.704} & +0.034 \\
+HIQL & $K=4,\,m=2$ & ATN & 0.420 & \textbf{0.468} & +0.048 \\
+HIQL & $K=4,\,m=2$ & ATS & 0.360 & \textbf{0.426} & +0.066 \\
+HIQL & $K=4,\,m=2$ & HGN & 0.120 & \textbf{0.124} & +0.004 \\
+\midrule
+SAW  & $K=4,\,m=2$ & AGN & 0.730 & \textbf{0.788} & +0.058 \\
+SAW  & $K=4,\,m=2$ & HGN & 0.350 & \textbf{0.443} & +0.093 \\
+SAW  & $K=4,\,m=2$ & CDP & 0.400 & \textbf{0.462} & +0.062 \\
+SAW  & $K=4,\,m=2$ & SP  & 0.630 & \textbf{0.656} & +0.026 \\
+\bottomrule
+\end{tabular}
+\caption{Main results in a unified row format. Each row reports average success on one OGBench dataset setting for the MLP baseline and recurrent variant, with $\Delta$ denoting recurrent minus MLP.}
+\label{tab:main_results}
+\end{table*}
+
+
+
+
+\subsection{Why Is the Recurrent Critic Better?}
+End-task success alone does not explain what recurrent refinement changes. This subsection therefore uses CRL as the mechanism analysis setting because CRL exposes the critic signal most directly: the learned score $f(s,a,g)$ is trained by the contrastive objective and is then consumed by the DDPG+BC actor. Changes in the critic can therefore be measured at the policy-extraction interface, rather than only through final rollout success.
+
+We focus on three state-based AntMaze tasks: \texttt{Antmaze-Medium-Stitch} (AMS), \texttt{Antmaze-Large-Stitch} (ALS), and \texttt{Antmaze-Giant-Navigate} (AGN). Unless stated otherwise, the comparison is between the default MLP CRL critic and the four-step recurrent CRL critic. The diagnostic tables report mean $\pm$ std over four MLP seeds for all tasks, four recurrent seeds for AMS, and three recurrent seeds for ALS and AGN.
+
+CRL learns a compatibility score for state-action-goal triples. A dataset transition paired with a future goal from the same trajectory is a positive pair, while pairing the same transition with another sampled goal gives a negative pair. Let $q^+=f(s,a,g)$ and $q^-=f(s,a,g^-)$ denote these matched and mismatched scores. We use this structure to ask three mechanism questions: whether recurrence changes matched-versus-mismatched discrimination, whether the resulting score is easier for the actor to use while staying near behavior support, and whether the gains can be reduced to better maze-distance geometry. For critic discrimination, we report the raw margin $\mathbb{E}[q^+-q^-]$, ranking accuracy $\Pr[q^+>q^-]$, and normalized separation
+\[
+\frac{\mathbb{E}[q^+-q^-]}{\sqrt{\mathrm{Var}(q^+) + \mathrm{Var}(q^-) + \epsilon}}.
+\]
+For actor usability, we compare critic scores on actor and dataset actions through $q_\Delta=\mathbb{E}[f(s,\pi(s,g),g)]-\mathbb{E}[f(s,a_{\mathcal{D}},g)]$, the fraction of states where the actor action is preferred, and policy--behavior deviation. Graph-distance correlations are included as a caveat: they test whether recurrence is merely learning a better shortest-path surrogate.
+
+\paragraph{A more stable actor-facing score.}
+Across AMS, ALS, and AGN, recurrent refinement improves normalized separation between matched and mismatched goals (Figure \ref{fig:success_sep_graphcorr} (a)(b)). This improvement should not be interpreted as a uniform increase in raw contrastive margins. On AMS, the recurrent critic increases the raw margin; on ALS and AGN, the raw margin decreases, but its variance decreases enough that normalized separation still improves. Thus, the critic-side effect is better described as a more stable normalized score presented to the actor, rather than simply a larger or sharper raw score.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\linewidth]{figures/success_sep_graphcorr_full.pdf}
+    \caption{Mechanism summary of recurrent critic improvements across AMS, ALS, and AGN.}
+    \label{fig:success_sep_graphcorr}
+\end{figure}
+
+\begin{table}[t]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{2.5pt}
+\caption{Critic discrimination diagnostics for the MLP and recurrent CRL critics. Success reports best evaluation success; other metrics are measured from the final diagnostic logs.}
+\begin{tabular}{lcccccc}
+\toprule
+Metric & AMS+MLP & AMS+Ours & ALS+MLP & ALS+Ours & AGN+MLP & AGN+Ours \\
+\midrule
+Best success$\uparrow$ & 0.574 $\pm$ 0.063 & \textbf{0.953} $\pm$ 0.020 & 0.193 $\pm$ 0.020 & \textbf{0.455} $\pm$ 0.014 & 0.161 $\pm$ 0.023 & \textbf{0.373} $\pm$ 0.037 \\
+Pos. mean & -2.490 $\pm$ 0.069 & -1.396 $\pm$ 0.124 & -2.080 $\pm$ 0.045 & -2.043 $\pm$ 0.018 & -3.421 $\pm$ 0.079 & -3.425 $\pm$ 0.112 \\
+Neg. mean & -26.133 $\pm$ 0.866 & -29.040 $\pm$ 0.451 & -27.875 $\pm$ 0.187 & -23.225 $\pm$ 0.160 & -16.586 $\pm$ 0.391 & -15.183 $\pm$ 0.288 \\
+Margin & 23.644 $\pm$ 0.931 & 27.644 $\pm$ 0.564 & 25.795 $\pm$ 0.221 & 21.183 $\pm$ 0.158 & 13.165 $\pm$ 0.468 & 11.759 $\pm$ 0.400 \\
+Margin std. & 14.039 $\pm$ 0.500 & 13.351 $\pm$ 0.225 & 11.734 $\pm$ 0.202 & 8.765 $\pm$ 0.301 & 9.766 $\pm$ 0.238 & 8.082 $\pm$ 0.212 \\
+Rank acc. & 0.990 $\pm$ 0.002 & 0.998 $\pm$ 0.002 & 0.995 $\pm$ 0.002 & 0.997 $\pm$ 0.002 & 0.973 $\pm$ 0.002 & 0.974 $\pm$ 0.001 \\
+Separation $z$ & 1.731 $\pm$ 0.027 & 2.109 $\pm$ 0.055 & 2.231 $\pm$ 0.040 & 2.487 $\pm$ 0.048 & 1.474 $\pm$ 0.020 & 1.609 $\pm$ 0.048 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{A less extrapolative policy-extraction signal.}
+The clearest diagnostic change appears at the actor interface. With the recurrent critic, the extracted actor reaches higher success while remaining closer to behavior actions. Across AMS, ALS, and AGN, $q_\Delta$ decreases, policy MSE and L2 distance decrease, and behavior log probability improves. This combination is important in offline GCRL: the critic supports better goal reaching without encouraging the actor to exploit high-scoring actions far from the dataset. We therefore interpret recurrence primarily as improving the value-policy interface, rather than merely increasing critic scale.
+
+\begin{figure}[h]
+    \centering
+    \begin{subfigure}[b]{0.48\textwidth}
+        \includegraphics[width=\linewidth]{figures/mse.pdf}
+        \caption{Policy MSE}
+        \label{fig:mse}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.48\textwidth}
+        \includegraphics[width=\linewidth]{figures/qdelta.pdf}
+        \caption{$q_\Delta$}
+        \label{fig:qdelta}
+    \end{subfigure}
+    \caption{Actor-interface diagnostics. Recurrent refinement improves success while reducing policy deviation from behavior and reducing the actor-over-behavior critic gap.}
+    \label{fig:mse+qdelta}
+\end{figure}
+
+\begin{table}[t]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{2.5pt}
+\caption{Actor-interface diagnostics for the MLP and recurrent CRL critics. Lower policy deviation and lower $q_\Delta$ indicate less extrapolative policy extraction.}
+\begin{tabular}{lcccccc}
+\toprule
+Metric & AMS+MLP & AMS+Ours & ALS+MLP & ALS+Ours & AGN+MLP & AGN+Ours \\
+\midrule
+$q_{\mathrm{actor}}$ & -10.798 $\pm$ 0.462 & -12.385 $\pm$ 0.534 & -12.092 $\pm$ 0.367 & -11.242 $\pm$ 0.251 & -5.134 $\pm$ 0.063 & -5.148 $\pm$ 0.038 \\
+$q_{\mathrm{behavior}}$ & -11.642 $\pm$ 0.459 & -12.650 $\pm$ 0.525 & -12.598 $\pm$ 0.404 & -11.568 $\pm$ 0.273 & -5.337 $\pm$ 0.063 & -5.275 $\pm$ 0.048 \\
+$q_{\Delta}\downarrow$ & 0.844 $\pm$ 0.035 & \textbf{0.265} $\pm$ 0.049 & 0.506 $\pm$ 0.056 & \textbf{0.326} $\pm$ 0.030 & 0.203 $\pm$ 0.010 & \textbf{0.127} $\pm$ 0.013 \\
+Prefer actor & 0.701 $\pm$ 0.005 & 0.557 $\pm$ 0.017 & 0.681 $\pm$ 0.015 & 0.662 $\pm$ 0.013 & 0.697 $\pm$ 0.010 & 0.678 $\pm$ 0.011 \\
+Policy MSE$\downarrow$ & 0.137 $\pm$ 0.005 & \textbf{0.082} $\pm$ 0.001 & 0.106 $\pm$ 0.006 & \textbf{0.087} $\pm$ 0.003 & 0.084 $\pm$ 0.004 & \textbf{0.067} $\pm$ 0.005 \\
+Policy L2$\downarrow$ & 0.907 $\pm$ 0.015 & \textbf{0.734} $\pm$ 0.004 & 0.821 $\pm$ 0.015 & \textbf{0.752} $\pm$ 0.013 & 0.751 $\pm$ 0.016 & \textbf{0.683} $\pm$ 0.021 \\
+Behavior log prob.$\uparrow$ & -7.899 $\pm$ 0.020 & \textbf{-7.680} $\pm$ 0.005 & -7.776 $\pm$ 0.023 & \textbf{-7.698} $\pm$ 0.014 & -7.688 $\pm$ 0.018 & \textbf{-7.621} $\pm$ 0.019 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Trajectory-level effect at maze bottlenecks.}
+The task-wise results suggest that the aggregate gains are not driven by a single evaluation goal. On AMS, recurrence improves all five goals, with especially large gains on tasks where the MLP actor often fails. ALS shows gains across several subtasks, although one task remains unsolved by both methods. AGN remains the hardest diagnostic setting, but recurrent refinement still improves average success and several individual goals. These results are consistent with an environment-level interpretation: in maze layouts, the actor often needs to choose behavior-like actions that are not locally goal-directed, such as entering a corridor, completing a turn, or temporarily moving away from the goal to follow a U-shaped path.
+
+\begin{table}[t]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{2.5pt}
+\caption{Task-wise final evaluation success. The gains are heterogeneous across goals, motivating trajectory-level visualization rather than a claim that a single scalar critic statistic explains every task.}
+\begin{tabular}{lcccccc}
+\toprule
+Task & AMS+MLP & AMS+Ours & ALS+MLP & ALS+Ours & AGN+MLP & AGN+Ours \\
+\midrule
+Task 1 & 0.820 $\pm$ 0.135 & \textbf{0.985} $\pm$ 0.019 & 0.230 $\pm$ 0.087 & \textbf{0.753} $\pm$ 0.083 & 0.040 $\pm$ 0.049 & \textbf{0.187} $\pm$ 0.064 \\
+Task 2 & 0.705 $\pm$ 0.167 & \textbf{0.935} $\pm$ 0.025 & 0.000 $\pm$ 0.000 & 0.000 $\pm$ 0.000 & 0.195 $\pm$ 0.066 & \textbf{0.553} $\pm$ 0.083 \\
+Task 3 & 0.215 $\pm$ 0.206 & \textbf{0.945} $\pm$ 0.034 & 0.500 $\pm$ 0.086 & \textbf{0.813} $\pm$ 0.110 & 0.025 $\pm$ 0.010 & \textbf{0.080} $\pm$ 0.072 \\
+Task 4 & 0.100 $\pm$ 0.101 & \textbf{0.930} $\pm$ 0.062 & 0.005 $\pm$ 0.010 & \textbf{0.480} $\pm$ 0.072 & 0.300 $\pm$ 0.128 & \textbf{0.500} $\pm$ 0.072 \\
+Task 5 & 0.690 $\pm$ 0.082 & \textbf{0.940} $\pm$ 0.000 & 0.005 $\pm$ 0.010 & \textbf{0.140} $\pm$ 0.035 & 0.060 $\pm$ 0.052 & \textbf{0.480} $\pm$ 0.053 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[t]
+    \centering
+    \fbox{
+    \begin{minipage}[c][1.45in][c]{0.92\linewidth}
+    \centering
+    Placeholder: AMS trajectory visualization. Overlay representative MLP and recurrent evaluation trajectories on the maze layout for a bottleneck-heavy task such as AMS Task 3 or Task 4. Mark start and goal, use time-colored paths, and show the MLP trajectory stalling near a turn while the recurrent trajectory follows the corridor to the goal.
+    \end{minipage}}
+    \caption{Planned qualitative visualization of actor extraction in the environment. The figure will show how recurrent refinement changes the realized trajectory at a maze bottleneck, complementing the quantitative actor-interface diagnostics.}
+    \label{fig:ams_trajectory_bottleneck}
+\end{figure}
+
+The planned trajectory visualization in Figure \ref{fig:ams_trajectory_bottleneck} is intended to make the actor-interface mechanism concrete. If the MLP actor reaches a turn but stalls or follows a locally tempting direction, while the recurrent actor follows the corridor and completes the route, the qualitative behavior would match the quantitative diagnostics: recurrent refinement keeps the actor closer to behavior support while ranking behavior-like actions more usefully at navigation bottlenecks.
+
+\paragraph{Not merely better graph-distance prediction.}
+Finally, graph-distance correlations rule out a simpler explanation. If recurrence merely learned a better shortest-path heuristic, graph correlations should improve consistently. Instead, control improves on AMS and ALS while graph-distance correlations decrease or remain mixed, and AGN is mixed across correlation metrics. The recurrent critic therefore appears to improve the actor-facing value signal without becoming a uniformly better graph-distance estimator.
+
+\begin{table}[h]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{2.5pt}
+\caption{Correlation between CRL critic scores and maze graph distance. Recurrence does not uniformly improve graph-distance alignment, even when it improves control.}
+\begin{tabular}{lcccccc}
+\toprule
+Metric & AMS+MLP & AMS+Ours & ALS+MLP & ALS+Ours & AGN+MLP & AGN+Ours \\
+\midrule
+Graph corr. & 0.514 $\pm$ 0.014 & 0.427 $\pm$ 0.021 & 0.518 $\pm$ 0.010 & 0.502 $\pm$ 0.005 & 0.697 $\pm$ 0.020 & 0.704 $\pm$ 0.020 \\
+Graph Spearman & 0.551 $\pm$ 0.013 & 0.462 $\pm$ 0.017 & 0.537 $\pm$ 0.015 & 0.522 $\pm$ 0.006 & 0.760 $\pm$ 0.018 & 0.769 $\pm$ 0.021 \\
+Hard graph corr. & 0.265 $\pm$ 0.024 & 0.209 $\pm$ 0.039 & 0.329 $\pm$ 0.022 & 0.325 $\pm$ 0.015 & 0.533 $\pm$ 0.022 & 0.539 $\pm$ 0.016 \\
+Hard graph Spearman & 0.294 $\pm$ 0.028 & 0.223 $\pm$ 0.041 & 0.343 $\pm$ 0.016 & 0.346 $\pm$ 0.023 & 0.533 $\pm$ 0.030 & 0.528 $\pm$ 0.015 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\iffalse
+
+
+\fi
+
+\subsection{Iterative Refinement Creates a Threshold Effect}
+\label{sec:depth}
+The previous subsection shows that the recurrent critic changes the CRL signal. We next ask whether this effect actually requires iteration. A one-step recurrent block is an important control: it changes the critic architecture, but it cannot repeatedly revise the latent representation. We therefore sweep the number of refinement steps $K$ on \texttt{Antmaze-Medium-Stitch} and \texttt{Antmaze-Giant-Navigate}. The result is a clear threshold. One refinement step is not enough to explain the gain; performance enters the high-success regime only after the critic is allowed to refine its representation multiple times.
+
+% Current log note: the available AMS sweep contains K=1,2,4,6,8 with four seeds
+% each. The MLP baseline is the single available AMS CRL run. I did not find K=3,
+% K=5, or K=7 CSVs in the current workspace. One K=6 CSV has a malformed
+% intermediate row; final-checkpoint summaries are still usable, but learning
+% curve plotting should handle or repair that file.
+%
+% Figure plan: Use this as the main depth figure. Left panel: AMS learning curves
+% for MLP, K=1, K=2, K=4, and K=8; include K=6 only if readable. Right panel:
+% final or best success versus K, with MLP shown as a separate baseline or K=0
+% reference. Visually emphasize the failure of K=1 to reach the high-success
+% regime and the sharp transition at K=2. The figure should communicate that
+% iterative refinement is necessary, not merely that a recurrent block has more
+% parameters or a different parameterization.
+\paragraph{One refinement step is not enough.}
+The final-checkpoint sweep separates one-step recurrence from true iterative refinement. The $K=1$ critic remains close to the MLP baseline, while $K=2$ already reaches the high-success regime. Learning Curves of Success Rate on AMS and AGN Datasets across Training Steps with 4 Seeds is shown in Figure \ref{fig:iter_ams_agn}. Larger depths preserve this improvement, with $K=4$ and $K=6$ giving the strongest final performance in the average over four seeds as shown in Figure \ref{fig:iter_1M_100k}. Across all numbers of iterations, the separation $z$ is consistently higher than that of the MLP baseline. We compare the number of iterative refinement steps across multiple datasets. The success rate consistently peaks at 4–6 iterations. Meanwhile, to achieve the best training efficiency and reduce computational cost, we set the number of recurrent steps to 4 for most of our experiments. This pattern supports the main depth claim: the benefit appears when the critic can revise its latent representation more than once. 
+
+
+% \begin{figure}[h]
+%     \centering
+%     \begin{subfigure}[b]{0.48\textwidth}
+%         \includegraphics[width=\linewidth]{figures/AMS_12468line_s1.png}
+%         \label{fig:mse}
+%     \end{subfigure}
+%     \hfill
+%     \begin{subfigure}[b]{0.48\textwidth}
+%         \includegraphics[width=\linewidth]{figures/iter_curve.pdf}
+%         \label{fig:iter_curve}
+%     \end{subfigure}
+%     \caption{(a) AMS learning curves for K=1, K=2, K=4, K=6 and K=8 when seed=1.(b) Success and separation $z$ for MLP, K=1, K=2, K=4, K=6 and K=8 in the average over four seeds.}
+%     \label{fig:iter}
+% \end{figure}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\linewidth]{figures/iter_learning_process_steps.png}
+    \caption{Learning Curves of Success Rate on AMS and AGN Datasets across Training Steps with 4 Seeds (Shaded Area Indicates Standard Deviation)}
+    \label{fig:iter_ams_agn}
+\end{figure}
+
+%左图扩充为2个图 加方差阴影
+%右图加一个数据集
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\linewidth]{figures/iter_1M_100k.pdf}
+    \caption{Comparison of success rates across MLP and K-iteration models on AMS (100k/1M steps) and AGN (300k/1M steps), averaged over four seeds}
+    \label{fig:iter_1M_100k}
+\end{figure}
+
+%还有别的数据集上的循环次数的实验也可以放
+% \begin{center}
+% \scriptsize
+% \setlength{\tabcolsep}{2.5pt}
+% \begin{tabular}{lcccccccc}
+% \toprule
+% Setting & Final succ. & Best succ. & Best step & Margin & Rank & Sep. $z$ & Long margin & Long rank \\
+% \midrule
+% MLP & 0.506 $\pm$ 0.101 & 0.574 $\pm$ 0.063 & 450k $\pm$ 173k & 23.644 $\pm$ 0.931 & 0.990 $\pm$ 0.002 & 1.731 $\pm$ 0.027 & 22.625 $\pm$ 0.718 & 0.987 $\pm$ 0.003 \\
+% \texttt{iter1} & 0.638 $\pm$ 0.062 & 0.697 $\pm$ 0.040 & 725k $\pm$ 189k & 21.111 $\pm$ 0.571 & 0.992 $\pm$ 0.003 & 2.049 $\pm$ 0.034 & 20.251 $\pm$ 0.453 & 0.989 $\pm$ 0.004 \\
+% \texttt{iter2} & 0.914 $\pm$ 0.036 & 0.936 $\pm$ 0.018 & 750k $\pm$ 265k & 28.754 $\pm$ 1.049 & 0.996 $\pm$ 0.001 & 2.080 $\pm$ 0.041 & 27.687 $\pm$ 0.714 & 0.994 $\pm$ 0.002 \\
+% \texttt{iter4} & 0.947 $\pm$ 0.015 & 0.961 $\pm$ 0.020 & 850k $\pm$ 173k & 27.644 $\pm$ 0.564 & 0.998 $\pm$ 0.002 & 2.109 $\pm$ 0.055 & 27.005 $\pm$ 0.445 & 0.997 $\pm$ 0.002 \\
+% \texttt{iter6} & 0.956 $\pm$ 0.011 & 0.960 $\pm$ 0.004 & 950k $\pm$ 100k & 27.983 $\pm$ 0.623 & 0.998 $\pm$ 0.001 & 2.135 $\pm$ 0.034 & 27.236 $\pm$ 0.450 & 0.997 $\pm$ 0.002 \\
+% \texttt{iter8} & 0.912 $\pm$ 0.034 & 0.948 $\pm$ 0.041 & 825k $\pm$ 96k & 28.465 $\pm$ 0.679 & 0.999 $\pm$ 0.001 & 2.189 $\pm$ 0.059 & 27.896 $\pm$ 0.473 & 0.998 $\pm$ 0.001 \\
+% \bottomrule
+% \end{tabular}
+% \end{center}
+\begin{table}[t]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{2.5pt}
+\caption{Performance comparison across different training iterations, reporting final and best success rate, convergence step, and multiple consistency metrics (mean $\pm$ std over 4 seeds).}
+\begin{tabular}{lcccccccc}
+\toprule
+Setting & Final success$\uparrow$ & Best success$\uparrow$ & Best step & Margin & Rank & Sep. $z$ & Long margin & Long rank \\
+\midrule
+MLP & 0.506 $\pm$ 0.101 & 0.574 $\pm$ 0.063 & 450k $\pm$ 173k & 23.644 $\pm$ 0.931 & 0.990 $\pm$ 0.002 & 1.731 $\pm$ 0.027 & 22.625 $\pm$ 0.718 & 0.987 $\pm$ 0.003 \\
+\texttt{iter1} & 0.638 $\pm$ 0.062 & 0.697 $\pm$ 0.040 & 725k $\pm$ 189k & 21.111 $\pm$ 0.571 & 0.992 $\pm$ 0.003 & 2.049 $\pm$ 0.034 & 20.251 $\pm$ 0.453 & 0.989 $\pm$ 0.004 \\
+\texttt{iter2} & 0.914 $\pm$ 0.036 & 0.936 $\pm$ 0.018 & 750k $\pm$ 265k & 28.754 $\pm$ 1.049 & 0.996 $\pm$ 0.001 & 2.080 $\pm$ 0.041 & 27.687 $\pm$ 0.714 & 0.994 $\pm$ 0.002 \\
+\texttt{iter4} & 0.947 $\pm$ 0.015 & \textbf{0.961} $\pm$ 0.020 & 850k $\pm$ 173k & 27.644 $\pm$ 0.564 & 0.998 $\pm$ 0.002 & 2.109 $\pm$ 0.055 & 27.005 $\pm$ 0.445 & 0.997 $\pm$ 0.002 \\
+\texttt{iter6} & \textbf{0.956} $\pm$ 0.011 & 0.960 $\pm$ 0.004 & 950k $\pm$ 100k & 27.983 $\pm$ 0.623 & 0.998 $\pm$ 0.001 & 2.135 $\pm$ 0.034 & 27.236 $\pm$ 0.450 & 0.997 $\pm$ 0.002 \\
+\texttt{iter8} & 0.912 $\pm$ 0.034 & 0.948 $\pm$ 0.041 & 825k $\pm$ 96k & 28.465 $\pm$ 0.679 & 0.999 $\pm$ 0.001 & 2.189 $\pm$ 0.059 & 27.896 $\pm$ 0.473 & 0.998 $\pm$ 0.001 \\
+\bottomrule
+\end{tabular}
+\end{table}
+% Figure plan: If space allows, add an inset on the main depth figure showing
+% 100k success versus K. This inset reinforces that the threshold is visible
+% during learning, not only at the final checkpoint. Keep the inset focused on
+% success; critic diagnostics can remain in the table or appendix.
+\paragraph{The threshold appears during learning.}
+The same transition is already visible early in training. At early stages like 100k gradient steps in AMS and 300k in AGN shown in Figure \ref{fig:iter} (b), the MLP critic and the $K=1$ critic remain below the deeper recurrent variants. By contrast, $K=2$ and larger depths have already entered the useful success range. The depth sweep therefore shows an optimization-time threshold as well as a final-performance threshold.
+
+% \begin{center}
+% \scriptsize
+% \setlength{\tabcolsep}{3pt}
+% \begin{tabular}{lccccc}
+% \toprule
+% Setting & 100k succ. & Margin & Rank & Sep. $z$ & Long rank \\
+% \midrule
+% MLP & 0.377 $\pm$ 0.067 & 12.786 $\pm$ 0.134 & 0.985 $\pm$ 0.002 & 2.273 $\pm$ 0.056 & 0.980 $\pm$ 0.003 \\
+% \texttt{iter1} & 0.380 $\pm$ 0.140 & 10.611 $\pm$ 0.171 & 0.977 $\pm$ 0.005 & 2.255 $\pm$ 0.035 & 0.970 $\pm$ 0.005 \\
+% \texttt{iter2} & 0.609 $\pm$ 0.018 & 12.070 $\pm$ 0.158 & 0.987 $\pm$ 0.004 & 2.389 $\pm$ 0.056 & 0.984 $\pm$ 0.005 \\
+% \texttt{iter4} & 0.680 $\pm$ 0.027 & 12.995 $\pm$ 0.423 & 0.988 $\pm$ 0.004 & 2.419 $\pm$ 0.096 & 0.983 $\pm$ 0.006 \\
+% \texttt{iter6} & 0.731 $\pm$ 0.043 & 13.260 $\pm$ 0.152 & 0.988 $\pm$ 0.002 & 2.480 $\pm$ 0.086 & 0.984 $\pm$ 0.003 \\
+% \texttt{iter8} & 0.727 $\pm$ 0.076 & 13.517 $\pm$ 0.329 & 0.990 $\pm$ 0.003 & 2.491 $\pm$ 0.098 & 0.987 $\pm$ 0.005 \\
+% \bottomrule
+% \end{tabular}
+% \end{center}
+\begin{table}[t]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\caption{Early-stage (100k steps) performance comparison across different training settings in terms of success rate, margin, ranking accuracy, and separation metrics (mean $\pm$ std over 4 seeds).}
+\begin{tabular}{lccccc}
+\toprule
+Setting & 100k success$\uparrow$ & Margin & Rank & Sep. $z$ & Long rank \\
+\midrule
+MLP & 0.377 $\pm$ 0.067 & 12.786 $\pm$ 0.134 & 0.985 $\pm$ 0.002 & 2.273 $\pm$ 0.056 & 0.980 $\pm$ 0.003 \\
+\texttt{iter1} & 0.380 $\pm$ 0.140 & 10.611 $\pm$ 0.171 & 0.977 $\pm$ 0.005 & 2.255 $\pm$ 0.035 & 0.970 $\pm$ 0.005 \\
+\texttt{iter2} & 0.609 $\pm$ 0.018 & 12.070 $\pm$ 0.158 & 0.987 $\pm$ 0.004 & 2.389 $\pm$ 0.056 & 0.984 $\pm$ 0.005 \\
+\texttt{iter4} & 0.680 $\pm$ 0.027 & 12.995 $\pm$ 0.423 & 0.988 $\pm$ 0.004 & 2.419 $\pm$ 0.096 & 0.983 $\pm$ 0.006 \\
+\texttt{iter6} & 0.731 $\pm$ 0.043 & 13.260 $\pm$ 0.152 & 0.988 $\pm$ 0.002 & 2.480 $\pm$ 0.086 & 0.984 $\pm$ 0.003 \\
+\texttt{iter8} & \textbf{0.727} $\pm$ 0.076 & 13.517 $\pm$ 0.329 & 0.990 $\pm$ 0.003 & 2.491 $\pm$ 0.098 & 0.987 $\pm$ 0.005 \\
+\bottomrule
+\end{tabular}
+\end{table}
+Taken together, the depth sweep supports a simple conclusion: the recurrent critic's gain is genuinely iterative. A single refinement step is insufficient, the main transition appears once $K\geq2$, and additional steps mainly preserve or saturate the improvement rather than creating a linear depth-scaling trend.
+
+\subsection{Matched Parameter and Computation Comparison}
+Because the paper is architectural, fairness controls are mandatory. The cleanest capacity-control environment is \texttt{Antmaze-Large-Stitch-v0}. The recurrent critic should be compared against the default MLP critic, a wider MLP, and a deeper MLP. The feedforward controls should preserve the same basic MLP recipe as CRL's default critic: GELU activations, layer normalization, and no residual connections. The wider and deeper controls are chosen by matching critic parameter count as closely as possible to the recurrent critic, rather than by arbitrary scaling.
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\linewidth]{figures/parameter_match.pdf}
+    \caption{Comparison of matched Parameter.}
+    \label{fig:parameter_match}
+\end{figure}
+For the current recurrent target, parameter matching yields two reasonable controls: a wider MLP with hidden sizes \texttt{688-688-688} and a deeper MLP with hidden sizes \texttt{512-512-512-512-512}. The former is within 0.37\% of the recurrent critic's parameter count, and the latter is within 0.19\%. These should be the primary fairness baselines. Compute should be reported separately using measured wall-clock statistics such as \texttt{time/step\_time}. If exact compute matching would require pathological plain MLPs, the paper should instead present the nearest valid feedforward controls together with wall-clock or anytime performance curves.
+
+% \begin{figure}[t]
+% \centering
+% \fbox{%
+%   \parbox[c][1.55in][c]{0.92\linewidth}{%
+%     \centering
+%     Placeholder for parameter/computation matching figure.\\
+%     Compare recurrent critic against baseline MLP, wider MLP, and deeper MLP\\
+%     under matched parameter count and wall-clock-aware comparisons.
+%   }%
+% }
+% \caption{Placeholder for the fairness-control figure. The final version should show that the recurrent gain is not explained only by feedforward capacity or by trivial compute differences.}
+% \label{fig:param-compute-match}
+% \end{figure}
+
+\subsection{Ablation on Model Components} 
+%还有其他数据集上的消融也可以放 比如只放acc
+We ablate the stabilizing components of the four-step recurrent CRL critic on \texttt{Antmaze-Medium-Stitch} and \texttt{Antmaze-Large-Stitch}. As shown in Figure \ref{fig:ablation}, our final design performs best, and the largest drop comes from removing LayerScale. Removing pre-normalization also weakens the model, but does not collapse performance, while the step ablation has a smaller effect on success. This gives a simple component-level picture: recurrent refinement is most reliable when repeated residual updates are kept on a controlled scale.
+%加一个数据集
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\linewidth]{figures/ablation_two.pdf}
+    \caption{Abaltion Study.}
+    \label{fig:ablation}
+\end{figure}
+
+% Current log note: ablation logs are in references/mechanism/Ablation. The final
+% recurrent reference uses the four AMS iter4 runs from Baseline vs Recurrent,
+% and the MLP row is the available single AMS baseline run. The "No step/FiLM"
+% row is a combined configuration difference in the current logs, so do not
+% describe it as a clean step-info-only ablation without verifying flags.
+%
+% Figure plan: Use one compact grouped bar figure. Main panel: final success for
+% MLP, final recurrent, no pre-LN, no LayerScale, and no step/FiLM. Optional
+% small side panel: path-medium margin or long-trajectory margin. The visual
+% message should be simple: final recurrent is best; removing LayerScale causes
+% the clearest degradation.
+% \begin{center}
+% \scriptsize
+% \setlength{\tabcolsep}{2.5pt}
+% \begin{tabular}{lcccccccc}
+% \toprule
+% Setting &  Best succ. &  Margin & Rank & Sep. $z$ & Long margin & Path-med margin \\
+% \midrule
+% % MLP & 0.506 $\pm$ 0.101 & 0.574 $\pm$ 0.063 & 450k $\pm$ 173k & 23.644 $\pm$ 0.931 & 0.990 $\pm$ 0.002 & 1.731 $\pm$ 0.027 & 22.625 $\pm$ 0.718 & 16.972 $\pm$ 0.995 \\
+% Ours   & 0.961 $\pm$ 0.020  & 27.644 $\pm$ 0.564 & 0.998 $\pm$ 0.002 & 2.109 $\pm$ 0.055 & 27.005 $\pm$ 0.445 & 21.923 $\pm$ 1.113 \\
+% w/o Step  & 0.947 $\pm$ 0.021  & 20.524 $\pm$ 0.565 & 0.992 $\pm$ 0.004 & 1.985 $\pm$ 0.041 & 19.762 $\pm$ 0.404 & 14.982 $\pm$ 0.509 \\
+% w/o pre-LN  & 0.879 $\pm$ 0.089  & 20.671 $\pm$ 0.545 & 0.991 $\pm$ 0.003 & 2.038 $\pm$ 0.048 & 19.848 $\pm$ 0.243 & 15.234 $\pm$ 0.564 \\
+% w/o LayerScale  & 0.803 $\pm$ 0.106  & 17.686 $\pm$ 1.179 & 0.987 $\pm$ 0.006 & 2.093 $\pm$ 0.034 & 16.859 $\pm$ 1.023 & 12.682 $\pm$ 0.503 \\
+
+% \bottomrule
+% \end{tabular}
+% \end{center}
+\begin{table}[t]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{2.5pt}
+\caption{Ablation study of key components in our method, evaluating success rate and representation quality metrics including margin, ranking accuracy, and trajectory/path consistency (mean $\pm$ std over 4 seeds).}
+\begin{tabular}{lcccccc}
+\toprule
+Setting & Best success$\uparrow$ & Margin & Rank & Sep. $z$ & Long margin & Path-med margin \\
+\midrule
+Ours   & \textbf{0.961} $\pm$ 0.020  & 27.644 $\pm$ 0.564 & 0.998 $\pm$ 0.002 & 2.109 $\pm$ 0.055 & 27.005 $\pm$ 0.445 & 21.923 $\pm$ 1.113 \\
+w/o Step  & 0.947 $\pm$ 0.021  & 20.524 $\pm$ 0.565 & 0.992 $\pm$ 0.004 & 1.985 $\pm$ 0.041 & 19.762 $\pm$ 0.404 & 14.982 $\pm$ 0.509 \\
+w/o pre-LN  & 0.879 $\pm$ 0.089  & 20.671 $\pm$ 0.545 & 0.991 $\pm$ 0.003 & 2.038 $\pm$ 0.048 & 19.848 $\pm$ 0.243 & 15.234 $\pm$ 0.564 \\
+w/o LayerScale  & 0.803 $\pm$ 0.106  & 17.686 $\pm$ 1.179 & 0.987 $\pm$ 0.006 & 2.093 $\pm$ 0.034 & 16.859 $\pm$ 1.023 & 12.682 $\pm$ 0.503 \\
+\bottomrule
+\end{tabular}
+\end{table}
+% \begin{center}
+% \scriptsize
+% \setlength{\tabcolsep}{2.5pt}
+% \begin{tabular}{lcccccccc}
+% \toprule
+% Setting & Final succ. & Best succ. & Best step & Margin & Rank & Sep. $z$ & Long margin & Path-med margin \\
+% \midrule
+% MLP & 0.608 & 0.608 & 1000k & 22.315 & 0.988 & 1.848 & 21.599 & 15.889 \\
+% Final recur & 0.947 $\pm$ 0.015 & 0.961 $\pm$ 0.020 & 850k $\pm$ 173k & 27.644 $\pm$ 0.564 & 0.998 $\pm$ 0.002 & 2.109 $\pm$ 0.055 & 27.005 $\pm$ 0.445 & 21.923 $\pm$ 1.113 \\
+% No pre-LN & 0.863 $\pm$ 0.081 & 0.879 $\pm$ 0.089 & 825k $\pm$ 50k & 20.671 $\pm$ 0.545 & 0.991 $\pm$ 0.003 & 2.038 $\pm$ 0.048 & 19.848 $\pm$ 0.243 & 15.234 $\pm$ 0.564 \\
+% No LayerScale & 0.781 $\pm$ 0.124 & 0.803 $\pm$ 0.106 & 900k $\pm$ 115k & 17.686 $\pm$ 1.179 & 0.987 $\pm$ 0.006 & 2.093 $\pm$ 0.034 & 16.859 $\pm$ 1.023 & 12.682 $\pm$ 0.503 \\
+% No step & 0.926 $\pm$ 0.042 & 0.947 $\pm$ 0.021 & 825k $\pm$ 171k & 20.524 $\pm$ 0.565 & 0.992 $\pm$ 0.004 & 1.985 $\pm$ 0.041 & 19.762 $\pm$ 0.404 & 14.982 $\pm$ 0.509 \\
+% \bottomrule
+% \end{tabular}
+% \end{center}
+
+The ablation should not be read as a binary component story. Each variant remains functional, but the full recurrent critic is the most reliable configuration, and LayerScale is the clearest stabilizer for repeated refinement.
+
+% \subsection{Actor-Side Recurrence for the Sake of Completeness}
+% The actor-side story should be presented as a separate failure mode. If recurrent critics help because they refine the goal-conditioned learning signal, then moving recurrence to the actor need not help much and may even hurt. This is an important negative result because it argues against the generic claim that ``recurrent networks are better everywhere.'' The clean comparison here is baseline CRL, recurrent critic only, recurrent actor only, and critic-plus-actor recurrence on one stitching task and one lower-gain task. The expected result is that the critic-side replacement dominates, while actor-side recurrence produces smaller, inconsistent, or negative gains.
+
+\subsection{Online Extension}
+The final experiment block should show that the core mechanism is not purely an artifact of offline training. A compact online CRL experiment can ask whether the same recurrent critic still helps when the data distribution is no longer fixed. The claim should remain modest: not that recurrence solves online exploration in general, but that the same critic-side architectural bias continues to be useful when CRL is trained online. This section can be short, but it helps broaden the paper beyond a purely offline curiosity.
+
+\section{Conclusion}
+
+\paragraph{Limitations.}
+
 
 
 
@@ -446,37 +1005,9 @@ More information about this disclosure can be found at: \url{https://neurips.cc/
 Do {\bf not} include this section in the anonymized submission, only in the final paper. You can use the \texttt{ack} environment provided in the style file to automatically hide this section in the anonymized submission.
 \end{ack}
 
-\section*{References}
-
-
-References follow the acknowledgments in the camera-ready paper. Use unnumbered first-level heading for
-the references. Any choice of citation style is acceptable as long as you are
-consistent. It is permissible to reduce the font size to \verb+small+ (9 point)
-when listing the references.
-Note that the Reference section does not count towards the page limit.
-\medskip
-
-
-{
-\small
-
-
-[1] Alexander, J.A.\ \& Mozer, M.C.\ (1995) Template-based algorithms for
-connectionist rule extraction. In G.\ Tesauro, D.S.\ Touretzky and T.K.\ Leen
-(eds.), {\it Advances in Neural Information Processing Systems 7},
-pp.\ 609--616. Cambridge, MA: MIT Press.
-
-
-[2] Bower, J.M.\ \& Beeman, D.\ (1995) {\it The Book of GENESIS: Exploring
-  Realistic Neural Models with the GEneral NEural SImulation System.}  New York:
-TELOS/Springer--Verlag.
-
-
-[3] Hasselmo, M.E., Schnell, E.\ \& Barkai, E.\ (1995) Dynamics of learning and
-recall at excitatory recurrent synapses and cholinergic modulation in rat
-hippocampal region CA3. {\it Journal of Neuroscience} {\bf 15}(7):5249-5262.
-}
-
+\bibliographystyle{plainnat}
+\nocite{*}
+\bibliography{references}
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 

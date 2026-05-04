@@ -9,7 +9,7 @@ Replace bracketed placeholders with numbers or short notes as runs finish.
 - Author: `[name]`
 - Repo commit / branch: `[commit-or-branch]`
 - Benchmark family: `[SAW / CGIVL / mixed]`
-- Primary goal: `[e.g. determine whether recur_tied + FiLM beats MLP baseline]`
+- Primary goal: `[e.g. determine whether recurrent value refinement beats MLP baseline]`
 
 ## Success Metrics
 

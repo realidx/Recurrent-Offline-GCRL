@@ -17,11 +17,11 @@
 #      slurm/train_qrl.slurm
 #
 # 2) QRL recurrent quasimetric value on antmaze-large-stitch:
-#    sbatch --array=0-2 --export="ALL,SEEDS='0 1 2',ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=P4_QRL_AntLargeStitch_Recur,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=4,RECUR_USE_STEP_INFO=1,CRITIC_RECUR_USE_FILM=0,ALPHA=0.003,DISCOUNT=0.99,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online" \
+#    sbatch --array=0-2 --export="ALL,SEEDS='0 1 2',ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=P4_QRL_AntLargeStitch_Recur,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=4,RECUR_USE_STEP_INFO=1,ALPHA=0.003,DISCOUNT=0.99,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online" \
 #      slurm/train_qrl.slurm
 #
 # 3) Same recurrent QRL run with deeper test-time compute:
-#    sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=P4_QRL_AntLargeStitch_RecurEval8,CRITIC_BACKBONE=recur_tied,KTRAIN=4,CRITIC_EVAL_NUM_ITERS=8,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=8,RECUR_USE_STEP_INFO=1,CRITIC_RECUR_USE_FILM=0,ALPHA=0.003,DISCOUNT=0.99,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online" \
+#    sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=P4_QRL_AntLargeStitch_RecurEval8,CRITIC_BACKBONE=recur_tied,KTRAIN=4,CRITIC_EVAL_NUM_ITERS=8,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=8,RECUR_USE_STEP_INFO=1,ALPHA=0.003,DISCOUNT=0.99,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online" \
 #      slurm/train_qrl.slurm
 #
 # Explicit x-separated dims still work and take precedence if both forms are set.
@@ -102,17 +102,8 @@ RECUR_NUM_BLOCKS="${RECUR_NUM_BLOCKS:-1}"    # Deprecated fallback: number of 2-
 RECUR_MAX_ITERS="${RECUR_MAX_ITERS:-4}"
 CRITIC_RECUR_LN_MODE="${CRITIC_RECUR_LN_MODE:-per_layer_final}"
 RECUR_USE_STEP_INFO="${RECUR_USE_STEP_INFO:-1}"
-RECUR_SINUSOIDAL="${RECUR_SINUSOIDAL:-0}"
-CRITIC_RECUR_USE_FILM="${CRITIC_RECUR_USE_FILM:-0}"
-CRITIC_RECUR_FILM_MODE="${CRITIC_RECUR_FILM_MODE:-hidden_context}"
-CRITIC_RECUR_USE_INPUT_INJECTION="${CRITIC_RECUR_USE_INPUT_INJECTION:-0}"
-CRITIC_RECUR_USE_SOFT_MIXTURE="${CRITIC_RECUR_USE_SOFT_MIXTURE:-0}"
 CRITIC_RECUR_USE_LAYERSCALE="${CRITIC_RECUR_USE_LAYERSCALE:-1}"
 CRITIC_RECUR_SWIGLU_PRE_LN="${CRITIC_RECUR_SWIGLU_PRE_LN:-1}"
-RECUR_USE_ACT="${RECUR_USE_ACT:-0}"
-RECUR_ACT_EPSILON="${RECUR_ACT_EPSILON:-0.01}"
-RECUR_ACT_MIN_ITERS="${RECUR_ACT_MIN_ITERS:-1}"
-RECUR_ACT_PONDER_WEIGHT="${RECUR_ACT_PONDER_WEIGHT:-0.0}"
 
 # Seeds controlled via env var: SEEDS="0 1 2"
 SEEDS="${SEEDS:-0 1 2}"
@@ -285,10 +276,6 @@ case "${CRITIC_BACKBONE}" in
       echo "Error: CRITIC_RECUR_BLOCK_TYPE=swiglu requires RECUR_NUM_DENSE_LAYERS=2." >&2
       exit 2
     fi
-    if [[ ! "${CRITIC_RECUR_FILM_MODE}" =~ ^(hidden|context|hidden_context)$ ]]; then
-      echo "Error: CRITIC_RECUR_FILM_MODE='${CRITIC_RECUR_FILM_MODE}' is invalid. Use hidden, context, or hidden_context." >&2
-      exit 2
-    fi
     AGENT_FLAGS+=(
       "--agent.critic_recur_iters=${KTRAIN}"
       "--agent.critic_recur_num_dense_layers=${RECUR_NUM_DENSE_LAYERS}"
@@ -296,17 +283,8 @@ case "${CRITIC_BACKBONE}" in
       "--agent.critic_recur_max_iters=${RECUR_MAX_ITERS}"
       "--agent.critic_recur_ln_mode=${CRITIC_RECUR_LN_MODE}"
       "--agent.critic_recur_use_step_info=${RECUR_USE_STEP_INFO}"
-      "--agent.critic_recur_sinusoidal=${RECUR_SINUSOIDAL}"
-      "--agent.critic_recur_use_film=${CRITIC_RECUR_USE_FILM}"
-      "--agent.critic_recur_film_mode=${CRITIC_RECUR_FILM_MODE}"
-      "--agent.critic_recur_use_input_injection=${CRITIC_RECUR_USE_INPUT_INJECTION}"
-      "--agent.critic_recur_use_soft_mixture=${CRITIC_RECUR_USE_SOFT_MIXTURE}"
       "--agent.critic_recur_use_layerscale=${CRITIC_RECUR_USE_LAYERSCALE}"
       "--agent.critic_recur_swiglu_pre_ln=${CRITIC_RECUR_SWIGLU_PRE_LN}"
-      "--agent.critic_recur_use_act=${RECUR_USE_ACT}"
-      "--agent.critic_recur_act_epsilon=${RECUR_ACT_EPSILON}"
-      "--agent.critic_recur_act_min_iters=${RECUR_ACT_MIN_ITERS}"
-      "--agent.critic_recur_act_ponder_weight=${RECUR_ACT_PONDER_WEIGHT}"
     )
     ;;
   *)

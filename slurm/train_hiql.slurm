@@ -50,7 +50,7 @@ REFINE_DUMP_STEPS="${REFINE_DUMP_STEPS:-}"
 DISABLE_TQDM="${DISABLE_TQDM:-1}"
 
 LR="${LR:-3e-4}"
-LR_DECAY_STEPS="${LR_DECAY_STEPS:-1000000}"
+LR_DECAY_STEPS="${LR_DECAY_STEPS:-0}"
 LR_MIN="${LR_MIN:-1e-5}"
 DISCOUNT="${DISCOUNT:-0.99}"
 BATCH_SIZE="${BATCH_SIZE:-1024}"
@@ -64,15 +64,6 @@ REP_DIM="${REP_DIM:-10}"
 CONST_STD="${CONST_STD:-1}"
 DISCRETE="${DISCRETE:-0}"
 ENCODER="${ENCODER:-}"
-ACTOR_CONFIDENCE_GATE="${ACTOR_CONFIDENCE_GATE:-0}"
-ACTOR_CONFIDENCE_NUM_NEGATIVES="${ACTOR_CONFIDENCE_NUM_NEGATIVES:-4}"
-ACTOR_CONFIDENCE_TAU="${ACTOR_CONFIDENCE_TAU:-0.0}"
-ACTOR_CONFIDENCE_TEMPERATURE="${ACTOR_CONFIDENCE_TEMPERATURE:-1.0}"
-ACTOR_CONFIDENCE_MIN="${ACTOR_CONFIDENCE_MIN:-0.1}"
-ACTOR_CONFIDENCE_WEIGHT_CLIP="${ACTOR_CONFIDENCE_WEIGHT_CLIP:-100.0}"
-ACTOR_VALUE_NUM_ITERS="${ACTOR_VALUE_NUM_ITERS:-0}"
-LOW_ACTOR_VALUE_NUM_ITERS="${LOW_ACTOR_VALUE_NUM_ITERS:-0}"
-HIGH_ACTOR_VALUE_NUM_ITERS="${HIGH_ACTOR_VALUE_NUM_ITERS:-0}"
 
 VALUE_BACKBONE="${VALUE_BACKBONE:-recur_tied}"
 VALUE_RECUR_ITERS="${VALUE_RECUR_ITERS:-6}"
@@ -82,19 +73,7 @@ VALUE_RECUR_MAX_ITERS="${VALUE_RECUR_MAX_ITERS:-6}"
 VALUE_RECUR_LN_MODE="${VALUE_RECUR_LN_MODE:-pre_loop}"
 VALUE_RECUR_USE_STEP_INFO="${VALUE_RECUR_USE_STEP_INFO:-1}"
 VALUE_RECUR_STEP_INFO_INNER_MODE="${VALUE_RECUR_STEP_INFO_INNER_MODE:-all}"
-VALUE_RECUR_USE_FILM="${VALUE_RECUR_USE_FILM:-0}"
-VALUE_RECUR_FILM_MODE="${VALUE_RECUR_FILM_MODE:-hidden}"
-VALUE_RECUR_USE_INPUT_INJECTION="${VALUE_RECUR_USE_INPUT_INJECTION:-0}"
-VALUE_RECUR_USE_SOFT_MIXTURE="${VALUE_RECUR_USE_SOFT_MIXTURE:-0}"
 VALUE_RECUR_USE_INNER_RESIDUAL="${VALUE_RECUR_USE_INNER_RESIDUAL:-1}"
-VALUE_RECUR_USE_ACT="${VALUE_RECUR_USE_ACT:-0}"
-VALUE_RECUR_ACT_EPSILON="${VALUE_RECUR_ACT_EPSILON:-0.01}"
-VALUE_RECUR_ACT_MIN_ITERS="${VALUE_RECUR_ACT_MIN_ITERS:-1}"
-VALUE_RECUR_ACT_PONDER_WEIGHT="${VALUE_RECUR_ACT_PONDER_WEIGHT:-0.0}"
-VALUE_RECUR_DEEP_SUPERVISION="${VALUE_RECUR_DEEP_SUPERVISION:-0}"
-VALUE_RECUR_DEEP_SUPERVISION_WEIGHT="${VALUE_RECUR_DEEP_SUPERVISION_WEIGHT:-1.0}"
-VALUE_RECUR_DEEP_SUPERVISION_SCHEME="${VALUE_RECUR_DEEP_SUPERVISION_SCHEME:-linear}"
-VALUE_RECUR_DEEP_SUPERVISION_INCLUDE_FINAL="${VALUE_RECUR_DEEP_SUPERVISION_INCLUDE_FINAL:-0}"
 VALUE_LAYERSCALE_INIT="${VALUE_LAYERSCALE_INIT:-1e-2}"
 
 VALUE_P_CURGOAL="${VALUE_P_CURGOAL:-0.2}"
@@ -175,12 +154,6 @@ AGENT_FLAGS=(
   "--agent.rep_dim=${REP_DIM}"
   "--agent.const_std=${CONST_STD}"
   "--agent.discrete=${DISCRETE}"
-  "--agent.actor_confidence_gate=${ACTOR_CONFIDENCE_GATE}"
-  "--agent.actor_confidence_num_negatives=${ACTOR_CONFIDENCE_NUM_NEGATIVES}"
-  "--agent.actor_confidence_tau=${ACTOR_CONFIDENCE_TAU}"
-  "--agent.actor_confidence_temperature=${ACTOR_CONFIDENCE_TEMPERATURE}"
-  "--agent.actor_confidence_min=${ACTOR_CONFIDENCE_MIN}"
-  "--agent.actor_confidence_weight_clip=${ACTOR_CONFIDENCE_WEIGHT_CLIP}"
   "--agent.value_backbone=${VALUE_BACKBONE}"
   "--agent.value_p_curgoal=${VALUE_P_CURGOAL}"
   "--agent.value_p_trajgoal=${VALUE_P_TRAJGOAL}"
@@ -192,11 +165,6 @@ AGENT_FLAGS=(
 
 append_hidden_dims "actor_hidden_dims" "${ACTOR_HIDDEN_DIMS}"
 append_hidden_dims "value_hidden_dims" "${VALUE_HIDDEN_DIMS}"
-AGENT_FLAGS+=(
-  "--agent.actor_value_num_iters=${ACTOR_VALUE_NUM_ITERS}"
-  "--agent.low_actor_value_num_iters=${LOW_ACTOR_VALUE_NUM_ITERS}"
-  "--agent.high_actor_value_num_iters=${HIGH_ACTOR_VALUE_NUM_ITERS}"
-)
 
 if [[ -n "${ENCODER}" ]]; then
   AGENT_FLAGS+=("--agent.encoder=${ENCODER}")
@@ -218,32 +186,6 @@ case "${VALUE_BACKBONE}" in
       echo "Error: VALUE_RECUR_BLOCK_TYPE=swiglu requires VALUE_RECUR_NUM_DENSE_LAYERS=2." >&2
       exit 2
     fi
-    if [[ ! "${VALUE_RECUR_FILM_MODE}" =~ ^(hidden|context|hidden_context)$ ]]; then
-      echo "Error: VALUE_RECUR_FILM_MODE='${VALUE_RECUR_FILM_MODE}' is invalid. Use hidden, context, or hidden_context." >&2
-      exit 2
-    fi
-    if [[ ! "${VALUE_RECUR_DEEP_SUPERVISION_SCHEME}" =~ ^(uniform|linear)$ ]]; then
-      echo "Error: VALUE_RECUR_DEEP_SUPERVISION_SCHEME='${VALUE_RECUR_DEEP_SUPERVISION_SCHEME}' is invalid. Use uniform or linear." >&2
-      exit 2
-    fi
-    if [[ "${VALUE_BACKBONE}" == "recur_stacked_swiglu" ]]; then
-      if [[ "${VALUE_RECUR_USE_FILM}" != "0" ]]; then
-        echo "Error: VALUE_BACKBONE=recur_stacked_swiglu does not support VALUE_RECUR_USE_FILM." >&2
-        exit 2
-      fi
-      if [[ "${VALUE_RECUR_USE_INPUT_INJECTION}" != "0" ]]; then
-        echo "Error: VALUE_BACKBONE=recur_stacked_swiglu does not support VALUE_RECUR_USE_INPUT_INJECTION." >&2
-        exit 2
-      fi
-      if [[ "${VALUE_RECUR_USE_SOFT_MIXTURE}" != "0" ]]; then
-        echo "Error: VALUE_BACKBONE=recur_stacked_swiglu does not support VALUE_RECUR_USE_SOFT_MIXTURE." >&2
-        exit 2
-      fi
-      if [[ "${VALUE_RECUR_USE_ACT}" != "0" ]]; then
-        echo "Error: VALUE_BACKBONE=recur_stacked_swiglu does not support VALUE_RECUR_USE_ACT." >&2
-        exit 2
-      fi
-    fi
     value_recur_block_type_flag="${VALUE_RECUR_BLOCK_TYPE}"
     if [[ "${VALUE_BACKBONE}" == "recur_stacked_swiglu" ]]; then
       value_recur_block_type_flag="swiglu"
@@ -256,19 +198,7 @@ case "${VALUE_BACKBONE}" in
       "--agent.value_recur_ln_mode=${VALUE_RECUR_LN_MODE}"
       "--agent.value_recur_use_step_info=${VALUE_RECUR_USE_STEP_INFO}"
       "--agent.value_recur_step_info_inner_mode=${VALUE_RECUR_STEP_INFO_INNER_MODE}"
-      "--agent.value_recur_use_film=${VALUE_RECUR_USE_FILM}"
-      "--agent.value_recur_film_mode=${VALUE_RECUR_FILM_MODE}"
-      "--agent.value_recur_use_input_injection=${VALUE_RECUR_USE_INPUT_INJECTION}"
-      "--agent.value_recur_use_soft_mixture=${VALUE_RECUR_USE_SOFT_MIXTURE}"
       "--agent.value_recur_use_inner_residual=${VALUE_RECUR_USE_INNER_RESIDUAL}"
-      "--agent.value_recur_use_act=${VALUE_RECUR_USE_ACT}"
-      "--agent.value_recur_act_epsilon=${VALUE_RECUR_ACT_EPSILON}"
-      "--agent.value_recur_act_min_iters=${VALUE_RECUR_ACT_MIN_ITERS}"
-      "--agent.value_recur_act_ponder_weight=${VALUE_RECUR_ACT_PONDER_WEIGHT}"
-      "--agent.value_recur_deep_supervision=${VALUE_RECUR_DEEP_SUPERVISION}"
-      "--agent.value_recur_deep_supervision_weight=${VALUE_RECUR_DEEP_SUPERVISION_WEIGHT}"
-      "--agent.value_recur_deep_supervision_scheme=${VALUE_RECUR_DEEP_SUPERVISION_SCHEME}"
-      "--agent.value_recur_deep_supervision_include_final=${VALUE_RECUR_DEEP_SUPERVISION_INCLUDE_FINAL}"
       "--agent.value_layerscale_init=${VALUE_LAYERSCALE_INIT}"
     )
     ;;

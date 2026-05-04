@@ -84,13 +84,7 @@ VALUE_RECUR_NUM_DENSE_LAYERS="${VALUE_RECUR_NUM_DENSE_LAYERS:-2}"
 VALUE_RECUR_MAX_ITERS="${VALUE_RECUR_MAX_ITERS:-4}"
 VALUE_RECUR_LN_MODE="${VALUE_RECUR_LN_MODE:-per_layer_final}"
 VALUE_RECUR_USE_STEP_INFO="${VALUE_RECUR_USE_STEP_INFO:-0}"
-VALUE_RECUR_SINUSOIDAL="${VALUE_RECUR_SINUSOIDAL:-0}"
-VALUE_RECUR_USE_FILM="${VALUE_RECUR_USE_FILM:-1}"
-VALUE_RECUR_FILM_MODE="${VALUE_RECUR_FILM_MODE:-hidden}"
 VALUE_RECUR_USE_LAYERSCALE="${VALUE_RECUR_USE_LAYERSCALE:-1}"
-VALUE_RECUR_USE_ACT="${VALUE_RECUR_USE_ACT:-0}"
-VALUE_RECUR_ACT_EPSILON="${VALUE_RECUR_ACT_EPSILON:-0.01}"
-VALUE_RECUR_ACT_MIN_ITERS="${VALUE_RECUR_ACT_MIN_ITERS:-1}"
 VALUE_LAYERSCALE_INIT="${VALUE_LAYERSCALE_INIT:-1e-2}"
 GOALDISTANCE_HIDDEN_DIMS="${GOALDISTANCE_HIDDEN_DIMS:-512x512x512}"
 GOALDISTANCE_LATENT_DIM="${GOALDISTANCE_LATENT_DIM:-512}"
@@ -229,10 +223,6 @@ case "${VALUE_BACKBONE}" in
       echo "Error: VALUE_RECUR_BLOCK_TYPE=swiglu requires VALUE_RECUR_NUM_DENSE_LAYERS=2." >&2
       exit 2
     fi
-    if [[ ! "${VALUE_RECUR_FILM_MODE}" =~ ^(hidden|context|hidden_context)$ ]]; then
-      echo "Error: VALUE_RECUR_FILM_MODE='${VALUE_RECUR_FILM_MODE}' is invalid. Use hidden, context, or hidden_context." >&2
-      exit 2
-    fi
     AGENT_FLAGS+=(
       "--agent.value_recur_iters=${VALUE_RECUR_ITERS}"
       "--agent.value_recur_num_dense_layers=${VALUE_RECUR_NUM_DENSE_LAYERS}"
@@ -240,13 +230,7 @@ case "${VALUE_BACKBONE}" in
       "--agent.value_recur_max_iters=${VALUE_RECUR_MAX_ITERS}"
       "--agent.value_recur_ln_mode=${VALUE_RECUR_LN_MODE}"
       "--agent.value_recur_use_step_info=${VALUE_RECUR_USE_STEP_INFO}"
-      "--agent.value_recur_sinusoidal=${VALUE_RECUR_SINUSOIDAL}"
-      "--agent.value_recur_use_film=${VALUE_RECUR_USE_FILM}"
-      "--agent.value_recur_film_mode=${VALUE_RECUR_FILM_MODE}"
       "--agent.value_recur_use_layerscale=${VALUE_RECUR_USE_LAYERSCALE}"
-      "--agent.value_recur_use_act=${VALUE_RECUR_USE_ACT}"
-      "--agent.value_recur_act_epsilon=${VALUE_RECUR_ACT_EPSILON}"
-      "--agent.value_recur_act_min_iters=${VALUE_RECUR_ACT_MIN_ITERS}"
       "--agent.value_layerscale_init=${VALUE_LAYERSCALE_INIT}"
     )
     ;;
