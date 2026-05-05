@@ -3374,10 +3374,10 @@ index 0000000..60716d2
 +if __name__ == '__main__':
 +    main()
 diff --git a/impls/main.py b/impls/main.py
-index 3660e03..9cb4528 100644
+index 3660e03..588a406 100644
 --- a/impls/main.py
 +++ b/impls/main.py
-@@ -1,51 +1,239 @@
+@@ -1,51 +1,245 @@
 +import glob
 +import hashlib
 +import re
@@ -3463,6 +3463,12 @@ index 3660e03..9cb4528 100644
  flags.DEFINE_integer('video_episodes', 1, 'Number of video episodes for each task.')
  flags.DEFINE_integer('video_frame_skip', 3, 'Frame skip for videos.')
  flags.DEFINE_integer('eval_on_cpu', 1, 'Whether to evaluate on CPU.')
++flags.DEFINE_bool('dump_eval_trajs', False, 'Save evaluation trajectories as compressed NPZ files.')
++flags.DEFINE_string(
++    'eval_traj_dir',
++    '',
++    'Directory for --dump_eval_trajs. Empty defaults to <save_dir>/eval_trajs.',
++)
 +flags.DEFINE_bool(
 +    'preserve_training_rng_on_eval',
 +    True,
@@ -3620,7 +3626,7 @@ index 3660e03..9cb4528 100644
  
      FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, FLAGS.run_group, exp_name)
      os.makedirs(FLAGS.save_dir, exist_ok=True)
-@@ -53,108 +241,1911 @@ def main(_):
+@@ -53,108 +247,1938 @@ def main(_):
      with open(os.path.join(FLAGS.save_dir, 'flags.json'), 'w') as f:
          json.dump(flag_dict, f)
  
@@ -5089,6 +5095,33 @@ index 3660e03..9cb4528 100644
 +                refine_l2=FLAGS.eval_refine_l2,
 +                episode_seed_base=FLAGS.seed,
 +            )
++            if FLAGS.dump_eval_trajs:
++                traj_dir = FLAGS.eval_traj_dir or os.path.join(FLAGS.save_dir, 'eval_trajs')
++                os.makedirs(traj_dir, exist_ok=True)
++                for episode_idx, traj in enumerate(trajs):
++                    infos = traj.get('info', [])
++                    successes = np.asarray(
++                        [
++                            float(info.get('success', np.nan)) if isinstance(info, dict) else np.nan
++                            for info in infos
++                        ],
++                        dtype=np.float32,
++                    )
++                    final_success = float(successes[-1]) if successes.size else np.nan
++                    np.savez_compressed(
++                        os.path.join(traj_dir, f'step_{step:09d}_{task_name}_ep{episode_idx:03d}.npz'),
++                        task_id=np.asarray(task_id, dtype=np.int32),
++                        task_name=np.asarray(task_name),
++                        episode_idx=np.asarray(episode_idx, dtype=np.int32),
++                        observation=np.asarray(traj.get('observation', [])),
++                        next_observation=np.asarray(traj.get('next_observation', [])),
++                        action=np.asarray(traj.get('action', [])),
++                        goal=np.asarray(traj.get('goal', [])),
++                        reward=np.asarray(traj.get('reward', []), dtype=np.float32),
++                        done=np.asarray(traj.get('done', []), dtype=np.bool_),
++                        success=successes,
++                        final_success=np.asarray(final_success, dtype=np.float32),
++                    )
 +            renders.extend(cur_renders)
 +            metric_names = ['success', 'episode.return']
 +            if FLAGS.eval_refine_steps and FLAGS.eval_refine_steps > 0:
@@ -5908,7 +5941,7 @@ index 6b17e11..863dd39 100644
  
      return env, train_dataset, val_dataset
 diff --git a/impls/utils/evaluation.py b/impls/utils/evaluation.py
-index a3a9944..3fcd843 100644
+index a3a9944..f5b07d1 100644
 --- a/impls/utils/evaluation.py
 +++ b/impls/utils/evaluation.py
 @@ -2,6 +2,7 @@ from collections import defaultdict
@@ -6167,7 +6200,15 @@ index a3a9944..3fcd843 100644
  
              next_observation, reward, terminated, truncated, info = env.step(action)
              done = terminated or truncated
-@@ -106,6 +313,22 @@ def evaluate(
+@@ -99,6 +306,7 @@ def evaluate(
+                 observation=observation,
+                 next_observation=next_observation,
+                 action=action,
++                goal=goal,
+                 reward=reward,
+                 done=done,
+                 info=info,
+@@ -106,6 +314,22 @@ def evaluate(
              add_to(traj, transition)
              observation = next_observation
          if i < num_eval_episodes:

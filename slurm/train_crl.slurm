@@ -73,6 +73,8 @@ EVAL_TASKS="${EVAL_TASKS:-5}"
 EVAL_EPISODES="${EVAL_EPISODES:-50}"
 VIDEO_EPISODES="${VIDEO_EPISODES:-0}"
 EVAL_ON_CPU="${EVAL_ON_CPU:-0}"
+DUMP_EVAL_TRAJS="${DUMP_EVAL_TRAJS:-0}"
+EVAL_TRAJ_DIR="${EVAL_TRAJ_DIR:-}"
 SAVE_INTERVAL="${SAVE_INTERVAL:-0}"
 SAVE_STEPS="${SAVE_STEPS:-600000:800000:900000:1000000}"
 DISABLE_TQDM="${DISABLE_TQDM:-1}"
@@ -394,6 +396,7 @@ cmd=(
   "--eval_episodes=${EVAL_EPISODES}"
   "--video_episodes=${VIDEO_EPISODES}"
   "--eval_on_cpu=${EVAL_ON_CPU}"
+  "--dump_eval_trajs=${DUMP_EVAL_TRAJS}"
   "--save_interval=${SAVE_INTERVAL}"
   "--disable_tqdm=${DISABLE_TQDM}"
   "--agent=${AGENT_PATH}"
@@ -403,6 +406,10 @@ cmd=(
 
 if [[ -n "${EVAL_TASKS}" ]]; then
   cmd+=("--eval_tasks=${EVAL_TASKS}")
+fi
+
+if [[ -n "${EVAL_TRAJ_DIR}" ]]; then
+  cmd+=("--eval_traj_dir=${EVAL_TRAJ_DIR}")
 fi
 
 if [[ -n "${RESTORE_PATH}" && "${RESTORE_PATH}" != /* ]]; then
