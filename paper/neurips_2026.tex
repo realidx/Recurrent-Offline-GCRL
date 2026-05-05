@@ -60,6 +60,8 @@
 \usepackage{xcolor}         % colors
 \usepackage{graphicx} 
 \usepackage{subcaption}
+\usepackage{tikz}
+\usetikzlibrary{positioning,fit,calc,decorations.pathmorphing}
 % Note. For the workshop paper template, both \title{} and \workshoptitle{} are required, with the former indicating the paper title shown in the title and the latter indicating the workshop title displayed in the footnote. 
 \title{Iterative Latent Refinement for Value Learning \\in Offline Goal-Conditioned RL}
 %\title{Iterative Latent Refinement for Value Learning \\in Offline Goal-Conditioned Reinforcement Learning}
@@ -129,6 +131,86 @@ To instantiate the idea, we build recurrent modules using standard stabilizing c
 The paper makes four contributions. First, it introduces iterative latent refinement as an architectural principle for offline GCRL and instantiates it in recurrent network modules for goal-conditioned learning. Second, it shows that refinement gives its clearest gains on stitching-heavy OGBench tasks, where long-horizon reachability judgments are central. Third, it provides diagnostic evidence, especially in CRL, that the gain is mediated by a more actor-usable value signal rather than by a uniformly larger raw margin or a better global graph-distance model. Fourth, it tests the scope of the idea through iteration-depth studies, ablations, feedforward capacity controls, actor-side replacements, other offline GCRL algorithms, and an online CRL extension.
 
 
+\begin{figure}[t]
+\centering
+\resizebox{0.92\linewidth}{!}{
+\begin{tikzpicture}[
+    font=\small,
+    block/.style={
+        draw,
+        rounded corners=3pt,
+        thick,
+        minimum width=1.45cm,
+        minimum height=0.75cm,
+        align=center,
+        fill=gray!7
+    },
+    update/.style={
+        draw,
+        rounded corners=3pt,
+        thick,
+        minimum width=1.75cm,
+        minimum height=0.72cm,
+        align=center,
+        fill=blue!6
+    },
+    arrow/.style={->, thick},
+    note/.style={font=\footnotesize, align=center},
+    outerbox/.style={
+        draw,
+        dashed,
+        rounded corners=5pt,
+        thick,
+        inner sep=8pt
+    }
+]
+
+\node[block] (h0) {$h^{(0)}$};
+
+\node[update, right=1.0cm of h0] (step1) {refinement\\step};
+\node[block, right=1.0cm of step1] (h1) {$h^{(1)}$};
+
+\node[right=0.65cm of h1] (dots1) {$\cdots$};
+
+\node[update, right=0.65cm of dots1] (stepk) {refinement\\step};
+\node[block, right=1.0cm of stepk] (hk) {$h^{(K)}$};
+
+\draw[arrow] (h0) -- (step1);
+\draw[arrow] (step1) -- (h1);
+\draw[arrow] (h1) -- (dots1);
+\draw[arrow] (dots1) -- (stepk);
+\draw[arrow] (stepk) -- (hk);
+
+\node[note, below=0.35cm of dots1] {repeat for $K$ outer refinement steps};
+
+\node[update, below=2.1cm of step1] (u1) {update\\block};
+\node[update, right=0.75cm of u1] (u2) {update\\block};
+\node[right=0.45cm of u2] (dots2) {$\cdots$};
+\node[update, right=0.45cm of dots2] (um) {update\\block};
+
+\draw[arrow] (u1) -- (u2);
+\draw[arrow] (u2) -- (dots2);
+\draw[arrow] (dots2) -- (um);
+
+\node[outerbox, fit=(u1)(u2)(dots2)(um)] (innerbox) {};
+\node[note, above=0.12cm of innerbox.north] {};
+
+\node[note, below=0.15cm of innerbox.south] {$m$ inner update blocks};
+
+\draw[arrow, dashed]
+    (step1.south) -- node[right, note] {} (innerbox.north);
+
+\end{tikzpicture}
+}
+\caption{
+Overview of the recurrent refinement architecture.
+Starting from an initial latent representation $h^{(0)}$, the model applies $K$ outer refinement steps.
+Each refinement step consists of $m$ inner update blocks.
+}
+\label{fig:refinement-simple}
+\end{figure}
+
+
 \section{Related Work}
 %4.29 这个是不是最好写成加粗短语+对应分段的形式 比如Offline goal-conditioned RL/iterative refinement/
 Many areas of machine learning have recently explored architectures that allocate computation through repeated latent updates rather than a single feedforward pass. Universal Transformers apply recurrence over depth with shared transition functions and adaptive computation \citep{universal_transformer, act}, while Deep Equilibrium Models formulate prediction as convergence to an implicit fixed point \citep{deq}. A broader family of recurrent and iterative reasoning methods similarly performs multiple rounds of latent correction before producing a final prediction \citep{recurrent_relational_networks, energy_diffusion}. More recent systems such as HRM, TRM, and URM have renewed interest in this direction by showing that compact recurrent computation can be effective on supervised reasoning tasks \citep{hrm, trm, urm}. Reinforcement learning has also seen growing interest in architecture and scaling. Recent work has improved online RL agents by increasing network depth or width, adding residual structure, or otherwise strengthening feedforward actor-critic backbones \citep{thousand_layers, bro, simba}. These results suggest that value-function architecture can be an important factor in control performance. However, offline goal-conditioned RL poses a different scaling problem. In this setting, conventional feedforward architecture changes do not necessarily yield consistent gains, because the agent must infer goal reachability from a fixed dataset rather than repair value errors through additional interaction.
@@ -136,9 +218,6 @@ Many areas of machine learning have recently explored architectures that allocat
 Offline goal-conditioned RL is particularly challenging because it combines long-horizon reasoning with the distributional constraints of offline learning. OGBench was introduced to study these difficulties through tasks that require stitching across trajectories, generalization over state-goal pairs, and robust policy extraction from learned value estimates \citep{ogbench}. Recent analyses further suggest that the main bottleneck in offline GCRL is not unique: value learning, policy extraction, and generalization can all limit performance depending on the algorithm and task \citep{ogbench, value_bottleneck}. 
 
 Existing offline GCRL algorithms address these challenges from several directions. Contrastive RL learns a goal-conditioned compatibility score and trains the actor to optimize that score, providing a simple non-hierarchical actor-critic formulation \citep{crl, ogbench}. Hierarchical methods such as HIQL introduce temporal abstraction to improve long-horizon goal reaching \citep{hiql}. Other recent approaches, including SAW-style methods, focus on improving policy extraction or actor-side goal-conditioned learning under fixed datasets \citep{saw}. These directions are complementary to ours, as our work targets the value-learning side of this picture.
-
-
-
 
 
 
@@ -182,6 +261,168 @@ where $\pi_\theta^\mu(s,g)$ is the mean action of the policy \citep{td3bc, ogben
 
 
 
+% Preamble:
+% \usepackage{tikz}
+% \usetikzlibrary{positioning,fit,calc}
+% \usepackage{subcaption}
+
+% Preamble:
+% \usepackage{tikz}
+% \usetikzlibrary{positioning,fit,calc}
+% \usepackage{subcaption}
+
+\begin{figure}[t]
+\centering
+
+% ============================================================
+% Left panel: outer refinement step
+% ============================================================
+\begin{subfigure}[t]{0.48\linewidth}
+\centering
+\resizebox{\linewidth}{!}{
+\begin{tikzpicture}[
+    font=\small,
+    block/.style={
+        draw,
+        rounded corners=3pt,
+        thick,
+        minimum width=1.45cm,
+        minimum height=0.72cm,
+        align=center,
+        fill=gray!7
+    },
+    update/.style={
+        draw,
+        rounded corners=3pt,
+        thick,
+        minimum width=1.75cm,
+        minimum height=0.72cm,
+        align=center,
+        fill=blue!6
+    },
+    op/.style={
+        circle,
+        draw,
+        thick,
+        minimum size=0.48cm,
+        inner sep=0pt
+    },
+    arrow/.style={->, thick},
+    note/.style={font=\footnotesize, align=center}
+]
+
+\node[block] (hk) {$h^{(k)}$};
+\node[update, right=0.75cm of hk] (stack) {inner update\\stack $\times m$};
+\node[block, right=0.75cm of stack] (htilde) {$\tilde h^{(k)}$};
+\node[op, right=0.65cm of htilde] (minus) {$-$};
+\node[update, right=0.65cm of minus] (scale) {LayerScale\\$\alpha_k$};
+\node[op, right=0.65cm of scale] (plus) {$+$};
+\node[block, right=0.65cm of plus] (hnext) {$h^{(k+1)}$};
+
+% main straight path
+\draw[arrow] (hk) -- (stack);
+\draw[arrow] (stack) -- (htilde);
+\draw[arrow] (htilde) -- (minus);
+\draw[arrow] (minus) -- (scale);
+\draw[arrow] (scale) -- (plus);
+\draw[arrow] (plus) -- (hnext);
+
+% straight right-angle branch to subtraction
+\draw[arrow]
+    (hk.south) -- ++(0,-0.75)
+    -| (minus.south);
+
+% straight right-angle residual branch to addition
+\draw[arrow]
+    (hk.north) -- ++(0,0.75)
+    -| (plus.north);
+
+\node[note, below=1.05cm of scale] 
+{$h^{(k+1)} = h^{(k)} + \alpha_k\big(\tilde h^{(k)} - h^{(k)}\big)$};
+
+\end{tikzpicture}
+}
+\caption{Outer refinement step.}
+\label{fig:outer-refinement}
+\end{subfigure}
+\hfill
+% ============================================================
+% Right panel: inner update block
+% ============================================================
+\begin{subfigure}[t]{0.48\linewidth}
+\centering
+\resizebox{\linewidth}{!}{
+\begin{tikzpicture}[
+    font=\small,
+    block/.style={
+        draw,
+        rounded corners=3pt,
+        thick,
+        minimum width=1.35cm,
+        minimum height=0.72cm,
+        align=center,
+        fill=gray!7
+    },
+    update/.style={
+        draw,
+        rounded corners=3pt,
+        thick,
+        minimum width=1.55cm,
+        minimum height=0.72cm,
+        align=center,
+        fill=blue!6
+    },
+    op/.style={
+        circle,
+        draw,
+        thick,
+        minimum size=0.48cm,
+        inner sep=0pt
+    },
+    arrow/.style={->, thick},
+    note/.style={font=\footnotesize, align=center}
+]
+
+\node[block] (hin) {$h$};
+\node[update, right=0.75cm of hin] (ln) {LayerNorm};
+\node[update, above=0.8cm of ln] (step) {step emb.\\$e_k$};
+\node[op, right=0.75cm of ln] (film) {$+$};
+\node[update, right=0.75cm of film] (swiglu) {SwiGLU};
+\node[op, right=0.75cm of swiglu] (plusres) {$+$};
+\node[block, right=0.75cm of plusres] (hout) {$h'$};
+
+% main path
+\draw[arrow] (hin) -- (ln);
+\draw[arrow] (ln) -- (film);
+% Changed the -- to -| for the right-then-down routing
+\draw[arrow] (step) -| (film); 
+\draw[arrow] (film) -- (swiglu);
+\draw[arrow] (swiglu) -- (plusres);
+\draw[arrow] (plusres) -- (hout);
+
+% straight residual branch
+\draw[arrow]
+    (hin.south) -- ++(0,-0.75)
+    -| (plusres.south);
+
+\node[note, below=1.05cm of swiglu]
+{$u = \mathrm{LN}(h) + e_k,\quad h' = h + \mathrm{SwiGLU}(u)$};
+
+\end{tikzpicture}
+}
+\caption{Inner update block.}
+\label{fig:inner-update}
+\end{subfigure}
+
+\caption{
+Architecture of the recurrent refinement module.
+Left: the outer refinement step applies an inner update stack and uses LayerScale to control the refinement magnitude.
+Right: each inner update block applies LayerNorm, step conditioning, SwiGLU transformation, and an inner residual update.
+}
+\label{fig:refinement-detailed}
+\end{figure}
+
+
 \section{Recurrent Latent Refinement}
 \label{sec:architecture}
 Our goal is to test iterative refinement as cleanly as possible, not to introduce a heavily engineered backbone. We therefore use a recurrent module that can replace a feedforward value or critic block while keeping the surrounding algorithm, losses, replay data, and optimization procedure unchanged. Given an input representation $x$, the module initializes a latent state $h^{(0)}$ and refines it through $K$ outer iterations. Each outer iteration performs $m$ inner update blocks before exposing the next latent state. This separates two design axes: $K$ controls how many times the representation is revised, while $m$ controls how expressive each revision is.
@@ -208,20 +449,7 @@ Here $\alpha_k$ is initialized small and learned separately for each outer step,
 l setup, so the method section only specifies the shared refinement principle.
 
 
-\begin{figure}[t]
-\centering
-\fbox{%
-  \parbox[c][1.8in][c]{0.9\linewidth}{%
-    \centering
-    Placeholder for recurrent CRL critic diagram.\\
-    Show input projection, tied recurrent SwiGLU refinement steps,\\
-    step embeddings, LayerScale residual updates, and output projection\\
-    for both $\phi(s,a)$ and $\psi(g)$ towers.
-  }%
-}
-\caption{Placeholder for the recurrent CRL critic architecture. The final version will include a model diagram showing the tied iterative refinement block used inside the $\phi$ and $\psi$ towers.}
-\label{fig:recurrent-crl-critic}
-\end{figure}
+
 
 % \paragraph{Why recurrence helps}
 % We do not attribute the advantage of the recurrent critic to increased

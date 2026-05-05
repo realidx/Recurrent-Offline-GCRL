@@ -144,6 +144,8 @@ jid_mlp=$(sbatch --parsable --array=0 --gpus=h100-47 --export="ALL,AUTO_RESUME=0
 
 jid_recur=$(sbatch --parsable --array=0 --gpus=h100-47 --export="ALL,AUTO_RESUME=0,SEEDS=0,ENV_NAME=antmaze-medium-stitch-v0,RUN_GROUP=Fig4_AMS_CRL_Rerun,EXP_NAME=sd000_AMS_recur_fig4,CRITIC_BACKBONE=recur_tied,KTRAIN=4,RECUR_NUM_DENSE_LAYERS=2,CRITIC_RECUR_BLOCK_TYPE=swiglu,RECUR_MAX_ITERS=4,RECUR_USE_STEP_INFO=1,CRITIC_RECUR_USE_LAYERSCALE=1,ALPHA=0.1,DISCOUNT=0.99,ACTOR_P_CURGOAL=0.0,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,EVAL_INTERVAL=1000000,SAVE_STEPS=1000000,DUMP_EVAL_TRAJS=1,EVAL_TRAJ_DIR=${ROOT}/paper/figures/fig4_trajs/recur,EVAL_ON_CPU=0,WANDB_MODE=online" slurm/train_crl.slurm)
 
+sbatch --dependency=afterok:${jid_mlp}:${jid_recur} --wrap="cd ${ROOT} && python scripts/plot_ams_trajectory_bottleneck.py --mlp_dir paper/figures/fig4_trajs/mlp --recur_dir paper/figures/fig4_trajs/recur --task task3 --episode auto --out paper/figures/ams_trajectory_bottleneck.pdf"
+
 
 
 

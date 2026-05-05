@@ -119,6 +119,36 @@ def plot_path(ax, xy, color, label, alpha=1.0):
     ax.scatter(xy[::every, 0], xy[::every, 1], s=12, color=color, alpha=alpha, zorder=4)
 
 
+def mark_start_goal(ax, start_xy, goal_xy):
+    ax.scatter(
+        [start_xy[0]],
+        [start_xy[1]],
+        marker="o",
+        s=80,
+        color="#16a34a",
+        edgecolor="white",
+        linewidth=1.0,
+        zorder=6,
+        label="start",
+    )
+    if goal_xy is not None:
+        ax.scatter(
+            [goal_xy[0]],
+            [goal_xy[1]],
+            marker="*",
+            s=180,
+            color="#dc2626",
+            edgecolor="white",
+            linewidth=0.9,
+            zorder=7,
+            label="goal",
+        )
+
+
+def status_label(traj):
+    return "success" if float(traj["final_success"]) >= 0.5 else "fail"
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mlp_dir", required=True, type=Path)
@@ -126,6 +156,7 @@ def main():
     parser.add_argument("--task", default="task3")
     parser.add_argument("--episode", default="auto", help="'auto' or an integer episode index.")
     parser.add_argument("--out", default="paper/figures/ams_trajectory_bottleneck.pdf", type=Path)
+    parser.add_argument("--layout", choices=("separate", "overlay"), default="separate")
     args = parser.parse_args()
 
     mlp_trajs = load_task_trajs(args.mlp_dir, args.task)
@@ -139,20 +170,32 @@ def main():
     goal_xy = goal_xy_from_traj(recur)
     start_xy = recur_xy[0]
 
-    fig, ax = plt.subplots(figsize=(5.8, 4.8))
-    draw_maze(ax)
-    plot_path(ax, mlp_xy, "#6b7280", f"MLP actor ({'success' if float(mlp['final_success']) >= 0.5 else 'fail'})", alpha=0.9)
-    plot_path(
-        ax,
-        recur_xy,
-        "#2563eb",
-        f"Recurrent critic actor ({'success' if float(recur['final_success']) >= 0.5 else 'fail'})",
-    )
-    ax.scatter([start_xy[0]], [start_xy[1]], marker="o", s=80, color="#16a34a", edgecolor="white", linewidth=1.0, zorder=6, label="start")
-    if goal_xy is not None:
-        ax.scatter([goal_xy[0]], [goal_xy[1]], marker="*", s=180, color="#dc2626", edgecolor="white", linewidth=0.9, zorder=7, label="goal")
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, 1.04), ncol=2, frameon=False, fontsize=8)
-    ax.set_title(f"AMS {args.task}, matched episode {episode_idx}", fontsize=10, pad=18)
+    if args.layout == "overlay":
+        fig, ax = plt.subplots(figsize=(5.8, 4.8))
+        draw_maze(ax)
+        plot_path(ax, mlp_xy, "#6b7280", f"MLP actor ({status_label(mlp)})", alpha=0.9)
+        plot_path(ax, recur_xy, "#2563eb", f"Recurrent critic actor ({status_label(recur)})")
+        mark_start_goal(ax, start_xy, goal_xy)
+        ax.legend(loc="upper center", bbox_to_anchor=(0.5, 1.04), ncol=2, frameon=False, fontsize=8)
+        ax.set_title(f"AMS {args.task}, matched episode {episode_idx}", fontsize=10, pad=18)
+    else:
+        fig, axes = plt.subplots(1, 3, figsize=(11.4, 4.0), constrained_layout=True)
+        draw_maze(axes[0])
+        mark_start_goal(axes[0], start_xy, goal_xy)
+        axes[0].set_title("Task layout", fontsize=10)
+        panels = [
+            (axes[1], mlp_xy, mlp, "#6b7280", "MLP baseline"),
+            (axes[2], recur_xy, recur, "#2563eb", "Recurrent critic"),
+        ]
+        for ax, xy, traj, color, title in panels:
+            draw_maze(ax)
+            plot_path(ax, xy, color, f"{title} ({status_label(traj)})")
+            mark_start_goal(ax, start_xy, goal_xy)
+            ax.set_title(f"{title}: {status_label(traj)}", fontsize=10)
+        handles, labels = axes[2].get_legend_handles_labels()
+        fig.legend(handles, labels, loc="upper center", ncol=3, frameon=False, fontsize=8)
+        fig.suptitle(f"AMS {args.task}, matched episode {episode_idx}", fontsize=10)
+
     args.out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(args.out, bbox_inches="tight")
     print(f"Wrote {args.out}")
