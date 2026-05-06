@@ -72,8 +72,8 @@ VALUE_RECUR_BLOCK_TYPE="${VALUE_RECUR_BLOCK_TYPE:-swiglu}"
 VALUE_RECUR_MAX_ITERS="${VALUE_RECUR_MAX_ITERS:-6}"
 VALUE_RECUR_LN_MODE="${VALUE_RECUR_LN_MODE:-pre_loop}"
 VALUE_RECUR_USE_STEP_INFO="${VALUE_RECUR_USE_STEP_INFO:-1}"
-VALUE_RECUR_STEP_INFO_INNER_MODE="${VALUE_RECUR_STEP_INFO_INNER_MODE:-all}"
-VALUE_RECUR_USE_INNER_RESIDUAL="${VALUE_RECUR_USE_INNER_RESIDUAL:-1}"
+# For recur_stacked_swiglu, add a shared projected copy of the value input to every inner SwiGLU block.
+VALUE_RECUR_USE_INPUT_INJECTION="${VALUE_RECUR_USE_INPUT_INJECTION:-0}"
 VALUE_LAYERSCALE_INIT="${VALUE_LAYERSCALE_INIT:-1e-2}"
 
 VALUE_P_CURGOAL="${VALUE_P_CURGOAL:-0.2}"
@@ -197,8 +197,7 @@ case "${VALUE_BACKBONE}" in
       "--agent.value_recur_max_iters=${VALUE_RECUR_MAX_ITERS}"
       "--agent.value_recur_ln_mode=${VALUE_RECUR_LN_MODE}"
       "--agent.value_recur_use_step_info=${VALUE_RECUR_USE_STEP_INFO}"
-      "--agent.value_recur_step_info_inner_mode=${VALUE_RECUR_STEP_INFO_INNER_MODE}"
-      "--agent.value_recur_use_inner_residual=${VALUE_RECUR_USE_INNER_RESIDUAL}"
+      "--agent.value_recur_use_input_injection=${VALUE_RECUR_USE_INPUT_INJECTION}"
       "--agent.value_layerscale_init=${VALUE_LAYERSCALE_INIT}"
     )
     ;;

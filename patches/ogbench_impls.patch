@@ -952,7 +952,7 @@ index 559df71..b491919 100644
              dataset_class='GCDataset',  # Dataset class name.
              value_p_curgoal=0.2,  # Probability of using the current state as the value goal.
 diff --git a/impls/agents/hiql.py b/impls/agents/hiql.py
-index 63e5dee..ead92d2 100644
+index 63e5dee..61569ad 100644
 --- a/impls/agents/hiql.py
 +++ b/impls/agents/hiql.py
 @@ -8,7 +8,7 @@ import ml_collections
@@ -1078,7 +1078,7 @@ index 63e5dee..ead92d2 100644
  
      @jax.jit
      def total_loss(self, batch, grad_params, rng=None):
-@@ -259,18 +293,37 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -259,18 +293,36 @@ class HIQLAgent(flax.struct.PyTreeNode):
              high_actor_encoder_def = None
  
          # Define value and actor networks.
@@ -1116,9 +1116,8 @@ index 63e5dee..ead92d2 100644
 +                recur_max_iters=int(config.get('value_recur_max_iters', 4)),
 +                recur_ln_mode=str(config.get('value_recur_ln_mode', 'per_layer_final')),
 +                recur_use_step_info=bool(config.get('value_recur_use_step_info', False)),
-+                recur_step_info_inner_mode=str(config.get('value_recur_step_info_inner_mode', 'all')),
 +                recur_use_layerscale=bool(config.get('value_recur_use_layerscale', True)),
-+                recur_use_inner_residual=bool(config.get('value_recur_use_inner_residual', True)),
++                recur_use_input_injection=bool(config.get('value_recur_use_input_injection', False)),
 +                layerscale_init=float(config.get('value_layerscale_init', 1e-2)),
 +            )
 +            value_def = GCRecurrentValue(gc_encoder=value_encoder_def, **recur_value_kwargs)
@@ -1128,7 +1127,7 @@ index 63e5dee..ead92d2 100644
  
          if config['discrete']:
              low_actor_def = GCDiscreteActor(
-@@ -306,7 +359,15 @@ class HIQLAgent(flax.struct.PyTreeNode):
+@@ -306,7 +358,15 @@ class HIQLAgent(flax.struct.PyTreeNode):
          network_args = {k: v[1] for k, v in network_info.items()}
  
          network_def = ModuleDict(networks)
@@ -1145,7 +1144,7 @@ index 63e5dee..ead92d2 100644
          network_params = network_def.init(init_rng, **network_args)['params']
          network = TrainState.create(network_def, network_params, tx=network_tx)
  
-@@ -322,9 +383,12 @@ def get_config():
+@@ -322,9 +382,12 @@ def get_config():
              # Agent hyperparameters.
              agent_name='hiql',  # Agent name.
              lr=3e-4,  # Learning rate.
@@ -1158,7 +1157,7 @@ index 63e5dee..ead92d2 100644
              layer_norm=True,  # Whether to use layer normalization.
              discount=0.99,  # Discount factor.
              tau=0.005,  # Target network update rate.
-@@ -333,6 +397,16 @@ def get_config():
+@@ -333,6 +396,15 @@ def get_config():
              high_alpha=3.0,  # High-level AWR temperature.
              subgoal_steps=25,  # Subgoal steps.
              rep_dim=10,  # Goal representation dimension.
@@ -1168,9 +1167,8 @@ index 63e5dee..ead92d2 100644
 +            value_recur_max_iters=4,  # Max supported recurrent iterations for HIQL value.
 +            value_recur_ln_mode='per_layer_final',  # 'pre_loop' | 'per_layer' | 'per_layer_final' | 'pre_loop_per_layer' recurrent value LayerNorm placement.
 +            value_recur_use_step_info=False,  # Inject step information into the recurrent HIQL value.
-+            value_recur_step_info_inner_mode='all',  # 'all' | 'first' inner block placement for stacked SwiGLU step information.
 +            value_recur_use_layerscale=True,  # Use LayerScale in the recurrent HIQL value.
-+            value_recur_use_inner_residual=True,  # Use residual connections between inner stacked SwiGLU blocks.
++            value_recur_use_input_injection=False,  # Add projected value input to each stacked SwiGLU inner block.
 +            value_layerscale_init=1e-2,  # LayerScale init for recurrent HIQL value.
              low_actor_rep_grad=False,  # Whether low-actor gradients flow to goal representation (use True for pixels).
              const_std=True,  # Whether to use constant standard deviation for the actors.
@@ -6436,7 +6434,7 @@ index 9c421dd..bd55171 100644
  
      return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..c27caee 100644
+index 4ee2b26..95b6b12 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
 @@ -6,12 +6,18 @@ import flax.linen as nn
@@ -6459,7 +6457,7 @@ index 4ee2b26..c27caee 100644
  def ensemblize(cls, num_qs, out_axes=0, **kwargs):
      """Ensemblize a module."""
      return nn.vmap(
-@@ -60,6 +66,484 @@ class MLP(nn.Module):
+@@ -60,6 +66,476 @@ class MLP(nn.Module):
          return x
  
  
@@ -6783,22 +6781,15 @@ index 4ee2b26..c27caee 100644
 +    layer_norm: bool = True
 +    layerscale_init: float = 1e-2
 +    use_step_info: bool = False
-+    step_info_inner_mode: str = 'all'
 +    use_layerscale: bool = True
-+    use_inner_residual: bool = True
++    use_input_injection: bool = False
 +
 +    @nn.compact
 +    def __call__(self, x, num_iters=None, return_aux=False, context=None):
-+        del context
 +        iters = self.num_iters if num_iters is None else int(num_iters)
 +        num_layers = int(self.num_dense_layers)
 +        if num_layers <= 0:
 +            raise ValueError(f'num_dense_layers must be positive. Got {num_layers}.')
-+        step_info_inner_mode = str(self.step_info_inner_mode)
-+        if step_info_inner_mode not in ('all', 'first'):
-+            raise ValueError(
-+                f"Unsupported step_info_inner_mode={step_info_inner_mode!r}. Use 'all' or 'first'."
-+            )
 +
 +        has_discrete_step_params = self.use_step_info
 +        has_per_iter_alpha = self.use_layerscale
@@ -6824,6 +6815,7 @@ index 4ee2b26..c27caee 100644
 +            alpha = self.param('alpha', nn.initializers.constant(self.layerscale_init), (self.max_iters,))
 +
 +        step_proj = nn.Dense(self.hidden_dim, use_bias=False, name='step_proj') if self.use_step_info else None
++        context_proj = nn.Dense(self.hidden_dim, name='context_proj') if self.use_input_injection else None
 +        inner_layer_norms = (
 +            [nn.LayerNorm(name=f'inner_ln_{layer_index + 1}') for layer_index in range(num_layers)]
 +            if self.layer_norm
@@ -6838,6 +6830,7 @@ index 4ee2b26..c27caee 100644
 +            step_contributions = step_proj(step_embed)
 +        else:
 +            step_contributions = None
++        context_contribution = context_proj(context if context is not None else x) if context_proj is not None else None
 +
 +        hidden_steps = [] if return_aux else None
 +        hidden_drift_steps = []
@@ -6852,16 +6845,15 @@ index 4ee2b26..c27caee 100644
 +                u = h_inner
 +                if inner_layer_norms is not None:
 +                    u = inner_layer_norms[layer_index](u)
-+                use_step_contrib = step_contrib_k is not None and (
-+                    step_info_inner_mode == 'all' or layer_index == 0
-+                )
-+                if use_step_contrib:
++                if step_contrib_k is not None:
 +                    u = u + step_contrib_k
++                if context_contribution is not None:
++                    u = u + context_contribution
 +                a_k = swiglu_gate_layers[layer_index](u)
 +                b_k = swiglu_value_layers[layer_index](u)
 +                g_k = jax.nn.silu(a_k) * b_k
 +                delta = swiglu_out_layers[layer_index](g_k)
-+                h_inner = h_inner + delta if self.use_inner_residual else delta
++                h_inner = h_inner + delta
 +
 +            if self.use_layerscale:
 +                alpha_k = alpha[k]
@@ -6904,8 +6896,7 @@ index 4ee2b26..c27caee 100644
 +    use_layerscale,
 +    swiglu_pre_ln,
 +    layerscale_init,
-+    step_info_inner_mode='all',
-+    use_inner_residual=True,
++    use_input_injection=False,
 +):
 +    backbone = str(backbone)
 +    if backbone == 'recur_tied':
@@ -6934,9 +6925,8 @@ index 4ee2b26..c27caee 100644
 +            layer_norm=layer_norm,
 +            layerscale_init=layerscale_init,
 +            use_step_info=bool(use_step_info),
-+            step_info_inner_mode=str(step_info_inner_mode),
 +            use_layerscale=bool(use_layerscale),
-+            use_inner_residual=bool(use_inner_residual),
++            use_input_injection=bool(use_input_injection),
 +        )
 +    raise ValueError(f'Unsupported backbone: {backbone}')
 +
@@ -6944,7 +6934,7 @@ index 4ee2b26..c27caee 100644
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -164,9 +648,40 @@ class GCActor(nn.Module):
+@@ -164,9 +640,40 @@ class GCActor(nn.Module):
      const_std: bool = True
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -6986,7 +6976,7 @@ index 4ee2b26..c27caee 100644
          self.mean_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
          if self.state_dependent_std:
              self.log_std_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
-@@ -196,7 +711,10 @@ class GCActor(nn.Module):
+@@ -196,7 +703,10 @@ class GCActor(nn.Module):
              if goals is not None:
                  inputs.append(goals)
              inputs = jnp.concatenate(inputs, axis=-1)
@@ -6998,7 +6988,7 @@ index 4ee2b26..c27caee 100644
  
          means = self.mean_net(outputs)
          if self.state_dependent_std:
-@@ -230,9 +748,40 @@ class GCDiscreteActor(nn.Module):
+@@ -230,9 +740,40 @@ class GCDiscreteActor(nn.Module):
      action_dim: int
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -7040,7 +7030,7 @@ index 4ee2b26..c27caee 100644
          self.logit_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
  
      def __call__(
-@@ -257,7 +806,10 @@ class GCDiscreteActor(nn.Module):
+@@ -257,7 +798,10 @@ class GCDiscreteActor(nn.Module):
              if goals is not None:
                  inputs.append(goals)
              inputs = jnp.concatenate(inputs, axis=-1)
@@ -7052,7 +7042,7 @@ index 4ee2b26..c27caee 100644
  
          logits = self.logit_net(outputs)
  
-@@ -282,14 +834,22 @@ class GCValue(nn.Module):
+@@ -282,14 +826,22 @@ class GCValue(nn.Module):
      layer_norm: bool = True
      ensemble: bool = True
      gc_encoder: nn.Module = None
@@ -7080,7 +7070,7 @@ index 4ee2b26..c27caee 100644
  
      def __call__(self, observations, goals=None, actions=None):
          """Return the value/critic function.
-@@ -314,6 +874,65 @@ class GCValue(nn.Module):
+@@ -314,6 +866,63 @@ class GCValue(nn.Module):
          return v
  
  
@@ -7098,9 +7088,8 @@ index 4ee2b26..c27caee 100644
 +    recur_max_iters: int = 4
 +    recur_ln_mode: str = 'per_layer_final'
 +    recur_use_step_info: bool = False
-+    recur_step_info_inner_mode: str = 'all'
 +    recur_use_layerscale: bool = True
-+    recur_use_inner_residual: bool = True
++    recur_use_input_injection: bool = False
 +    recur_swiglu_pre_ln: bool = True
 +    layerscale_init: float = 1e-2
 +
@@ -7117,9 +7106,8 @@ index 4ee2b26..c27caee 100644
 +            layer_norm=self.layer_norm,
 +            ln_mode=self.recur_ln_mode,
 +            use_step_info=self.recur_use_step_info,
-+            step_info_inner_mode=self.recur_step_info_inner_mode,
 +            use_layerscale=self.recur_use_layerscale,
-+            use_inner_residual=self.recur_use_inner_residual,
++            use_input_injection=self.recur_use_input_injection,
 +            swiglu_pre_ln=self.recur_swiglu_pre_ln,
 +            layerscale_init=self.layerscale_init,
 +        )
@@ -7146,7 +7134,7 @@ index 4ee2b26..c27caee 100644
  class GCDiscreteCritic(GCValue):
      """Goal-conditioned critic for discrete actions."""
  
-@@ -347,16 +966,66 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +956,66 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
@@ -7218,7 +7206,7 @@ index 4ee2b26..c27caee 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +1033,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +1023,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -7226,7 +7214,7 @@ index 4ee2b26..c27caee 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,16 +1045,52 @@ class GCBilinearValue(nn.Module):
+@@ -375,16 +1035,52 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
@@ -7281,7 +7269,7 @@ index 4ee2b26..c27caee 100644
          else:
              return v
  
-@@ -394,9 +1100,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+@@ -394,9 +1090,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
  
      action_dim: int = None
  
@@ -7293,7 +7281,7 @@ index 4ee2b26..c27caee 100644
  
  
  class GCMRNValue(nn.Module):
-@@ -416,11 +1122,49 @@ class GCMRNValue(nn.Module):
+@@ -416,11 +1112,49 @@ class GCMRNValue(nn.Module):
      latent_dim: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -7345,7 +7333,7 @@ index 4ee2b26..c27caee 100644
          """Return the MRN value function.
  
          Args:
-@@ -436,8 +1180,12 @@ class GCMRNValue(nn.Module):
+@@ -436,8 +1170,12 @@ class GCMRNValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)
@@ -7360,7 +7348,7 @@ index 4ee2b26..c27caee 100644
  
          sym_s = phi_s[..., : self.latent_dim // 2]
          sym_g = phi_g[..., : self.latent_dim // 2]
-@@ -471,12 +1219,50 @@ class GCIQEValue(nn.Module):
+@@ -471,12 +1209,50 @@ class GCIQEValue(nn.Module):
      dim_per_component: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -7413,7 +7401,7 @@ index 4ee2b26..c27caee 100644
          """Return the IQE value function.
  
          Args:
-@@ -493,8 +1279,12 @@ class GCIQEValue(nn.Module):
+@@ -493,8 +1269,12 @@ class GCIQEValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)
