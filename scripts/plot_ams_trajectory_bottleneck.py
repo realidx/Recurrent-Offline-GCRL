@@ -186,6 +186,35 @@ def draw_task_row(axes, task_name, episode_arg, mlp_dir, recur_dir):
     return episode_idx
 
 
+def draw_task_column(axes, task_name, episode_arg, mlp_dir, recur_dir):
+    mlp_trajs = load_task_trajs(mlp_dir, task_name)
+    recur_trajs = load_task_trajs(recur_dir, task_name)
+    episode_idx = choose_episode(mlp_trajs, recur_trajs) if episode_arg == "auto" else int(episode_arg)
+
+    mlp = mlp_trajs[episode_idx]
+    recur = recur_trajs[episode_idx]
+    mlp_xy = xy_from_traj(mlp)
+    recur_xy = xy_from_traj(recur)
+    goal_xy = goal_xy_from_traj(recur)
+    start_xy = recur_xy[0]
+
+    draw_maze(axes[0])
+    mark_start_goal(axes[0], start_xy, goal_xy)
+    axes[0].set_title(f"{task_title(task_name)} layout", fontsize=10)
+
+    draw_maze(axes[1])
+    plot_path(axes[1], mlp_xy, "#6b7280", alpha=0.9)
+    mark_start_goal(axes[1], start_xy, goal_xy)
+    axes[1].set_title("MLP baseline", fontsize=10)
+
+    draw_maze(axes[2])
+    plot_path(axes[2], recur_xy, "#2563eb")
+    mark_start_goal(axes[2], start_xy, goal_xy)
+    axes[2].set_title("Recurrent (ours)", fontsize=10)
+
+    return episode_idx
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mlp_dir", required=True, type=Path)
@@ -194,7 +223,7 @@ def main():
     parser.add_argument("--tasks", default="", help="Comma-separated task names, e.g. task3,task4.")
     parser.add_argument("--episode", default="auto", help="'auto' or an integer episode index.")
     parser.add_argument("--out", default="paper/figures/ams_trajectory_bottleneck.pdf", type=Path)
-    parser.add_argument("--layout", choices=("separate", "overlay"), default="separate")
+    parser.add_argument("--layout", choices=("separate", "overlay", "task_columns"), default="separate")
     args = parser.parse_args()
 
     tasks = parse_tasks(args)
@@ -218,6 +247,12 @@ def main():
         plot_path(ax, recur_xy, "#2563eb")
         mark_start_goal(ax, start_xy, goal_xy)
         ax.set_title(f"{task_title(task_name)}", fontsize=10, pad=18)
+    elif args.layout == "task_columns":
+        fig, axes = plt.subplots(3, len(tasks), figsize=(3.8 * len(tasks), 11.4), constrained_layout=True)
+        if len(tasks) == 1:
+            axes = np.expand_dims(axes, axis=1)
+        for col_index, task_name in enumerate(tasks):
+            draw_task_column(axes[:, col_index], task_name, args.episode, args.mlp_dir, args.recur_dir)
     else:
         fig, axes = plt.subplots(len(tasks), 3, figsize=(11.4, 3.8 * len(tasks)), constrained_layout=True)
         if len(tasks) == 1:
