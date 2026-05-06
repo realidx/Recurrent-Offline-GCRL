@@ -26,10 +26,10 @@ index 4596fe2..bab8556 100644
  )
 diff --git a/impls/agents/cgivl.py b/impls/agents/cgivl.py
 new file mode 100644
-index 0000000..56ed36b
+index 0000000..1b79d69
 --- /dev/null
 +++ b/impls/agents/cgivl.py
-@@ -0,0 +1,525 @@
+@@ -0,0 +1,543 @@
 +import copy
 +from functools import partial
 +from typing import Any
@@ -442,6 +442,15 @@ index 0000000..56ed36b
 +            layer_norm=config['goaldistance_layer_norm'],
 +            dim_per_component=8,
 +            encoder=encoders.get('goal_distance'),
++            backbone=str(config.get('goaldistance_backbone', 'mlp')),
++            recur_num_iters=int(config.get('goaldistance_recur_iters', 4)),
++            recur_num_dense_layers=int(config.get('goaldistance_recur_num_dense_layers', 2)),
++            recur_block_type=str(config.get('goaldistance_recur_block_type', 'dense')),
++            recur_max_iters=int(config.get('goaldistance_recur_max_iters', 4)),
++            recur_ln_mode=str(config.get('goaldistance_recur_ln_mode', 'per_layer_final')),
++            recur_use_step_info=bool(config.get('goaldistance_recur_use_step_info', False)),
++            recur_use_layerscale=bool(config.get('goaldistance_recur_use_layerscale', True)),
++            layerscale_init=float(config.get('goaldistance_layerscale_init', 1e-2)),
 +        )
 +
 +        if config['discrete']:
@@ -545,6 +554,15 @@ index 0000000..56ed36b
 +            goaldistance_hidden_dims=(512, 512, 512),
 +            goaldistance_latent_dim=512,
 +            goaldistance_layer_norm=True,
++            goaldistance_backbone='mlp',
++            goaldistance_recur_iters=4,
++            goaldistance_recur_num_dense_layers=2,
++            goaldistance_recur_block_type='dense',
++            goaldistance_recur_max_iters=4,
++            goaldistance_recur_ln_mode='per_layer_final',
++            goaldistance_recur_use_step_info=False,
++            goaldistance_recur_use_layerscale=True,
++            goaldistance_layerscale_init=1e-2,
 +            goal_dim=2,
 +            eps=0.05,
 +            neg_eps=0.001,

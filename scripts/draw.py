@@ -12,8 +12,8 @@ crl_mean_m1 = np.array([0.504, 0.331, 0.288])
 crl_std_m1 = np.array([0.096, 0.056, 0.045])
 
 # Data for m=2 (target setting)
-hiql_mean_m2 = np.array([0.691, 0.722, 0.565])
-hiql_std_m2 = np.array([0.108, 0.043, 0.065])
+hiql_mean_m2 = np.array([0.716, 0.742, 0.572])
+hiql_std_m2 = np.array([0.076, 0.043, 0.065])
 
 crl_mean_m2 = np.array([0.380, 0.173, 0.293])
 crl_std_m2 = np.array([0.035, 0.034, 0.038])
@@ -42,8 +42,8 @@ algorithms = ['HIQL', 'CRL']
 
 # Choose "pretty" but distinct colors to differentiate the algorithms.
 # Grouped bar charts require distinct colors to be readable.
-color_hiql = '#1f77b4'  # A nice, standard, deep blue
-color_crl = '#ff7f0e'   # A complementary, pleasing orange
+color_hiql = '#5EBEA3'  # A nice, standard, deep blue
+color_crl = '#FB8B60'   # A complementary, pleasing orange
 
 # Set bar positions and widths for the grouped layout
 x = np.arange(len(datasets))  # The label locations: [0, 1, 2]

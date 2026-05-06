@@ -89,6 +89,15 @@ VALUE_LAYERSCALE_INIT="${VALUE_LAYERSCALE_INIT:-1e-2}"
 GOALDISTANCE_HIDDEN_DIMS="${GOALDISTANCE_HIDDEN_DIMS:-512x512x512}"
 GOALDISTANCE_LATENT_DIM="${GOALDISTANCE_LATENT_DIM:-512}"
 GOALDISTANCE_LAYER_NORM="${GOALDISTANCE_LAYER_NORM:-1}"
+GOALDISTANCE_BACKBONE="${GOALDISTANCE_BACKBONE:-mlp}"
+GOALDISTANCE_RECUR_ITERS="${GOALDISTANCE_RECUR_ITERS:-4}"
+GOALDISTANCE_RECUR_NUM_DENSE_LAYERS="${GOALDISTANCE_RECUR_NUM_DENSE_LAYERS:-2}"
+GOALDISTANCE_RECUR_BLOCK_TYPE="${GOALDISTANCE_RECUR_BLOCK_TYPE:-dense}"
+GOALDISTANCE_RECUR_MAX_ITERS="${GOALDISTANCE_RECUR_MAX_ITERS:-4}"
+GOALDISTANCE_RECUR_LN_MODE="${GOALDISTANCE_RECUR_LN_MODE:-per_layer_final}"
+GOALDISTANCE_RECUR_USE_STEP_INFO="${GOALDISTANCE_RECUR_USE_STEP_INFO:-0}"
+GOALDISTANCE_RECUR_USE_LAYERSCALE="${GOALDISTANCE_RECUR_USE_LAYERSCALE:-1}"
+GOALDISTANCE_LAYERSCALE_INIT="${GOALDISTANCE_LAYERSCALE_INIT:-1e-2}"
 
 VALUE_P_CURGOAL="${VALUE_P_CURGOAL:-0.2}"
 VALUE_P_TRAJGOAL="${VALUE_P_TRAJGOAL:-0.5}"
@@ -187,6 +196,7 @@ AGENT_FLAGS=(
   "--agent.min_d=${MIN_D}"
   "--agent.neg_eps=${NEG_EPS}"
   "--agent.v_distill_eps=${V_DISTILL_EPS}"
+  "--agent.goaldistance_backbone=${GOALDISTANCE_BACKBONE}"
   "--agent.goaldistance_latent_dim=${GOALDISTANCE_LATENT_DIM}"
   "--agent.goaldistance_layer_norm=${GOALDISTANCE_LAYER_NORM}"
   "--agent.value_p_curgoal=${VALUE_P_CURGOAL}"
@@ -236,6 +246,39 @@ case "${VALUE_BACKBONE}" in
     ;;
   *)
     echo "Error: VALUE_BACKBONE='${VALUE_BACKBONE}' is invalid. Use mlp or recur_tied." >&2
+    exit 2
+    ;;
+esac
+
+case "${GOALDISTANCE_BACKBONE}" in
+  mlp)
+    ;;
+  recur_tied)
+    if [[ ! "${GOALDISTANCE_RECUR_LN_MODE}" =~ ^(pre_loop|per_layer|per_layer_final|pre_loop_per_layer)$ ]]; then
+      echo "Error: GOALDISTANCE_RECUR_LN_MODE='${GOALDISTANCE_RECUR_LN_MODE}' is invalid. Use pre_loop, per_layer, per_layer_final, or pre_loop_per_layer." >&2
+      exit 2
+    fi
+    if [[ ! "${GOALDISTANCE_RECUR_BLOCK_TYPE:-dense}" =~ ^(dense|swiglu)$ ]]; then
+      echo "Error: GOALDISTANCE_RECUR_BLOCK_TYPE='${GOALDISTANCE_RECUR_BLOCK_TYPE}' is invalid. Use dense or swiglu." >&2
+      exit 2
+    fi
+    if [[ "${GOALDISTANCE_RECUR_BLOCK_TYPE:-dense}" == "swiglu" && "${GOALDISTANCE_RECUR_NUM_DENSE_LAYERS}" != "2" ]]; then
+      echo "Error: GOALDISTANCE_RECUR_BLOCK_TYPE=swiglu requires GOALDISTANCE_RECUR_NUM_DENSE_LAYERS=2." >&2
+      exit 2
+    fi
+    AGENT_FLAGS+=(
+      "--agent.goaldistance_recur_iters=${GOALDISTANCE_RECUR_ITERS}"
+      "--agent.goaldistance_recur_num_dense_layers=${GOALDISTANCE_RECUR_NUM_DENSE_LAYERS}"
+      "--agent.goaldistance_recur_block_type=${GOALDISTANCE_RECUR_BLOCK_TYPE:-dense}"
+      "--agent.goaldistance_recur_max_iters=${GOALDISTANCE_RECUR_MAX_ITERS}"
+      "--agent.goaldistance_recur_ln_mode=${GOALDISTANCE_RECUR_LN_MODE}"
+      "--agent.goaldistance_recur_use_step_info=${GOALDISTANCE_RECUR_USE_STEP_INFO}"
+      "--agent.goaldistance_recur_use_layerscale=${GOALDISTANCE_RECUR_USE_LAYERSCALE}"
+      "--agent.goaldistance_layerscale_init=${GOALDISTANCE_LAYERSCALE_INIT}"
+    )
+    ;;
+  *)
+    echo "Error: GOALDISTANCE_BACKBONE='${GOALDISTANCE_BACKBONE}' is invalid. Use mlp or recur_tied." >&2
     exit 2
     ;;
 esac

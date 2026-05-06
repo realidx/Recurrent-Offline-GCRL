@@ -60,6 +60,7 @@
 \usepackage{xcolor}         % colors
 \usepackage{graphicx} 
 \usepackage{subcaption}
+\usepackage{wrapfig}
 \usepackage{tikz}
 \usetikzlibrary{positioning,fit,calc,decorations.pathmorphing}
 % Note. For the workshop paper template, both \title{} and \workshoptitle{} are required, with the former indicating the paper title shown in the title and the latter indicating the workshop title displayed in the footnote. 
@@ -118,35 +119,28 @@
 % Offline goal-conditioned reinforcement learning (GCRL) often faces an imperfect value-learning bottleneck: the agent must infer long-horizon reachability from fixed data and then extract a policy from the learned value or score. We study whether iterative latent refinement can improve this value-learning interface. Our model replaces a one-shot value or critic network with a recurrent module that repeatedly updates a latent representation before the algorithm consumes the resulting signal. We insert this refinement module into several offline GCRL algorithms and observe clear gains across multiple settings. Diagnostic experiments show that refinement changes the learned signal in ways that are useful for policy extraction. We further analyze how the effect depends on two design choices: how many refinement steps are used, and how expressive each recurrent update is. The results reveal a tradeoff between iterative depth and per-step expressivity, suggesting that effective recurrent refinement depends on how computation is allocated within the value network.
 %Offline goal-conditioned reinforcement learning (GCRL) is a fundamental paradigm for learning goal-reaching behaviors from static datasets, and plays an important role in scalable decision-making without online interaction. However, it often faces an imperfect value-learning bottleneck: the agent must infer long-horizon reachability from fixed data and then extract a policy from the learned value or score. We study whether iterative latent refinement can improve this value-learning interface. Our model replaces a one-shot value or critic network with a recurrent module that repeatedly updates a latent representation before the algorithm consumes the resulting signal. We insert this refinement module into several offline GCRL algorithms and observe consistent improvements across multiple settings, with performance gains ranging up to 4.3× over strong baselines. Diagnostic experiments show that refinement changes the learned signal in ways that are useful for policy extraction. We further analyze how the effect depends on two design choices: how many refinement steps are used, and how expressive each recurrent update is. The results reveal a tradeoff between iterative depth and per-step expressivity, suggesting that effective recurrent refinement depends on how computation is allocated within the value network. Our work highlights iterative refinement as a promising direction for improving value learning in offline reinforcement learning.
 
-Offline goal-conditioned reinforcement learning (GCRL) enables scalable goal-reaching from static datasets, yet faces a severe value-learning bottleneck: the agent must simultaneously infer long-horizon reachability from fixed, incomplete data and extract a reliable policy from that learned signal, without any online interaction to correct errors. 
-We address this bottleneck by \emph{iterative latent refinement}: instead of computing a value or compatibility score in a single feedforward pass, our critic repeatedly revises a latent representation through tied recurrent updates before emitting the final signal. 
+Offline goal-conditioned reinforcement learning (GCRL) enables scalable goal-reaching from static datasets, yet faces a value-learning bottleneck: the agent must infer long-horizon reachability from fixed data and extract a reliable policy from that learned signal.
+We address this bottleneck by \emph{iterative latent refinement}: instead of computing a value or compatibility score in a single feedforward pass, the critic repeatedly revises a latent representation through tied recurrent updates before emitting the final signal. 
 This allocates computation along a recurrent depth axis, allowing the network to progressively resolve reachability constraints and behavior-clipping tensions before policy extraction consumes the output. 
-As a drop-in replacement for standard MLP backbones, our module improves CRL, HIQL, and SAW on stitching-heavy OGBench tasks, raising success rates by up to $42$ absolute percentage points ($4.3\times$ relative improvement) over strong baselines. 
-Diagnostic experiments reveal that the gains stem from a improved actor-facing signal: recurrent refinement increases normalized discrimination between reachable and unreachable goals while reducing extrapolative policy extraction. 
+As a drop-in replacement for standard MLP backbones, our module improves several algorithms on recent offline GCRL benchmark datasets, raising success rates by up to $42$ absolute percentage points ($4.3\times$ relative improvement) over strong baselines. 
+Diagnostic experiments reveal that the gains stem from an improved actor-facing signal: recurrent refinement increases normalized discrimination between reachable and unreachable goals while reducing extrapolative policy extraction. 
 Systematic depth studies further uncover a tradeoff between iterative depth and per-step expressivity, demonstrating that effective recurrent refinement depends critically on how computation is allocated within the value network.
 Our work highlights iterative refinement as a promising direction for improving value learning in offline reinforcement learning.
 \end{abstract}
 
 \section{Introduction}
-Goal-conditioned reinforcement learning aims to learn policies that can solve many goals from shared experience. In the offline setting, this is difficult because the agent must infer goal-reaching behavior from a fixed dataset, without using interaction to correct value errors or collect missing transitions. Benchmarks such as OGBench make this challenge explicit through long-horizon tasks that require trajectory stitching, state-goal generalization, and reliable policy extraction from learned goal-conditioned signals \citep{ogbench}.
+Goal-conditioned reinforcement learning aims to learn policies that can solve many goals from shared experience \citep{uvfa, her, gcsl}. In the offline setting, this objective is especially demanding: the agent must infer goal-reaching behavior from a fixed dataset, without online interaction to correct value errors, collect missing transitions, or recover from out-of-distribution policy updates \citep{cql, iql, td3bc}. OGBench makes these difficulties explicit through tasks that require trajectory stitching, long-horizon reasoning, state-goal generalization, and reliable policy extraction from learned goal-conditioned signals \citep{ogbench}.
 
-Many offline GCRL methods first learn a goal-conditioned value, critic, or compatibility score, and then train an actor against that learned signal \citep{crl, hiql, saw}. The learned signal must therefore do more than distinguish reachable from unreachable goals: it must also support behavior-constrained policy extraction. Recent works suggest that offline RL bottlenecks can arise from value learning, policy extraction, or generalization \citep{ogbench, value_bottleneck}. We focus on the value-learning side of this picture and ask whether the architecture of the learned value function can make the downstream actor easier to extract.
+Existing offline GCRL algorithms address this problem through several complementary mechanisms. Contrastive and quasimetric methods learn reachability or compatibility signals \citep{crl, qrl, cgcivl}; supervised, advantage-weighted, and bootstrapped methods focus on extracting policies from fixed data \citep{wgcsL, gofar, dawog, saw}; and hierarchical or horizon-reduction methods use temporal abstraction, subgoals, or multi-step targets to reduce long-horizon difficulty \citep{hiql, ota, horizon_reduction}. These methods differ in objective and policy interface, but many share a common structure: they first learn a goal-conditioned value, critic, or score, and then train an actor against that learned signal. Recent analysis further suggests that offline GCRL bottlenecks can arise from value learning, policy extraction, or generalization depending on the task and algorithm \citep{ogbench, value_bottleneck}. We focus on the value-learning side of this picture and ask whether the architecture of the learned signal can make downstream policy extraction easier.
 
-A one-shot feedforward critic compresses the entire reasoning about reachability, trajectory bottlenecks, and behavior constraints into a single forward pass. 
-We hypothesize that this compression is too lossy for complex offline GCRL: the network must simultaneously act as a reachability classifier and a policy-extraction guide, without intermediate computation to resolve conflicting constraints. 
-Also, architecture has recently become an important lever in RL, with depth, width, regularization, and residual capacity improving several online and self-supervised settings \citep{thousand_layers, bro, simba}. Offline GCRL, however, demands more than larger one-pass predictors. Reachability in fixed data often depends on iterative structure: which behavior fragments can be stitched, which bottlenecks must be crossed, and which useful actions are not immediately goal-directed. This structural mismatch between the \emph{iterative} nature of long-horizon reasoning and the \emph{one-shot} computation of standard value networks motivates an iterative computation principle for value learning.
+A standard feedforward critic computes reachability, trajectory-bottleneck information, and behavior constraints in a single pass. This one-shot computation is potentially mismatched to offline GCRL, where useful decisions often depend on an implicit sequence of reasoning steps: which behavior fragments can be stitched, which bottlenecks must be crossed, and which actions are useful only because they make later progress possible. At the same time, architecture has become an increasingly important lever in reinforcement learning, with depth, width, regularization, residual structure, and explicit compute scaling improving several online, offline, and self-supervised settings \citep{resnet, d2rl, dr3, bro, simba, thousand_layers}. These observations motivate a different architectural question: rather than only increasing the size of a feedforward critic, can we allocate computation through repeated refinement of the value representation?
 
-We study recurrent latent refinement: instead of producing a value or compatibility score in one feedforward pass, the critic repeatedly revises a latent representation before exposing the final signal. This follows a broader line of models that allocate computation through repeated latent updates \citep{universal_transformer, act, deq, recurrent_relational_networks, energy_diffusion, hrm, trm, urm}. As illustrated in Figure~\ref{fig:refinement-simple}, our module applies a sequence of refinement steps to an initial latent state; Section~\ref{sec:architecture} gives the detailed design, including SwiGLU updates, step embeddings, LayerNorm, and LayerScale \citep{shazeer_glu, universal_transformer, layer_norm, layerscale}.
+We study recurrent latent refinement for offline GCRL critics. Instead of producing a value or compatibility score in one feedforward pass, the critic repeatedly revises a latent representation before exposing the final signal. This follows a broader line of models that allocate computation through repeated latent updates or implicit depth \citep{universal_transformer, act, deq, recurrent_relational_networks, energy_diffusion, hrm, trm, urm}. As illustrated in Figure~\ref{fig:refinement-simple}, our module applies a sequence of refinement steps to an initial latent state; Section~\ref{sec:architecture} gives the detailed design, including SwiGLU updates, step embeddings, LayerNorm, and LayerScale \citep{shazeer_glu, universal_transformer, layer_norm, layerscale}. We insert this module as a drop-in replacement for the MLP value or critic backbone in existing offline GCRL algorithms, keeping losses, data, actors, optimization, and evaluation unchanged. We use Contrastive RL (CRL) as the main diagnostic case because its actor directly consumes the learned compatibility score \citep{crl}, allowing us to measure not only success but also changes in the actor-facing signal.
 
-We insert this module as a drop-in replacement for the MLP value or critic backbone in existing offline GCRL algorithms, keeping losses, data, actors, optimization, and evaluation unchanged. We use Contrastive RL (CRL) as the main diagnostic case because its actor directly consumes the learned compatibility score \citep{crl}. This lets us study not only whether recurrent refinement improves success, but also how it changes the actor-facing value signal.
-
-%Our contributions are fourfold. First, we introduce recurrent latent refinement as a value-network architecture for offline GCRL. Second, we show gains across several offline GCRL algorithms, especially on stitching-heavy OGBench tasks. Third, we provide CRL diagnostics showing that refinement improves the actor-facing signal, reduces extrapolative policy extraction, and helps at trajectory bottlenecks. Fourth, we test the scope of the effect through depth studies, ablations, feedforward capacity controls, actor-side replacements, additional algorithms, and an online CRL extension.
-
-Our contributions are threefold. 
-\textbf{First}, we introduce recurrent latent refinement as a value-network architecture for offline GCRL and show that it yields consistent gains across CRL, HIQL, and SAW, particularly on stitching-heavy OGBench tasks. 
-\textbf{Second}, we provide mechanism-level CRL diagnostics demonstrating that recurrent refinement improves not only end-task success but also the \emph{quality} of the learned signal: it increases normalized discrimination between positive and negative goals, reduces extrapolative policy extraction, and enables reliable traversal of trajectory bottlenecks (Figure~\ref{fig:refinement-simple}). 
-\textbf{Third}, through extensive depth studies and ablations, we reveal a systematic tradeoff between iterative depth and per-step expressivity, establishing design guidelines for how computation should be allocated within recurrent value networks.
-
+Our contributions are threefold.
+\textbf{First}, we introduce recurrent latent refinement as a value-network architecture for offline GCRL and show that it improves multiple offline GCRL algorithms on recent benchmark datasets spanning locomotion and manipulation.
+\textbf{Second}, we provide mechanism-level CRL diagnostics showing that recurrent refinement improves the learned signal by increasing normalized discrimination between positive and negative goals, reducing extrapolative policy extraction, and improving traversal of trajectory bottlenecks.
+\textbf{Third}, through depth studies and ablations, we identify a tradeoff between iterative depth and per-step expressivity, yielding practical guidance for allocating computation within recurrent value networks.
 
 \begin{figure}[t]
 \centering
@@ -229,12 +223,14 @@ Each refinement step consists of $m$ inner update blocks.
 
 
 \section{Related Work}
-%4.29 这个是不是最好写成加粗短语+对应分段的形式 比如Offline goal-conditioned RL/iterative refinement/
-Many areas of machine learning have recently explored architectures that allocate computation through repeated latent updates rather than a single feedforward pass. Universal Transformers apply recurrence over depth with shared transition functions and adaptive computation \citep{universal_transformer, act}, while Deep Equilibrium Models formulate prediction as convergence to an implicit fixed point \citep{deq}. A broader family of recurrent and iterative reasoning methods similarly performs multiple rounds of latent correction before producing a final prediction \citep{recurrent_relational_networks, energy_diffusion}. More recent systems such as HRM, TRM, and URM have renewed interest in this direction by showing that compact recurrent computation can be effective on supervised reasoning tasks \citep{hrm, trm, urm}. Reinforcement learning has also seen growing interest in architecture and scaling. Recent work has improved online RL agents by increasing network depth or width, adding residual structure, or otherwise strengthening feedforward actor-critic backbones \citep{thousand_layers, bro, simba}. These results suggest that value-function architecture can be an important factor in control performance. However, offline goal-conditioned RL poses a different scaling problem. In this setting, conventional feedforward architecture changes do not necessarily yield consistent gains, because the agent must infer goal reachability from a fixed dataset rather than repair value errors through additional interaction.
+\paragraph{Goal-conditioned reinforcement learning.}
+Goal-conditioned RL learns policies and value functions that generalize across desired outcomes, building on goal-indexed value approximation, temporal abstraction, hindsight relabeling, and supervised goal reaching \citep{uvfa, options, feudal_rl, her, gcsl}. Later methods learn goal-conditioned distances, future-state classifiers, latent goal spaces, replay-buffer plans, or contrastive scores for long-horizon and visual control \citep{tdm, rig, sorb, skewfit, c_learning, crl}. These works motivate goal-conditioned values and future-state scores as control signals, but most assume online or self-supervised data collection rather than a fixed dataset.
 
-Offline goal-conditioned RL is particularly challenging because it combines long-horizon reasoning with the distributional constraints of offline learning. OGBench was introduced to study these difficulties through tasks that require stitching across trajectories, generalization over state-goal pairs, and robust policy extraction from learned value estimates \citep{ogbench}. Recent analyses further suggest that the main bottleneck in offline GCRL is not unique: value learning, policy extraction, and generalization can all limit performance depending on the algorithm and task \citep{ogbench, value_bottleneck}. 
+\paragraph{Offline goal-conditioned RL algorithms.}
+Offline RL must learn from fixed data while avoiding value errors on out-of-distribution actions, motivating conservative or behavior-regularized methods such as CQL, IQL, TD3+BC, and SAC+BC \citep{cql, iql, td3, td3bc, sac}. Offline GCRL adds state-goal generalization and trajectory stitching, so prior work has attacked different failure modes. Some methods improve policy extraction from fixed data through supervised or advantage-weighted learning, including the OGBench GCBC/GCIVL/GCIQL baselines, WGCSL, GoFAR, DAWOG, and SAW \citep{ogbench, wgcsL, gofar, dawog, saw}. Others focus on the learned reachability signal itself: CRL uses contrastive compatibility learning, while QRL and CGCIVL impose quasimetric or conservative value structure to reduce errors on poorly connected state-goal pairs \citep{crl, qrl, cgcivl}. A third line reduces the effective horizon through temporal abstraction, subgoals, or multi-step value learning, from classical options to HIQL, OTA, and SHARSA \citep{options, hiql, ota, horizon_reduction}. OGBench evaluates these issues through stitching, long-horizon, stochastic, visual, and policy-extraction tasks \citep{ogbench}, while recent analysis shows that value learning, policy extraction, and generalization can each be bottlenecks \citep{value_bottleneck}. We keep losses, data, and actors fixed, and instead study the computation inside the critic.
 
-Existing offline GCRL algorithms address these challenges from several directions. Contrastive RL learns a goal-conditioned compatibility score and trains the actor to optimize that score, providing a simple non-hierarchical actor-critic formulation \citep{crl, ogbench}. Hierarchical methods such as HIQL introduce temporal abstraction to improve long-horizon goal reaching \citep{hiql}. Other recent approaches, including SAW-style methods, focus on improving policy extraction or actor-side goal-conditioned learning under fixed datasets \citep{saw}. These directions are complementary to ours, as our work targets the value-learning side of this picture.
+\paragraph{Architecture and iterative computation.}
+Although deep RL often uses shallow MLPs, architecture and regularization matter: dense or residual designs, explicit TD regularizers, plasticity methods, and dormant-neuron recycling all target representation quality or network utilization \citep{resnet, d2rl, dr3, implicit_underparam, primacy_bias, dormant_neurons}. Larger regularized actor-critic backbones and very deep self-supervised RL networks further show that capacity can change control performance \citep{bro, simba, thousand_layers}. A natural next step is to ask not only how much computation a critic has, but how that computation is organized. Repeated latent updates appear in Neural Turing machines, Neural GPUs, adaptive computation, Universal Transformers, and equilibrium models \citep{ntm, neural_gpu, act, universal_transformer, deq}; related recurrent, Hopfield, deep-thinking, energy-diffusion, and compact reasoning models show how iterative correction can support structured prediction and reasoning \citep{recurrent_relational_networks, modern_hopfield, deep_thinking, energy_diffusion, hrm, trm, urm}. We use normalization, gating, and residual-scale control common in deep repeated computation \citep{layer_norm, shazeer_glu, layerscale}, adapting this pattern to offline GCRL critics whose signals must support both reachability inference and behavior-constrained policy extraction.
 
 
 
@@ -356,7 +352,7 @@ before predicting $\hat y = R(h^{(K)})$. The key feature is that the update para
     -| (plus.north);
 
 \node[note, below=1.05cm of scale] 
-{$h^{(k+1)} = h^{(k)} + \alpha_k\big(\tilde h^{(k)} - h^{(k)}\big)$};
+{};
 
 \end{tikzpicture}
 }
@@ -424,7 +420,7 @@ before predicting $\hat y = R(h^{(K)})$. The key feature is that the update para
     -| (plusres.south);
 
 \node[note, below=1.05cm of swiglu]
-{$u = \mathrm{LN}(h) + e_k,\quad h' = h + \mathrm{SwiGLU}(u)$};
+{};
 
 \end{tikzpicture}
 }
@@ -463,30 +459,6 @@ h^{(k)}
 Here $\alpha_k$ is initialized small and learned separately for each outer step, stabilizing repeated residual computation \citep{layerscale}. The case $m=1$ recovers a single-update refinement block, while $m>1$ gives a more expressive stacked-SwiGLU update within each refinement step. This design lets us vary repeated revision depth and per-step update capacity separately before the algorithm consumes the resulting value, score, or policy signal.
 
 
-
-% \paragraph{Why recurrence helps}
-% We do not attribute the advantage of the recurrent critic to increased
-% expressivity, as an untied MLP can represent the unrolled computation
-% \(Q \approx f_\theta(s,a,g)\). Instead, the difference is structural.
-% In goal-conditioned RL, evaluating state-action--goal compatibility often
-% requires implicit multi-step reasoning over the dataset, which can be
-% viewed as approximating a compositional mapping \(Q^\star \approx T^K \circ \Phi\).
-% A one-shot MLP must approximate this process in a single mapping, which
-% entangles different stages of computation.
-
-% In contrast, a recurrent critic performs iterative refinement
-% \(h_{k+1} = h_k + F_\theta(h_k)\), and can be viewed as learning a local
-% update rule that incrementally improves the representation. In this sense,
-% it only needs to learn a direction of improvement that is locally correct
-% (e.g., reducing a residual \(\|h_k - h^\star\|\)), while an MLP must
-% represent a globally consistent mapping in one pass. When the target
-% function admits a progressive refinement structure, such local updates can
-% be substantially easier to learn than fitting \(f_\theta\) directly.
-% This parameter sharing across steps therefore acts as a useful inductive
-% bias, improving data efficiency and stability. This advantage is
-% conditional and depends on the presence of such iterative structure.
-
-
 \section{Experiments}
 \subsection{Experiment Setup}\label{section:exp-setup}
 \paragraph{Environments}
@@ -498,92 +470,77 @@ We study recurrent latent refinement as an architecture-level replacement inside
 
 
 \subsection{Main Results}\label{main-results}
-The main recurrent-versus-MLP comparison across locomotion and manipulation datasets and across the evaluated offline GCRL algorithms is shown in Table~\ref{tab:main_results}. We use a unified row format so that each result keeps its algorithm, recurrent configuration, and dataset setting explicit.
-\begin{table*}[h]
+The main recurrent-versus-baseline comparison across locomotion and manipulation datasets is shown in Table~\ref{tab:main_results}. Following the OGBench reporting convention, we report normalized success scores in percentage points, averaged across the five evaluation goals for each dataset, with standard deviation shown in smaller type.
+\begin{table*}[t]
 \centering
 \scriptsize
-\setlength{\tabcolsep}{4pt}
-\begin{tabular}{lllccc}
+\setlength{\tabcolsep}{3pt}
+\newcommand{\score}[2]{#1{\scriptsize$\pm$#2}}
+\resizebox{\textwidth}{!}{
+\begin{tabular}{llllc}
 \toprule
-Algorithm & Recurrent config & Dataset group & MLP & Recurrent & $\Delta$ \\
+Algorithm & Recurrent config & Dataset & Baseline MLP & Recurrent (ours)\\
 \midrule
-CRL  & $K=4,\,m=1$ & AMS & 0.530 & \textbf{0.954} & +0.424 \\
-CRL  & $K=4,\,m=1$ & ALS & 0.110 & \textbf{0.479} & +0.369 \\
-% CRL  & $K=4,\,m=1$ & ATS & 0.310 & \textbf{0.362} & +0.052 \\
-CRL  & $K=4,\,m=1$ & AMN & 0.950 & \textbf{0.963} & +0.013 \\
-CRL  & $K=4,\,m=1$ & ALN & 0.830 & \textbf{0.893} & +0.063 \\
-CRL  & $K=4,\,m=1$ & AGN & 0.160 & \textbf{0.340} & +0.180 \\
-% CRL  & $K=4,\,m=1$ & ATN & 0.200 & \textbf{0.557} & +0.357 \\
-CRL  & $K=4,\,m=1$ & HMN & 0.600 & \textbf{0.632} & +0.032 \\
-CRL  & $K=4,\,m=1$ & HMS & 0.360 & \textbf{0.657} & +0.297 \\
-CRL  & $K=4,\,m=1$ & HLN &  &  &  \\
-CRL  & $K=4,\,m=1$ & HLS &  &  &  \\
-CRL  & $K=4,\,m=1$ & CSP & 0.100 & \textbf{0.205} & +0.105 \\
-CRL  & $K=4,\,m=1$ & SP  & 0.190 & \textbf{0.288} & +0.110 \\
+CRL  & $K=4,\,m=1$ & \texttt{antmaze-medium-navigate-v0}       & \textbf{\score{95}{1}} & \textbf{\score{96}{1}} \\
+CRL  & $K=4,\,m=1$ & \texttt{antmaze-large-navigate-v0}        & \score{83}{4} & \textbf{\score{90}{3}} \\
+CRL  & $K=4,\,m=1$ & \texttt{antmaze-giant-navigate-v0}        & \score{16}{3} & \textbf{\score{34}{4}} \\
+CRL  & $K=4,\,m=1$ & \texttt{antmaze-teleport-navigate-v0}     & \score{53}{2} & \textbf{\score{56}{3}} \\
+CRL  & $K=4,\,m=1$ & \texttt{antmaze-medium-stitch-v0}         & \score{53}{6} & \textbf{\score{95}{1}} \\
+CRL  & $K=4,\,m=1$ & \texttt{antmaze-large-stitch-v0}          & \score{11}{2} & \textbf{\score{48}{6}} \\
+CRL  & $K=4,\,m=1$ & \texttt{antmaze-teleport-stitch-v0}       & \score{31}{4} & \textbf{\score{36}{5}} \\
+CRL  & $K=4,\,m=1$ & \texttt{humanoidmaze-medium-navigate-v0}  & \textbf{\score{60}{4}} & \textbf{\score{63}{2}} \\
+CRL  & $K=4,\,m=1$ & \texttt{humanoidmaze-medium-stitch-v0}    & \score{36}{2} & \textbf{\score{66}{4}} \\
+CRL  & $K=4,\,m=1$ & \texttt{cube-single-play-v0}              & \score{19}{2} & \textbf{\score{21}{3}} \\
+CRL  & $K=4,\,m=1$ & \texttt{scene-play-v0}                    & \score{19}{2} & \textbf{\score{29}{4}} \\
 \midrule
-HIQL & $K=4,\,m=2$ & AGN & 0.650 & \textbf{0.736} & +0.086 \\
-HIQL & $K=4,\,m=2$ & ALS & 0.670 & \textbf{0.704} & +0.034 \\
-% HIQL & $K=4,\,m=2$ & ATN & 0.420 & \textbf{0.468} & +0.048 \\
-% HIQL & $K=4,\,m=2$ & ATS & 0.360 & \textbf{0.426} & +0.066 \\
-HIQL & $K=4,\,m=2$ & HLN &  &  &  \\
-HIQL & $K=4,\,m=2$ & HLS &  &  & \\
-HIQL & $K=4,\,m=2$ & CSP & &  &  \\
-HIQL & $K=4,\,m=2$ & SP & 0.38 & \textbf{0.572} &  \\
+HIQL & $K=4,\,m=2$ & \texttt{antmaze-giant-navigate-v0}        & \score{65}{5} & \textbf{\score{74}{4}} \\
+HIQL & $K=4,\,m=2$ & \texttt{antmaze-teleport-navigate-v0}     & \score{42}{3} & \textbf{\score{47}{3}} \\
+HIQL & $K=4,\,m=2$ & \texttt{antmaze-large-stitch-v0}          & \score{67}{1} & \textbf{\score{72}{7}} \\
+HIQL & $K=4,\,m=2$ & \texttt{antmaze-teleport-stitch-v0}       & \score{36}{2} & \textbf{\score{43}{2}} \\
+HIQL & $K=4,\,m=2$ & \texttt{scene-play-v0}                    & \score{38}{3} & \textbf{\score{57}{7}} \\
 \midrule
-SAW  & $K=4,\,m=1$ & AGN & 0.730 & \textbf{0.788} & +0.058 \\
-SAW  & $K=4,\,m=1$ & HGN & 0.350 & \textbf{0.443} & +0.093 \\
-SAW  & $K=4,\,m=1$ & CDP & 0.400 & \textbf{0.462} & +0.062 \\
-SAW  & $K=4,\,m=1$ & SP  & 0.630 & \textbf{0.656} & +0.017 \\
+SAW  & $K=4,\,m=1$ & \texttt{antmaze-giant-navigate-v0}        & \score{73}{4} & \textbf{\score{79}{5}} \\
+SAW  & $K=4,\,m=1$ & \texttt{humanoidmaze-giant-navigate-v0}   & \score{35}{4} & \textbf{\score{44}{3}} \\
+SAW  & $K=4,\,m=1$ & \texttt{cube-double-play-v0}              & \score{40}{7} & \textbf{\score{46}{6}} \\
+SAW  & $K=4,\,m=1$ & \texttt{scene-play-v0}                    & \textbf{\score{63}{6}} & \textbf{\score{66}{2}} \\
 \bottomrule
 \end{tabular}
-\caption{Main results in a unified row format. Each row reports average success rate across 8 seeds on one OGBench dataset setting for the MLP baseline and recurrent variant, with $\Delta$ denoting recurrent minus MLP.}
+}
+\caption{Main results on OGBench tasks. Scores are normalized average binary success rates in percentage points; smaller numbers after $\pm$ denote standard deviations. Published CRL and HIQL baselines are taken from OGBench \citep{ogbench}, and published SAW baselines are taken from the SAW paper \citep{saw}. Following OGBench, bold denotes scores at or above 95\% of the best mean in each row.}
 \label{tab:main_results}
 \end{table*}
+
+Overall, recurrent refinement improves the mean score in every reported comparison, with the largest gains appearing on stitching-heavy settings such as \texttt{antmaze-medium-stitch-v0}, \texttt{antmaze-large-stitch-v0}, and \texttt{humanoidmaze-medium-stitch-v0}. The effect is strongest for CRL, where the actor directly consumes the learned contrastive score, and remains positive for HIQL and SAW despite their different policy-extraction mechanisms. On already strong settings, such as \texttt{antmaze-medium-navigate-v0}, \texttt{humanoidmaze-medium-navigate-v0}, and SAW on \texttt{scene-play-v0}, the recurrent model still has the higher mean but the baseline remains within 95\% of the best score under the OGBench bolding convention. These results suggest that recurrent value refinement is most useful when the learned signal must support long-horizon stitching, while still acting as a mostly drop-in architectural improvement across algorithm families. The table uses the default recurrent configurations selected for each algorithm; the roles of refinement depth $K$ and per-step update capacity $m$ are studied next in Section~\ref{sec:depth} and Figure~\ref{fig:m_comparison}.
 
 
 \subsection{Effect of Refinement Depth}
 \label{sec:depth}
-The main results use a fixed refinement depth, but the architecture is only meaningfully recurrent if repeated updates matter. We therefore sweep the number of outer refinement steps $K$ in CRL on \texttt{Antmaze-Medium-Stitch} (AMS) and \texttt{Antmaze-Giant-Navigate} (AGN), comparing the MLP baseline with $K\in\{1,2,4,6,8\}$ recurrent critics.
+The main results use a fixed refinement depth, but the benefit of recurrence should depend on whether repeated updates provide useful additional computation. We therefore sweep the number of outer refinement steps $K$ in CRL on \texttt{Antmaze-Medium-Stitch} (AMS) and \texttt{Antmaze-Giant-Navigate} (AGN), comparing the MLP baseline with recurrent critics using $K\in\{1,2,4,6,8\}$.
 
-Figure~\ref{fig:iter_ams_agn} shows that a single refinement step does not explain the gain: $K=1$ remains close to the MLP baseline, while $K\geq2$ enters a substantially higher-success regime. Figure~\ref{fig:iter_1M_100k} summarizes the same pattern at early and final checkpoints. Performance is not a monotonic function of depth; it saturates after a small number of recurrent revisions and is strongest around $K=4$--$6$. We use $K=4$ as the default because it captures most of the gain while keeping computation moderate. Detailed numeric tables for the depth sweep are reported in the appendix.
+Figure~\ref{fig:iter_ams_agn} shows a clear depth-dependent pattern. A single recurrent update is insufficient: $K=1$ behaves similarly to the feedforward baseline, indicating that the gain is not explained merely by replacing the MLP block with a different parameterization. Increasing the number of refinement steps produces a sharp improvement, especially on the stitching task, where the critic must evaluate goals through indirect trajectory connections. The gains then saturate rather than increasing monotonically, suggesting that recurrent refinement is useful up to the point where the latent representation has resolved the relevant reachability structure, after which additional updates provide limited benefit and can introduce optimization noise. We use $K=4$ in the main comparisons because it lies in this high-performing regime while keeping training and evaluation cost moderate. Detailed numeric results for the depth sweep are reported in the appendix.
 
 \begin{figure}[h]
     \centering
     \includegraphics[width=\linewidth]{figures/iter_learning_process_steps.png}
-    \caption{Learning curves for refinement-depth sweeps on AMS and AGN. Shaded regions indicate standard deviation over four seeds.}
+    \caption{Learning curves for refinement-depth sweeps on AMS and AGN. Moderate recurrent depth improves performance substantially over both the MLP baseline and the one-step recurrent critic, while further increases show diminishing returns. Shaded regions indicate standard deviation over four seeds.}
     \label{fig:iter_ams_agn}
-\end{figure}
-
-\begin{figure}[h]
-    \centering
-    \includegraphics[width=\linewidth]{figures/iter_1M_100k.pdf}
-    \caption{Success rates for MLP and $K$-step recurrent critics at early and final checkpoints on AMS and AGN, averaged over four seeds.}
-    \label{fig:iter_1M_100k}
 \end{figure}
 
 
 \subsection{Effect of Per-Step Update Capacity}
-The refinement module has two architectural axes: the number of outer refinement steps $K$ and the number of inner update blocks $m$ used within each step. After fixing $K=4$, we vary $m$ to test whether per-step update capacity matters. Table~\ref{tab:m_ablation} shows that it does, but not uniformly across algorithms. HIQL benefits from the more expressive $m=2$ update across ALS, AGN, and Scene, while CRL is stronger with $m=1$ on the AntMaze settings and roughly tied on Scene. Thus, $m$ is not a generic capacity knob; it interacts with the algorithmic value-to-policy interface. We use $m=1$ for CRL and $m=2$ for HIQL in the main comparisons.
+\label{sec:update-capacity}
+The refinement module also has a per-step capacity axis: for a fixed number of outer refinement steps, each update can use either a lightweight transition or a more expressive stacked transition. We therefore fix $K=4$ and compare $m=1$ against $m=2$, where $m$ is the number of inner update blocks applied at each refinement step.
 
-\begin{table}[h]
-\centering
-\scriptsize
-\setlength{\tabcolsep}{5pt}
-\caption{Effect of inner update depth $m$ with $K=4$ fixed. Entries report average success with standard deviation.}
-\label{tab:m_ablation}
-\begin{tabular}{llcc}
-\toprule
-Dataset & Algorithm & $m=1$ & $m=2$ \\
-\midrule
-ALS & HIQL & 0.497 $\pm$ 0.043 & \textbf{0.691} $\pm$ 0.366 \\
-ALS & CRL  & \textbf{0.504} $\pm$ 0.096 & 0.380 $\pm$ 0.153 \\
-AGN & HIQL & 0.605 $\pm$ 0.056 & \textbf{0.722} $\pm$ 0.373 \\
-AGN & CRL  & \textbf{0.331} $\pm$ 0.056 & 0.173 $\pm$ 0.083 \\
-Scene & HIQL & 0.480 $\pm$ 0.028 & \textbf{0.565} $\pm$ 0.297 \\
-Scene & CRL  & 0.288 $\pm$ 0.045 & \textbf{0.293} $\pm$ 0.135 \\
-\bottomrule
-\end{tabular}
-\end{table}
+\begin{wrapfigure}{r}{0.60\textwidth}
+    \vspace{-0.9em}
+    \centering
+    \includegraphics[width=0.60\textwidth]{figures/m_comparison.png}
+    \caption{Effect of per-step update capacity with $K=4$ fixed. Bars show the change in success rate from $m=1$ to $m=2$; error bars indicate propagated standard deviation.}
+    \label{fig:m_comparison}
+    \vspace{-1.2em}
+\end{wrapfigure}
+
+Figure~\ref{fig:m_comparison} shows that increasing $m$ is not a uniformly beneficial form of capacity scaling. HIQL consistently improves when the recurrent update is strengthened from $m=1$ to $m=2$, with the largest gain on \texttt{antmaze-large-stitch-v0}. In contrast, CRL degrades on the two AntMaze tasks and is nearly unchanged on \texttt{scene-play-v0}. This split suggests that the useful amount of per-step computation depends on the algorithmic interface between the learned signal and the actor. HIQL's bootstrapped hierarchical value target appears to benefit from a richer transition, whereas CRL's contrastive actor-facing score is better served by a lighter update that preserves the regularizing effect of repeated tied refinement. We therefore use $m=1$ for CRL and $m=2$ for HIQL in the main comparisons.
 
 
 
@@ -646,8 +603,8 @@ The task-wise results show that the aggregate gains are heterogeneous across goa
 
 \begin{figure}[t]
     \centering
-    \includegraphics[width=\linewidth]{figures/ams_trajectory_bottleneck.pdf}
-    \caption{Trajectory-level visualization of actor extraction on AMS bottleneck tasks. For each task, the left panel shows the maze layout with start and goal, while the middle and right panels show matched-seed trajectories from the MLP baseline and recurrent critic.}
+    \includegraphics[width=0.94\linewidth,height=0.36\textheight,keepaspectratio,trim=7pt 7pt 7pt 7pt,clip]{figures/ams_trajectory_bottleneck.pdf}
+    \caption{Trajectory-level visualization on AMS bottleneck tasks. Each row shows the maze layout with start and goal, followed by matched-seed trajectories from the MLP baseline and recurrent critic.}
     \label{fig:ams_trajectory_bottleneck}
 \end{figure}
 
@@ -663,12 +620,16 @@ Finally, graph-distance correlations argue against a simpler explanation. If rec
 
 \subsection{Matched Parameter and Computation Comparison}\label{matched}
 A natural alternative explanation is that the recurrent critic improves only because it has more parameters than the default CRL critic. We test this with dense feedforward controls that keep the same MLP recipe as CRL's critic, including GELU activations and layer normalization, but match the recurrent critic's parameter count by either increasing depth or increasing width.
-\begin{figure}[h]
+
+\begin{wrapfigure}{r}{0.48\textwidth}
+    \vspace{-0.9em}
     \centering
-    \includegraphics[width=\linewidth]{figures/parameter_match.pdf}
-    \caption{Matched-parameter dense feedforward controls. The recurrent critic is compared with depth-matched and width-matched dense MLP critics.}
+    \includegraphics[width=0.47\textwidth]{figures/parameter_match.pdf}
+    \caption{Matched-parameter dense feedforward controls for the recurrent CRL critic.}
     \label{fig:parameter_match}
-\end{figure}
+    \vspace{-1.2em}
+\end{wrapfigure}
+
 The two dense alternatives are a wider critic with hidden sizes \texttt{688-688-688} and a deeper critic with hidden sizes \texttt{512-512-512-512-512}, within 0.37\% and 0.19\% of the recurrent critic's parameter count, respectively. As shown in Figure~\ref{fig:parameter_match}, neither dense alternative closes the gap to the recurrent critic. This suggests that the improvement is not explained by parameter count alone, but by how the critic reuses computation through iterative latent refinement.
 
 
@@ -686,7 +647,7 @@ Overall, the ablations support a structured design rather than recurrence alone:
 
 
 \section{Conclusion}
-Reinforcement learning has often relied on comparatively shallow value and policy networks, and recent work has begun to challenge this convention by scaling depth, width, and regularization in RL architectures \citep{thousand_layers, bro, simba}. Our results suggest a complementary way to allocate computation: rather than only making the feedforward critic larger, offline GCRL can benefit from recurrently refining the value representation before policy extraction. This connects value learning to recurrent-depth and iterative reasoning models, where repeated latent updates support structured inference \citep{universal_transformer, deq, recurrent_relational_networks, energy_diffusion, hrm, trm, urm}. In offline GCRL, the critic must infer long-horizon reachability from fixed data and provide an actor-usable signal \citep{ogbench, value_bottleneck}; recurrent refinement improves this interface by producing a more discriminative and actor-friendly signal, especially on stitching and bottleneck tasks. Because the same architectural principle improves algorithms with different training regimes without changing their objectives or data, we view iterative refinement as a practical design axis for offline RL that complements losses, datasets, and policy-extraction methods.
+Reinforcement learning has often relied on comparatively shallow value and policy networks, and recent work has begun to challenge this convention by scaling depth, width, and regularization in RL architectures \citep{thousand_layers, bro, simba}. Our results suggest a complementary way to allocate computation: rather than only making the feedforward critic larger, offline GCRL can benefit from recurrently refining the value representation before policy extraction, reminiscent of recurrence in the brain~\citep{kietzmann2019cortical}. This connects value learning to recurrent-depth and iterative reasoning models, where repeated latent updates support structured inference \citep{universal_transformer, deq, recurrent_relational_networks, energy_diffusion, hrm, trm, urm}. In offline GCRL, the critic must infer long-horizon reachability from fixed data and provide an actor-usable signal \citep{ogbench, value_bottleneck}; recurrent refinement improves this interface by producing a more discriminative and actor-friendly signal, especially on stitching and bottleneck tasks. Because the same architectural principle improves algorithms with different training regimes without changing their objectives or data, we view iterative refinement as a practical design axis for offline RL that complements losses, datasets, and policy-extraction methods.
 
 
 \paragraph{Limitations.}
