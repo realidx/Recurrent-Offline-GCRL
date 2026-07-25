@@ -1,0 +1,27 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+.DS_Store
+.vscode/
+
+third_party/
+.ogbench_data/
+exp/
+logs/
+wandb/
+outputs/
+
+# LaTeX or plotting byproducts if users copy paper scripts here.
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.run.xml
+*.synctex.gz
+*.toc

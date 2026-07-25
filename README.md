@@ -79,7 +79,6 @@ If bootstrap succeeds, you should have these files:
 - `third_party/ogbench/impls/main.py`
 - `third_party/ogbench/impls/agents/crl.py`
 - `third_party/ogbench/impls/agents/saw.py`
-- `third_party/ogbench/impls/agents/cgivl.py`
 
 You can also verify the bootstrap script parses correctly with:
 

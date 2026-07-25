@@ -25,7 +25,7 @@ if [[ ! -f "${IMPL_DIR}/agents/saw.py" ]]; then
 fi
 
 CONDA_ENV="${CONDA_ENV:-recurrent}"
-CONDA_EXE="${CONDA_EXE:-/app/apps/miniforge3/25.3.1/bin/conda}"
+CONDA_EXE="${CONDA_EXE:-conda}"
 WANDB_MODE="${WANDB_MODE:-online}"
 
 ENV_NAME="${ENV_NAME:-antmaze-large-stitch-v0}"
@@ -73,13 +73,8 @@ ACTOR_HIDDEN_DIMS="${ACTOR_HIDDEN_DIMS:-512x512x512}"
 LOW_ACTOR_HIDDEN_DIMS="${LOW_ACTOR_HIDDEN_DIMS:-512x512x512}"
 VALUE_HIDDEN_DIMS="${VALUE_HIDDEN_DIMS:-512x512x512}"
 VALUE_BACKBONE="${VALUE_BACKBONE:-mlp}"
-VALUE_RECUR_ITERS="${VALUE_RECUR_ITERS:-4}"
-VALUE_RECUR_NUM_DENSE_LAYERS="${VALUE_RECUR_NUM_DENSE_LAYERS:-2}" # For recur_stacked_swiglu this is the stacked residual SwiGLU depth per iteration.
-VALUE_RECUR_BLOCK_TYPE="${VALUE_RECUR_BLOCK_TYPE:-dense}"
-VALUE_RECUR_MAX_ITERS="${VALUE_RECUR_MAX_ITERS:-16}"
-VALUE_RECUR_LN_MODE="${VALUE_RECUR_LN_MODE:-per_layer_final}"
-VALUE_RECUR_USE_STEP_INFO="${VALUE_RECUR_USE_STEP_INFO:-1}"
-VALUE_RECUR_USE_LAYERSCALE="${VALUE_RECUR_USE_LAYERSCALE:-1}"
+K="${K:-4}"
+M="${M:-2}"
 VALUE_LAYERSCALE_INIT="${VALUE_LAYERSCALE_INIT:-1e-2}"
 
 VALUE_P_CURGOAL="${VALUE_P_CURGOAL:-0.2}"
@@ -191,36 +186,23 @@ fi
 case "${VALUE_BACKBONE}" in
   mlp)
     ;;
-  recur_tied|recur_stacked_swiglu)
-    if [[ ! "${VALUE_RECUR_LN_MODE}" =~ ^(pre_loop|per_layer|per_layer_final|pre_loop_per_layer)$ ]]; then
-      echo "Error: VALUE_RECUR_LN_MODE='${VALUE_RECUR_LN_MODE}' is invalid. Use pre_loop, per_layer, per_layer_final, or pre_loop_per_layer." >&2
+  recur)
+    if [[ ! "${K}" =~ ^[1-9][0-9]*$ ]]; then
+      echo "Error: K='${K}' is not a positive integer." >&2
       exit 2
     fi
-    if [[ ! "${VALUE_RECUR_BLOCK_TYPE}" =~ ^(dense|swiglu)$ ]]; then
-      echo "Error: VALUE_RECUR_BLOCK_TYPE='${VALUE_RECUR_BLOCK_TYPE}' is invalid. Use dense or swiglu." >&2
+    if [[ ! "${M}" =~ ^[1-9][0-9]*$ ]]; then
+      echo "Error: M='${M}' is not a positive integer." >&2
       exit 2
-    fi
-    if [[ "${VALUE_BACKBONE}" == "recur_tied" && "${VALUE_RECUR_BLOCK_TYPE}" == "swiglu" && "${VALUE_RECUR_NUM_DENSE_LAYERS}" != "2" ]]; then
-      echo "Error: VALUE_RECUR_BLOCK_TYPE=swiglu requires VALUE_RECUR_NUM_DENSE_LAYERS=2." >&2
-      exit 2
-    fi
-    value_recur_block_type_flag="${VALUE_RECUR_BLOCK_TYPE}"
-    if [[ "${VALUE_BACKBONE}" == "recur_stacked_swiglu" ]]; then
-      value_recur_block_type_flag="swiglu"
     fi
     AGENT_FLAGS+=(
-      "--agent.value_recur_iters=${VALUE_RECUR_ITERS}"
-      "--agent.value_recur_num_dense_layers=${VALUE_RECUR_NUM_DENSE_LAYERS}"
-      "--agent.value_recur_block_type=${value_recur_block_type_flag}"
-      "--agent.value_recur_max_iters=${VALUE_RECUR_MAX_ITERS}"
-      "--agent.value_recur_ln_mode=${VALUE_RECUR_LN_MODE}"
-      "--agent.value_recur_use_step_info=${VALUE_RECUR_USE_STEP_INFO}"
-      "--agent.value_recur_use_layerscale=${VALUE_RECUR_USE_LAYERSCALE}"
+      "--agent.value_k=${K}"
+      "--agent.value_m=${M}"
       "--agent.value_layerscale_init=${VALUE_LAYERSCALE_INIT}"
     )
     ;;
   *)
-    echo "Error: VALUE_BACKBONE='${VALUE_BACKBONE}' is invalid. Use mlp, recur_tied, or recur_stacked_swiglu." >&2
+    echo "Error: VALUE_BACKBONE='${VALUE_BACKBONE}' is invalid. Use mlp or recur." >&2
     exit 2
     ;;
 esac

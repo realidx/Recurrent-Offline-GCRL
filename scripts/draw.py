@@ -1,3 +1,5 @@
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -37,13 +39,13 @@ crl_diff_std = np.sqrt(crl_std_m1**2 + crl_std_m2**2)
 # print("CRL Diff Stds:", crl_diff_std)
 
 # --- Define Plotting Elements ---
-datasets = ['ALS', 'AGN', 'Scene']
+datasets = ['ALS', 'AGN', 'SP']
 algorithms = ['HIQL', 'CRL']
 
 # Choose "pretty" but distinct colors to differentiate the algorithms.
 # Grouped bar charts require distinct colors to be readable.
-color_hiql = '#5EBEA3'  # A nice, standard, deep blue
-color_crl = '#FB8B60'   # A complementary, pleasing orange
+color_hiql = '#55A868'  # A nice, standard, deep blue
+color_crl = '#DD8452'   # A complementary, pleasing orange
 
 # Set bar positions and widths for the grouped layout
 x = np.arange(len(datasets))  # The label locations: [0, 1, 2]
@@ -60,7 +62,7 @@ fig, ax = plt.subplots(figsize=(10, 6))
 # Plot bars with error bars (yerr)
 # Bars are centered at x - width/2 (HIQL) and x + width/2 (CRL)
 rects1 = ax.bar(x - width/2, hiql_diff, width, 
-                label='HIQL (m=2 - m=1)', 
+                label='HIQL Delta', 
                 color=color_hiql, 
                 alpha=0.8, # slight transparency for a softer look
                 edgecolor='black', # clear outlines
@@ -70,7 +72,7 @@ rects1 = ax.bar(x - width/2, hiql_diff, width,
                 error_kw={'alpha': 0.6}) # error bar transparency
 
 rects2 = ax.bar(x + width/2, crl_diff, width, 
-                label='CRL (m=2 - m=1)', 
+                label='CRL Delta', 
                 color=color_crl, 
                 alpha=0.8, 
                 edgecolor='black', 
@@ -80,10 +82,7 @@ rects2 = ax.bar(x + width/2, crl_diff, width,
                 error_kw={'alpha': 0.6})
 
 # --- Add Labels, Formatting, and Annotations ---
-# Y-axis label explicitly defines the difference being plotted.
-ax.set_ylabel('Change in Success Rate (m=2 - m=1)', fontsize=12, fontweight='bold')
-ax.set_xlabel('Dataset', fontsize=12, fontweight='bold')
-ax.set_title('Improvement in Performance from m=1 to m=2', fontsize=14, fontweight='bold', pad=20)
+ax.set_ylabel('Delta success', fontsize=18, fontweight='bold')
 
 # Set the x-axis tick labels to be the dataset names
 ax.set_xticks(x)
@@ -102,8 +101,7 @@ ax.legend(loc='lower right', frameon=True, fontsize=10)
 # Ensure everything fits within the figure area nicely.
 fig.tight_layout()
 
-# Save the figure as a high-quality PNG.
-plt.savefig('performance_difference_grouped_bar_chart.png', dpi=300)
+# Save the figure used by the paper.
+plt.savefig('paper/figures/m_comparison.png', dpi=300, bbox_inches='tight')
 
-# Display the plot.
-plt.show()
+plt.close(fig)

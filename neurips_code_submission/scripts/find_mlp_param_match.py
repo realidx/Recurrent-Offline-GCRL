@@ -28,12 +28,10 @@ import numpy as np
 
 
 ROOT = Path(__file__).resolve().parents[1]
-IMPL_DIR = ROOT / "third_party" / "ogbench" / "impls"
-OGBENCH_DIR = ROOT / "third_party" / "ogbench"
+IMPL_DIR = ROOT / "impls"
 
-for path in (str(IMPL_DIR), str(OGBENCH_DIR)):
-    if path not in sys.path:
-        sys.path.insert(0, path)
+if str(IMPL_DIR) not in sys.path:
+    sys.path.insert(0, str(IMPL_DIR))
 
 AGENT_SPECS = {
     "crl": {

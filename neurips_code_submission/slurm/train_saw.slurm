@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=p4_hiql
+#SBATCH --job-name=p4_saw
 #SBATCH --partition=gpu-long
 #SBATCH --time=10:00:00
 #SBATCH --cpus-per-task=8
@@ -13,14 +13,14 @@ set -euo pipefail
 
 cd "${SLURM_SUBMIT_DIR}"
 
-if [[ ! -f "third_party/ogbench/impls/main.py" ]]; then
-  echo "Error: missing third_party/ogbench/impls/main.py. Run ./scripts/bootstrap_ogbench.sh first." >&2
+if [[ ! -f "impls/main.py" ]]; then
+  echo "Error: missing impls/main.py." >&2
   exit 2
 fi
 
-IMPL_DIR="${SLURM_SUBMIT_DIR}/third_party/ogbench/impls"
-if [[ ! -f "${IMPL_DIR}/agents/hiql.py" ]]; then
-  echo "Error: missing ${IMPL_DIR}/agents/hiql.py." >&2
+IMPL_DIR="${SLURM_SUBMIT_DIR}/impls"
+if [[ ! -f "${IMPL_DIR}/agents/saw.py" ]]; then
+  echo "Error: missing ${IMPL_DIR}/agents/saw.py." >&2
   exit 2
 fi
 
@@ -29,7 +29,7 @@ CONDA_EXE="${CONDA_EXE:-conda}"
 WANDB_MODE="${WANDB_MODE:-online}"
 
 ENV_NAME="${ENV_NAME:-antmaze-large-stitch-v0}"
-RUN_GROUP="${RUN_GROUP:-HIQL_AntLargeStitch}"
+RUN_GROUP="${RUN_GROUP:-SAW_AntLargeStitch}"
 SAVE_DIR="${SAVE_DIR:-${SLURM_SUBMIT_DIR}/exp}"
 DATASET_DIR="${DATASET_DIR:-${SLURM_SUBMIT_DIR}/.ogbench_data}"
 RESTORE_PATH="${RESTORE_PATH:-}"
@@ -45,27 +45,34 @@ VIDEO_EPISODES="${VIDEO_EPISODES:-0}"
 EVAL_ON_CPU="${EVAL_ON_CPU:-1}"
 SAVE_INTERVAL="${SAVE_INTERVAL:-0}"
 SAVE_STEPS="${SAVE_STEPS:-600000:800000:900000:1000000}"
-REFINE_PROBE_SIZE="${REFINE_PROBE_SIZE:-256}"
-REFINE_DUMP_STEPS="${REFINE_DUMP_STEPS:-}"
 DISABLE_TQDM="${DISABLE_TQDM:-1}"
 
 LR="${LR:-3e-4}"
-DISCOUNT="${DISCOUNT:-0.99}"
 BATCH_SIZE="${BATCH_SIZE:-1024}"
-ACTOR_HIDDEN_DIMS="${ACTOR_HIDDEN_DIMS:-512x512x512}"
-VALUE_HIDDEN_DIMS="${VALUE_HIDDEN_DIMS:-512x512x512}"
-LAYER_NORM="${LAYER_NORM:-1}"
+DISCOUNT="${DISCOUNT:-0.99}"
+TAU="${TAU:-0.005}"
 EXPECTILE="${EXPECTILE:-0.7}"
 LOW_ALPHA="${LOW_ALPHA:-3.0}"
-HIGH_ALPHA="${HIGH_ALPHA:-3.0}"
+AWR_ALPHA="${AWR_ALPHA:-${HIGH_ALPHA:-3.0}}"
+KL_ALPHA="${KL_ALPHA:-3.0}"
 SUBGOAL_STEPS="${SUBGOAL_STEPS:-25}"
 REP_DIM="${REP_DIM:-10}"
-LOW_ACTOR_REP_GRAD="${LOW_ACTOR_REP_GRAD:-0}"
+LAYER_NORM="${LAYER_NORM:-1}"
 CONST_STD="${CONST_STD:-1}"
 DISCRETE="${DISCRETE:-0}"
+SHARE_GOAL_REP="${SHARE_GOAL_REP:-0}"
+GC_NEGATIVE="${GC_NEGATIVE:-1}"
+VALUE_GEOM_SAMPLE="${VALUE_GEOM_SAMPLE:-1}"
+ACTOR_GEOM_SAMPLE="${ACTOR_GEOM_SAMPLE:-0}"
+ACTOR_GEOM_DISCOUNT="${ACTOR_GEOM_DISCOUNT:-0.99}"
+P_AUG="${P_AUG:-0.0}"
 ENCODER="${ENCODER:-}"
+FRAME_STACK="${FRAME_STACK:-}"
 
-VALUE_BACKBONE="${VALUE_BACKBONE:-mlp}" # mlp | recur
+ACTOR_HIDDEN_DIMS="${ACTOR_HIDDEN_DIMS:-512x512x512}"
+LOW_ACTOR_HIDDEN_DIMS="${LOW_ACTOR_HIDDEN_DIMS:-512x512x512}"
+VALUE_HIDDEN_DIMS="${VALUE_HIDDEN_DIMS:-512x512x512}"
+VALUE_BACKBONE="${VALUE_BACKBONE:-mlp}"
 K="${K:-4}"
 M="${M:-2}"
 VALUE_LAYERSCALE_INIT="${VALUE_LAYERSCALE_INIT:-1e-2}"
@@ -102,14 +109,18 @@ fi
 mkdir -p "${DATASET_DIR}" "${SAVE_DIR}" logs/phase_4
 export OGBENCH_DATASET_DIR="${DATASET_DIR}"
 
+if [[ -n "${RESTORE_PATH}" && "${RESTORE_PATH}" != /* ]]; then
+  RESTORE_PATH="${SLURM_SUBMIT_DIR}/${RESTORE_PATH}"
+fi
+
 ENV_TAG="${ENV_NAME%-v0}"
 ENV_TAG="${ENV_TAG//-/_}"
-BB_TAG="${VALUE_BACKBONE}"
-if [[ "${VALUE_BACKBONE}" == "recur" ]]; then
-  BB_TAG="recur_m${M}_K${K}"
+EXP_CORE="${EXP_PREFIX:-${ENV_TAG}_saw}"
+if [[ "${EXP_CORE}" =~ ^sd[0-9][0-9][0-9]_(.*)$ ]]; then
+  EXP_CORE="${BASH_REMATCH[1]}"
 fi
-DEFAULT_EXP_NAME="sd$(printf %03d "${SEED}")_${ENV_TAG}_${BB_TAG}"
-EXP_NAME="${EXP_NAME:-${EXP_PREFIX:-${DEFAULT_EXP_NAME}}}"
+DEFAULT_EXP_NAME="sd$(printf %03d "${SEED}")_${EXP_CORE}"
+EXP_NAME="${EXP_NAME:-${DEFAULT_EXP_NAME}}"
 
 append_hidden_dims() {
   local flag_name="$1"
@@ -137,27 +148,35 @@ append_hidden_dims() {
 
 AGENT_FLAGS=(
   "--agent.lr=${LR}"
-  "--agent.discount=${DISCOUNT}"
   "--agent.batch_size=${BATCH_SIZE}"
-  "--agent.layer_norm=${LAYER_NORM}"
+  "--agent.discount=${DISCOUNT}"
+  "--agent.tau=${TAU}"
   "--agent.expectile=${EXPECTILE}"
   "--agent.low_alpha=${LOW_ALPHA}"
-  "--agent.high_alpha=${HIGH_ALPHA}"
+  "--agent.awr_alpha=${AWR_ALPHA}"
+  "--agent.kl_alpha=${KL_ALPHA}"
   "--agent.subgoal_steps=${SUBGOAL_STEPS}"
   "--agent.rep_dim=${REP_DIM}"
-  "--agent.low_actor_rep_grad=${LOW_ACTOR_REP_GRAD}"
+  "--agent.layer_norm=${LAYER_NORM}"
   "--agent.const_std=${CONST_STD}"
   "--agent.discrete=${DISCRETE}"
-  "--agent.value_backbone=${VALUE_BACKBONE}"
+  "--agent.share_goal_rep=${SHARE_GOAL_REP}"
+  "--agent.gc_negative=${GC_NEGATIVE}"
+  "--agent.value_geom_sample=${VALUE_GEOM_SAMPLE}"
+  "--agent.actor_geom_sample=${ACTOR_GEOM_SAMPLE}"
+  "--agent.actor_geom_discount=${ACTOR_GEOM_DISCOUNT}"
+  "--agent.p_aug=${P_AUG}"
   "--agent.value_p_curgoal=${VALUE_P_CURGOAL}"
   "--agent.value_p_trajgoal=${VALUE_P_TRAJGOAL}"
   "--agent.value_p_randomgoal=${VALUE_P_RANDOMGOAL}"
   "--agent.actor_p_curgoal=${ACTOR_P_CURGOAL}"
   "--agent.actor_p_trajgoal=${ACTOR_P_TRAJGOAL}"
   "--agent.actor_p_randomgoal=${ACTOR_P_RANDOMGOAL}"
+  "--agent.value_backbone=${VALUE_BACKBONE}"
 )
 
 append_hidden_dims "actor_hidden_dims" "${ACTOR_HIDDEN_DIMS}"
+append_hidden_dims "low_actor_hidden_dims" "${LOW_ACTOR_HIDDEN_DIMS}"
 append_hidden_dims "value_hidden_dims" "${VALUE_HIDDEN_DIMS}"
 
 if [[ -n "${ENCODER}" ]]; then
@@ -188,6 +207,14 @@ case "${VALUE_BACKBONE}" in
     ;;
 esac
 
+if [[ -n "${FRAME_STACK}" ]]; then
+  if [[ ! "${FRAME_STACK}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: FRAME_STACK='${FRAME_STACK}' is not a positive integer." >&2
+    exit 2
+  fi
+  AGENT_FLAGS+=("--agent.frame_stack=${FRAME_STACK}")
+fi
+
 CMD=(
   python main.py
   "--run_group=${RUN_GROUP}"
@@ -202,10 +229,9 @@ CMD=(
   "--video_episodes=${VIDEO_EPISODES}"
   "--eval_on_cpu=${EVAL_ON_CPU}"
   "--save_interval=${SAVE_INTERVAL}"
-  "--refine_probe_size=${REFINE_PROBE_SIZE}"
   "--disable_tqdm=${DISABLE_TQDM}"
   "--exp_name=${EXP_NAME}"
-  "--agent=agents/hiql.py"
+  "--agent=agents/saw.py"
   "${AGENT_FLAGS[@]}"
 )
 
@@ -215,10 +241,6 @@ fi
 
 if [[ -n "${SAVE_STEPS}" ]]; then
   CMD+=("--save_steps=${SAVE_STEPS}")
-fi
-
-if [[ -n "${REFINE_DUMP_STEPS}" ]]; then
-  CMD+=("--refine_dump_steps=${REFINE_DUMP_STEPS}")
 fi
 
 if [[ -n "${RESTORE_PATH}" ]]; then
@@ -247,9 +269,26 @@ if ! command -v "${CONDA_EXE}" >/dev/null 2>&1; then
 fi
 
 if ! command -v "${CONDA_EXE}" >/dev/null 2>&1; then
-  echo "Error: '${CONDA_EXE}' not found." >&2
+  echo "Error: 'conda' not found in this job environment." >&2
   echo "Fix: load your anaconda/miniconda module, or pass CONDA_EXE=/full/path/to/conda via --export." >&2
   exit 3
+fi
+
+echo "SLURM_JOB_ID=${SLURM_JOB_ID:-} SLURM_JOB_NODELIST=${SLURM_JOB_NODELIST:-} HOSTNAME=$(hostname)"
+echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>} JAX_PLATFORMS=${JAX_PLATFORMS:-<unset>}"
+
+"${CONDA_EXE}" run -n "${CONDA_ENV}" python - <<'PY'
+import os
+import jax
+
+print("env CUDA_VISIBLE_DEVICES:", os.environ.get("CUDA_VISIBLE_DEVICES"))
+print("jax default backend:", jax.default_backend())
+print("jax devices:", jax.devices())
+PY
+
+if command -v nvidia-smi >/dev/null 2>&1; then
+  nvidia-smi -L || true
+  nvidia-smi || true
 fi
 
 "${CONDA_EXE}" run -n "${CONDA_ENV}" env WANDB_MODE="${WANDB_MODE}" "${CMD[@]}"

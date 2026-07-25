@@ -13,12 +13,12 @@ set -euo pipefail
 
 cd "${SLURM_SUBMIT_DIR}"
 
-if [[ ! -f "third_party/ogbench/impls/main.py" ]]; then
-  echo "Error: missing third_party/ogbench/impls/main.py. Run ./scripts/bootstrap_ogbench.sh first." >&2
+if [[ ! -f "impls/main.py" ]]; then
+  echo "Error: missing impls/main.py." >&2
   exit 2
 fi
 
-IMPL_DIR="${SLURM_SUBMIT_DIR}/third_party/ogbench/impls"
+IMPL_DIR="${SLURM_SUBMIT_DIR}/impls"
 if [[ ! -f "${IMPL_DIR}/agents/hiql.py" ]]; then
   echo "Error: missing ${IMPL_DIR}/agents/hiql.py." >&2
   exit 2
