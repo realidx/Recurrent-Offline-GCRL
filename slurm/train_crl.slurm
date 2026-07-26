@@ -20,10 +20,11 @@
 #    sbatch --array=0-2 --export="ALL,SEEDS='0 1 2',ENV_NAME=humanoidmaze-large-stitch-v0,RUN_GROUP=P4_HumanoidLargeStitch_Recur,CRITIC_BACKBONE=recur,M=2,K=4,ALPHA=0.1,DISCOUNT=0.995,ACTOR_P_TRAJGOAL=0.5,ACTOR_P_RANDOMGOAL=0.5,WANDB_MODE=online" \
 #      slurm/train_crl.slurm
 #
-# 3) Architecture-only BroNet, SimBa, or IRU-4 critic:
+# 3) Architecture-only BroNet, SimBa, IRU-4, or untied SwiGLU critic:
 #    CRITIC_BACKBONE=bronet NUM_BLOCKS=2
 #    CRITIC_BACKBONE=simba  NUM_BLOCKS=2
 #    CRITIC_BACKBONE=iru    K=4 IRU_NUM_LAYERS=1
+#    CRITIC_BACKBONE=untied K=4 M=1
 #
 # 4) MLP critic + 32-layer actor without typing 32 copies of 512:
 #    sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=P4_AntMaze_MLP_Actor32L,CRITIC_BACKBONE=mlp,ACTOR_NUM_LAYERS=32,ACTOR_LAYER_WIDTH=512,ALPHA=0.1,DISCOUNT=0.99,WANDB_MODE=online" \
@@ -108,7 +109,7 @@ DISCRETE="${DISCRETE:-0}"
 ENCODER="${ENCODER:-}"
 
 # Critic backbone selection.
-CRITIC_BACKBONE="${CRITIC_BACKBONE:-mlp}"   # mlp | bronet | simba | iru | recur
+CRITIC_BACKBONE="${CRITIC_BACKBONE:-mlp}"   # mlp | bronet | simba | untied | iru | recur
 NUM_BLOCKS="${NUM_BLOCKS:-2}"                # Residual blocks for BroNet and SimBa.
 LAYERSCALE_INIT="${LAYERSCALE_INIT:-1e-2}"
 
@@ -151,6 +152,9 @@ case "${CRITIC_BACKBONE}" in
     ;;
   iru)
     BB_TAG="iru_L${IRU_NUM_LAYERS}_K${K}"
+    ;;
+  untied)
+    BB_TAG="untied_m${M}_K${K}"
     ;;
   recur)
     BB_TAG="recur_m${M}_K${K}"
@@ -320,7 +324,7 @@ case "${CRITIC_BACKBONE}" in
     fi
     AGENT_FLAGS+=("--agent.critic_k=${K}")
     ;;
-  recur)
+  untied|recur)
     if [[ ! "${K}" =~ ^[1-9][0-9]*$ ]]; then
       echo "Error: K='${K}' is not a positive integer." >&2
       exit 2
@@ -335,7 +339,7 @@ case "${CRITIC_BACKBONE}" in
     )
     ;;
   *)
-    echo "Error: unsupported CRITIC_BACKBONE='${CRITIC_BACKBONE}'. Use mlp, bronet, simba, iru, or recur." >&2
+    echo "Error: unsupported CRITIC_BACKBONE='${CRITIC_BACKBONE}'. Use mlp, bronet, simba, untied, iru, or recur." >&2
     exit 2
     ;;
 esac

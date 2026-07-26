@@ -23,7 +23,7 @@ index 4596fe2..f6ce698 100644
 +    saw=SAWAgent,
  )
 diff --git a/impls/agents/crl.py b/impls/agents/crl.py
-index 53109ab..9491804 100644
+index 53109ab..90053b3 100644
 --- a/impls/agents/crl.py
 +++ b/impls/agents/crl.py
 @@ -21,10 +21,18 @@ class CRLAgent(flax.struct.PyTreeNode):
@@ -32,7 +32,7 @@ index 53109ab..9491804 100644
  
 +    @staticmethod
 +    def _is_recurrent_backbone(backbone):
-+        return str(backbone) in ('recur', 'iru')
++        return str(backbone) in ('recur', 'untied', 'iru')
 +
      def contrastive_loss(self, batch, grad_params, module_name='critic'):
 -        """Compute the contrastive value loss for the Q or V function."""
@@ -236,10 +236,10 @@ index 53109ab..9491804 100644
              discrete=False,  # Whether the action space is discrete.
              encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
 +            # Critic backbone (phi/psi) hyperparameters (architecture-only swap).
-+            critic_backbone='mlp',  # 'mlp' | 'bronet' | 'simba' | 'iru' | 'recur'
++            critic_backbone='mlp',  # 'mlp' | 'bronet' | 'simba' | 'untied' | 'iru' | 'recur'
 +            critic_num_blocks=2,  # Residual blocks for BroNet and SimBa.
-+            critic_k=4,  # Recurrent iterations K when critic_backbone is 'iru' or 'recur'.
-+            critic_m=2,  # Residual SwiGLU layers per recurrent iteration when critic_backbone='recur'.
++            critic_k=4,  # Iterations/depth K when critic_backbone is 'iru', 'untied', or 'recur'.
++            critic_m=2,  # SwiGLU layers per step when critic_backbone is 'untied' or 'recur'.
 +            critic_iru_num_layers=1,  # Stacked IRU cells within each recurrent iteration.
 +            critic_eval_k=ml_collections.config_dict.placeholder(int),  # Optional K override for evaluation.
 +            critic_layerscale_init=1e-2,  # Per-step LayerScale init for recurrent residual updates.
@@ -729,7 +729,7 @@ index 0000000..b6eb414
 +    )
 +    return config
 diff --git a/impls/main.py b/impls/main.py
-index 3660e03..384b1ae 100644
+index 3660e03..8ce4107 100644
 --- a/impls/main.py
 +++ b/impls/main.py
 @@ -1,51 +1,243 @@
@@ -764,7 +764,7 @@ index 3660e03..384b1ae 100644
  
 +
 +def _is_recurrent_backbone(backbone):
-+    return str(backbone) in ('recur', 'iru')
++    return str(backbone) in ('recur', 'untied', 'iru')
 +
 +
  FLAGS = flags.FLAGS
@@ -3474,7 +3474,7 @@ index 9c421dd..bd55171 100644
  
      return run
 diff --git a/impls/utils/networks.py b/impls/utils/networks.py
-index 4ee2b26..b539e3e 100644
+index 4ee2b26..777783b 100644
 --- a/impls/utils/networks.py
 +++ b/impls/utils/networks.py
 @@ -6,12 +6,18 @@ import flax.linen as nn
@@ -3487,7 +3487,7 @@ index 4ee2b26..b539e3e 100644
      return nn.initializers.variance_scaling(scale, 'fan_avg', 'uniform')
  
  
-+RECURRENT_BACKBONES = frozenset({'recur', 'iru'})
++RECURRENT_BACKBONES = frozenset({'recur', 'untied', 'iru'})
 +
 +
 +def is_recurrent_backbone(backbone):
@@ -3497,7 +3497,7 @@ index 4ee2b26..b539e3e 100644
  def ensemblize(cls, num_qs, out_axes=0, **kwargs):
      """Ensemblize a module."""
      return nn.vmap(
-@@ -60,6 +66,446 @@ class MLP(nn.Module):
+@@ -60,6 +66,544 @@ class MLP(nn.Module):
          return x
  
  
@@ -3825,6 +3825,95 @@ index 4ee2b26..b539e3e 100644
 +        return outputs
 +
 +
++class UntiedSwiGLUBackbone(nn.Module):
++    """Depth-matched feedforward control for the recurrent SwiGLU backbone.
++
++    This backbone preserves the recurrent model's input/output projections,
++    step embeddings, LayerNorms, LayerScale parameters, and K-by-m sequence of
++    SwiGLU updates.  The only architectural difference is that every outer
++    refinement step owns independent update parameters instead of reusing one
++    shared update block.
++    """
++
++    hidden_dim: int
++    out_dim: int
++    k: int
++    m: int = 1
++    layer_norm: bool = True
++    layerscale_init: float = 1e-2
++
++    @nn.compact
++    def __call__(self, x, num_iters=None, return_aux=False, context=None):
++        del context
++        iters = self.k if num_iters is None else int(num_iters)
++        num_layers = int(self.m)
++        if iters <= 0:
++            raise ValueError(f'K must be positive. Got {iters}.')
++        if num_layers <= 0:
++            raise ValueError(f'm must be positive. Got {num_layers}.')
++        if iters > int(self.k):
++            raise ValueError(f'num_iters={iters} exceeds configured K={int(self.k)} for the untied backbone.')
++
++        h = nn.Dense(self.hidden_dim, name='input_state_proj')(x)
++        initial_h = h
++
++        step_embeddings = self.param(
++            'step_embedding',
++            nn.initializers.normal(stddev=0.02),
++            (int(self.k), self.hidden_dim),
++        )
++        alpha = self.param('alpha', nn.initializers.constant(self.layerscale_init), (int(self.k),))
++        output_proj = nn.Dense(self.out_dim, name='output_proj')
++
++        hidden_steps = [] if return_aux else None
++        hidden_drift_steps = []
++        for step_index in range(iters):
++            h_inner = h
++            step_embedding = step_embeddings[step_index]
++            for layer_index in range(num_layers):
++                step_number = step_index + 1
++                layer_number = layer_index + 1
++                u = h_inner
++                if self.layer_norm:
++                    u = nn.LayerNorm(name=f'step_{step_number}_inner_ln_{layer_number}')(u)
++                u = u + step_embedding
++                a_k = nn.Dense(
++                    self.hidden_dim,
++                    name=f'step_{step_number}_swiglu_fc_a_{layer_number}',
++                )(u)
++                b_k = nn.Dense(
++                    self.hidden_dim,
++                    name=f'step_{step_number}_swiglu_fc_b_{layer_number}',
++                )(u)
++                g_k = jax.nn.silu(a_k) * b_k
++                delta = nn.Dense(
++                    self.hidden_dim,
++                    name=f'step_{step_number}_swiglu_fc_o_{layer_number}',
++                )(g_k)
++                h_inner = h_inner + delta
++
++            h_next = h + alpha[step_index] * (h_inner - h)
++
++            initial_h_norm = jnp.linalg.norm(initial_h, axis=-1)
++            hidden_drift = jnp.linalg.norm(h_next - initial_h, axis=-1) / (initial_h_norm + 1e-8)
++            hidden_drift_steps.append(hidden_drift)
++            h = h_next
++            if hidden_steps is not None:
++                hidden_steps.append(h_next)
++
++        outputs = output_proj(h)
++        if return_aux:
++            hidden_stack = jnp.stack(hidden_steps, axis=0)
++            hidden_drift_steps = jnp.stack(hidden_drift_steps, axis=0)
++            return outputs, {
++                'value_step_outputs': output_proj(hidden_stack),
++                'hidden_drift_steps': hidden_drift_steps,
++                'hidden_drift': hidden_drift_steps[-1],
++                'final_hidden_norm': jnp.linalg.norm(h, axis=-1),
++            }
++        return outputs
++
++
 +class InterpolationRecurrentUnit(nn.Module):
 +    """Interpolation recurrent unit (IRU) used for latent computation."""
 +
@@ -3930,6 +4019,15 @@ index 4ee2b26..b539e3e 100644
 +            layer_norm=layer_norm,
 +            layerscale_init=layerscale_init,
 +        )
++    if backbone == 'untied':
++        return UntiedSwiGLUBackbone, dict(
++            hidden_dim=hidden_dim,
++            out_dim=out_dim,
++            k=int(k),
++            m=int(m),
++            layer_norm=layer_norm,
++            layerscale_init=layerscale_init,
++        )
 +    if backbone == 'iru':
 +        return IRUBackbone, dict(
 +            hidden_dim=hidden_dim,
@@ -3944,7 +4042,7 @@ index 4ee2b26..b539e3e 100644
  class LengthNormalize(nn.Module):
      """Length normalization layer.
  
-@@ -164,9 +610,21 @@ class GCActor(nn.Module):
+@@ -164,9 +708,21 @@ class GCActor(nn.Module):
      const_std: bool = True
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -3967,7 +4065,7 @@ index 4ee2b26..b539e3e 100644
          self.mean_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
          if self.state_dependent_std:
              self.log_std_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
-@@ -230,9 +688,21 @@ class GCDiscreteActor(nn.Module):
+@@ -230,9 +786,21 @@ class GCDiscreteActor(nn.Module):
      action_dim: int
      final_fc_init_scale: float = 1e-2
      gc_encoder: nn.Module = None
@@ -3990,7 +4088,7 @@ index 4ee2b26..b539e3e 100644
          self.logit_net = nn.Dense(self.action_dim, kernel_init=default_init(self.final_fc_init_scale))
  
      def __call__(
-@@ -282,14 +752,22 @@ class GCValue(nn.Module):
+@@ -282,14 +850,22 @@ class GCValue(nn.Module):
      layer_norm: bool = True
      ensemble: bool = True
      gc_encoder: nn.Module = None
@@ -4018,7 +4116,7 @@ index 4ee2b26..b539e3e 100644
  
      def __call__(self, observations, goals=None, actions=None):
          """Return the value/critic function.
-@@ -314,6 +792,49 @@ class GCValue(nn.Module):
+@@ -314,6 +890,49 @@ class GCValue(nn.Module):
          return v
  
  
@@ -4068,11 +4166,11 @@ index 4ee2b26..b539e3e 100644
  class GCDiscreteCritic(GCValue):
      """Goal-conditioned critic for discrete actions."""
  
-@@ -347,16 +868,68 @@ class GCBilinearValue(nn.Module):
+@@ -347,16 +966,68 @@ class GCBilinearValue(nn.Module):
      value_exp: bool = False
      state_encoder: nn.Module = None
      goal_encoder: nn.Module = None
-+    backbone: str = 'mlp'  # 'mlp' | 'bronet' | 'simba' | 'iru' | 'recur'
++    backbone: str = 'mlp'  # 'mlp' | 'bronet' | 'simba' | 'untied' | 'iru' | 'recur'
 +    num_blocks: int = 2
 +    recur_num_iters: int = 4
 +    recur_num_dense_layers: int = 2
@@ -4142,7 +4240,7 @@ index 4ee2b26..b539e3e 100644
          """Return the value/critic function.
  
          Args:
-@@ -364,6 +937,7 @@ class GCBilinearValue(nn.Module):
+@@ -364,6 +1035,7 @@ class GCBilinearValue(nn.Module):
              goals: Goals.
              actions: Actions (optional).
              info: Whether to additionally return the representations phi and psi.
@@ -4150,7 +4248,7 @@ index 4ee2b26..b539e3e 100644
          """
          if self.state_encoder is not None:
              observations = self.state_encoder(observations)
-@@ -375,16 +949,52 @@ class GCBilinearValue(nn.Module):
+@@ -375,16 +1047,52 @@ class GCBilinearValue(nn.Module):
          else:
              phi_inputs = jnp.concatenate([observations, actions], axis=-1)
  
@@ -4205,7 +4303,7 @@ index 4ee2b26..b539e3e 100644
          else:
              return v
  
-@@ -394,9 +1004,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
+@@ -394,9 +1102,9 @@ class GCDiscreteBilinearCritic(GCBilinearValue):
  
      action_dim: int = None
  
@@ -4217,7 +4315,7 @@ index 4ee2b26..b539e3e 100644
  
  
  class GCMRNValue(nn.Module):
-@@ -416,11 +1026,37 @@ class GCMRNValue(nn.Module):
+@@ -416,11 +1124,37 @@ class GCMRNValue(nn.Module):
      latent_dim: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -4257,7 +4355,7 @@ index 4ee2b26..b539e3e 100644
          """Return the MRN value function.
  
          Args:
-@@ -436,8 +1072,12 @@ class GCMRNValue(nn.Module):
+@@ -436,8 +1170,12 @@ class GCMRNValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)
@@ -4272,7 +4370,7 @@ index 4ee2b26..b539e3e 100644
  
          sym_s = phi_s[..., : self.latent_dim // 2]
          sym_g = phi_g[..., : self.latent_dim // 2]
-@@ -471,12 +1111,38 @@ class GCIQEValue(nn.Module):
+@@ -471,12 +1209,38 @@ class GCIQEValue(nn.Module):
      dim_per_component: int
      layer_norm: bool = True
      encoder: nn.Module = None
@@ -4313,7 +4411,7 @@ index 4ee2b26..b539e3e 100644
          """Return the IQE value function.
  
          Args:
-@@ -493,8 +1159,12 @@ class GCIQEValue(nn.Module):
+@@ -493,8 +1257,12 @@ class GCIQEValue(nn.Module):
              if self.encoder is not None:
                  observations = self.encoder(observations)
                  goals = self.encoder(goals)
