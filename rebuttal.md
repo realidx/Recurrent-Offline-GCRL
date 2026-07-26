@@ -115,8 +115,10 @@ Responsible Reviewing Acknowledgement: Yes
 
 ## Rebuttal
 We thank the reviewer for their insightful feedback and constructive comments. We address all the reviewer’s concerns below:
-We added BroNet, Simba, IRU and run local MLP baseline as comparison with our method.
-explain how to fit BroNet, Simba into CRL setup, explain why other possible candidate mentioned does not fit our scenario and are not comparable. (SimbaV2, An Investigation of Model-Free Planning, Interpreting emergent planning in model-free reinforcement learning Value Iteration Networks, )
+We agree that the original submission did not sufficiently compare against modern critic architectures. We now run every architecture in the same local CRL implementation, with identical data, contrastive objective, actor, goal sampling, optimizer, training steps, and evaluation protocol.
+We added BroNet, Simba, IRU-4 and run local MLP baseline as comparison with our method.
+[TODO] explain how to fit BroNet, Simba into CRL setup, explain why other possible candidate mentioned does not fit our scenario and are not comparable. (SimbaV2, An Investigation of Model-Free Planning, Interpreting emergent planning in model-free reinforcement learning, Value Iteration Networks)
+[TODO] especially mention IRU network here, but explain cautiously, clearly state that our 
 | Critic backbone             | AMS | ALS | Scene | Params | Time/update |
 | --------------------------- | --: | --: | ----: | -----: | ----------: |
 | Local MLP                   |     |     |       |        |             |
@@ -125,6 +127,10 @@ explain how to fit BroNet, Simba into CRL setup, explain why other possible cand
 | Untied depth-matched ResNet |     |     |       |        |             |
 | IRU-4                       |     |     |       |        |             |
 | Ours                        |     |     |       |        |             |
+
+[TODO] explain that using baseline is somehow standard in all this kind of paper, like HIQL and SAW paper all take baseline directly from the OGBench paper, but we still rerun MLP baseline locally and provided in the table
+
+
 
 > Is this specific to offline GCRL, or applicable to critic learning generally
 Our empirical claim is currently specific to offline GCRL. The module is architecturally generic and could replace value or critic backbones in single-task or online RL, but we have not tested those settings and therefore do not claim broad generality. Existing work on recurrent computation and scalable critic architectures suggests that computation allocation can matter more broadly, while our contribution isolates this phenomenon in offline GCRL and across three different value-to-policy interfaces. We will narrow statements that currently refer to offline RL in general and identify online and single-task evaluation as future work.
@@ -191,4 +197,4 @@ A compatibility score f(s,a,g) is CRL’s learned scalar indicating whether taki
 
 Stitching means combining useful segments from different offline trajectories to reach a goal even when the dataset does not contain one complete demonstrated trajectory from the initial state to that goal. Stitching is one of the most important ability tested in GCRL algorithm.
 
-> Why enforce the same weights in all blocks?
+> Why enforce the same weights in all blocks? What was the initial motivation for the iterative method?

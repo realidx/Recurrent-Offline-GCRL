@@ -25,6 +25,7 @@
 #    CRITIC_BACKBONE=simba  NUM_BLOCKS=2
 #    CRITIC_BACKBONE=iru    K=4 IRU_NUM_LAYERS=1
 #    CRITIC_BACKBONE=untied K=4 M=1
+#    CRITIC_BACKBONE=recur  K=4 M=1 CRITIC_RECUR_USE_LAYERSCALE=0  # LayerScale ablation
 #
 # 4) MLP critic + 32-layer actor without typing 32 copies of 512:
 #    sbatch --array=0 --export="ALL,SEEDS=0,ENV_NAME=antmaze-large-stitch-v0,RUN_GROUP=P4_AntMaze_MLP_Actor32L,CRITIC_BACKBONE=mlp,ACTOR_NUM_LAYERS=32,ACTOR_LAYER_WIDTH=512,ALPHA=0.1,DISCOUNT=0.99,WANDB_MODE=online" \
@@ -112,6 +113,7 @@ ENCODER="${ENCODER:-}"
 CRITIC_BACKBONE="${CRITIC_BACKBONE:-mlp}"   # mlp | bronet | simba | untied | iru | recur
 NUM_BLOCKS="${NUM_BLOCKS:-2}"                # Residual blocks for BroNet and SimBa.
 LAYERSCALE_INIT="${LAYERSCALE_INIT:-1e-2}"
+CRITIC_RECUR_USE_LAYERSCALE="${CRITIC_RECUR_USE_LAYERSCALE:-1}"  # 0 removes LayerScale; 1 enables it.
 
 # Iterative critic options: K iterations; M SwiGLU layers for recur; one IRU layer by default.
 K="${K:-4}"
@@ -163,6 +165,9 @@ case "${CRITIC_BACKBONE}" in
     BB_TAG="${CRITIC_BACKBONE}"
     ;;
 esac
+if [[ "${CRITIC_BACKBONE}" =~ ^(recur|untied)$ && "${CRITIC_RECUR_USE_LAYERSCALE}" == "0" ]]; then
+  BB_TAG="${BB_TAG}_nols"
+fi
 DEFAULT_EXP_NAME="sd$(printf %03d "${SEED}")_${ENV_TAG}_${BB_TAG}"
 EXP_NAME="${EXP_NAME:-${EXP_PREFIX:-${DEFAULT_EXP_NAME}}}"
 export WANDB_RUN_ID="${WANDB_RUN_ID:-ogbench_${RUN_GROUP}_${EXP_NAME}}"
@@ -179,6 +184,7 @@ AGENT_FLAGS=(
   "--agent.critic_backbone=${CRITIC_BACKBONE}"
   "--agent.critic_num_blocks=${NUM_BLOCKS}"
   "--agent.critic_iru_num_layers=${IRU_NUM_LAYERS}"
+  "--agent.critic_recur_use_layerscale=${CRITIC_RECUR_USE_LAYERSCALE}"
   "--agent.critic_layerscale_init=${LAYERSCALE_INIT}"
   "--agent.layer_norm=${LAYER_NORM}"
   "--agent.latent_dim=${LATENT_DIM}"
@@ -344,6 +350,11 @@ case "${CRITIC_BACKBONE}" in
     ;;
 esac
 
+if [[ ! "${CRITIC_RECUR_USE_LAYERSCALE}" =~ ^(0|1)$ ]]; then
+  echo "Error: CRITIC_RECUR_USE_LAYERSCALE='${CRITIC_RECUR_USE_LAYERSCALE}' is invalid. Use 0 or 1." >&2
+  exit 2
+fi
+
 cd "${IMPL_DIR}"
 
 RUN_DIR="${SAVE_DIR}/OGBench/${RUN_GROUP}/${EXP_NAME}"
@@ -414,7 +425,7 @@ if [[ -n "${RESTORE_EPOCH}" ]]; then
   cmd+=("--restore_epoch=${RESTORE_EPOCH}")
 fi
 
-echo "CRL: env=${ENV_NAME} seed=${SEED} critic_backbone=${CRITIC_BACKBONE} num_blocks=${NUM_BLOCKS} M=${M} K=${K} iru_num_layers=${IRU_NUM_LAYERS} actor_backbone=${ACTOR_BACKBONE} alpha=${ALPHA} discount=${DISCOUNT} run_group=${RUN_GROUP} exp=${EXP_NAME}"
+echo "CRL: env=${ENV_NAME} seed=${SEED} critic_backbone=${CRITIC_BACKBONE} num_blocks=${NUM_BLOCKS} M=${M} K=${K} iru_num_layers=${IRU_NUM_LAYERS} use_layerscale=${CRITIC_RECUR_USE_LAYERSCALE} actor_backbone=${ACTOR_BACKBONE} alpha=${ALPHA} discount=${DISCOUNT} run_group=${RUN_GROUP} exp=${EXP_NAME}"
 echo "${cmd[*]}"
 
 if ! command -v "${CONDA_EXE}" >/dev/null 2>&1; then
