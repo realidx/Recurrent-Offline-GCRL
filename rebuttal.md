@@ -138,20 +138,20 @@ The architectures have different parameter counts and computational costs, so we
 
 > Why were the original baseline numbers taken from prior papers?
 
-The original table used the official OGBench results for CRL and HIQL and the reported SAW results, following the evaluation convention used by several OGBench successor papers. Nevertheless, we agree that locally rerunning the reference is a stronger control because implementation details can matter. The new architecture table therefore includes a locally trained MLP under exactly the same pipeline as every added backbone. We will revise the main-table caption to distinguish clearly between published reference results and the new local controlled comparison.
+Table 1 followed the benchmark convention of using official OGBench/SAW reference results for broad coverage. We agree that architecture comparisons require a same-code anchor, so all newly added backbone comparisons include a locally rerun MLP with matched seeds. We will clearly separate the broad published-reference table from the locally controlled architecture table.
 
 > Ablations on manipulation tasks
 
 We agree that the original diagnostic and ablation evidence was too concentrated on AntMaze. In addition to including Scene in the architecture table above, we are adding the following CRL ablation on `scene-play-v0`:
 
-| CRL critic on Scene                         | Success | Params | Time/update |
-| ------------------------------------------- | ------: | -----: | ----------: |
-| Local MLP                                   |         |        |             |
-| Tied recurrent, \(K=1,m=1\)                |         |        |             |
-| Tied recurrent, \(K=4,m=1\) (full model)   |         |        |             |
-| Tied \(K=4,m=1\), without LayerScale        |         |        |             |
+| CRL critic on Scene                       | Purpose                              | Success | Params | Time/update |
+| ----------------------------------------- | ------------------------------------ | ------: | -----: | ----------: |
+| Local MLP                                 | Local anchor                         |         |        |             |
+| Tied recurrent, \(K=1,m=1\)              | New block without iterative depth    |         |        |             |
+| Untied SwiGLU ResNet, \(K=4,m=1\)        | Sequential depth without sharing     |         |        |             |
+| Tied recurrent, \(K=4,m=1\) (full model) | Iterative refinement with sharing    |         |        |             |
 
-The \(K=1\) row tests whether the modern SwiGLU update block alone is sufficient; and the no-LayerScale row tests whether the stabilization mechanism matters on manipulation. We will interpret these results together rather than infer a general manipulation benefit from a single row.
+Together, these rows test manipulation-domain transfer, the effect of iterative depth beyond the \(K=1\) block, and the contribution of weight sharing at \(K=4\).
 
 > Is this specific to offline GCRL, or applicable to critic learning generally?
 
@@ -204,15 +204,9 @@ We thank the reviewer for the constructive feedback and positive assessment. We 
 
 > Why not compare against the other recent methods?
 
-The cited works make important but different changes to the learning or inference pipeline. Our main experiment is designed to isolate an architecture question: we replace only the value/critic backbone while holding the offline GCRL algorithm, data, actor, losses, goal sampling, optimizer, and evaluation protocol fixed.
+The cited works make important but different changes to the learning or inference pipeline. Our main experiment isolates an architecture question: we replace only the value/critic backbone while holding the offline GCRL algorithm, data, actor, losses, goal sampling, optimizer, and evaluation protocol fixed.
 
-Test-Time Graph Search (TTGS; Opryshko et al., 2025) addresses the same offline GCRL setting, but adds a graph-search planner around a frozen policy at inference time. It constructs a graph over dataset states and executes a searched sequence of subgoals. Thus, its improved results measure the benefit of an additional test-time planning procedure, rather than a critic-backbone replacement. TTGS is complementary to our method and could in principle use either an MLP or iterative value function as its signal.
-
-Negative Energy as Reward (NEaR; García et al., 2026) learns a trajectory energy model from demonstrations and performs constrained energy minimization at inference, without temporal-difference value learning. Our study evaluates drop-in value/critic replacements inside existing offline GCRL algorithms.
-
-MeanFlowQL (Wang et al., 2026) and Flow Latent Policy (Xia and Sun, 2026) primarily study expressive policy classes and behavior regularization in reward-labeled offline RL. Their OGBench experiments use the `singletask` protocol, in which a separate policy is trained for each predefined reward-labeled task. This differs from the offline GCRL protocol in our paper, where one goal-conditioned policy is learned from goal-agnostic data and evaluated on multiple goals. Their reported scores therefore should not be inserted directly into our GCRL table.
-
-We will add these works to the related-work discussion and clarify that Table 1 is a controlled recurrent-versus-feedforward comparison within offline GCRL, rather than a leaderboard over all methods that use OGBench environments. To strengthen this controlled comparison, we are also locally rerunning the CRL MLP and architecture baselines under the same pipeline.
+TTGS adds graph search at test time; NEaR performs trajectory-level energy optimization; MeanFlowQL and Flow Latent Policy change the policy class and behavior regularization. These methods are relevant to absolute OGBench performance but do not isolate critic-backbone architecture under an otherwise fixed GCRL algorithm. We will cite them as complementary methods and clarify that Table 1 is not a global OGBench leaderboard. To strengthen the architecture claim, we are also locally rerunning the CRL MLP and architecture baselines under the same pipeline.
 
 > Please explain the background and terminology. Is CRL the same as GCRL? What is GCIVL?
 
@@ -232,7 +226,7 @@ Trajectory stitching means combining useful segments from different offline traj
 | Untied SwiGLU ResNet (\(K=4,m=1\))   |     |     |       |        |             |
 | Ours (\(K=4,m=1\), tied)             |     |     |       |        |             |
 
-Our initial motivation comes from the representational burden placed on an offline goal-conditioned critic. From fixed, goal-agnostic trajectories, it must learn a reachability or compatibility signal spanning long horizons and disconnected trajectory fragments, and that signal must then support behavior-constrained policy extraction. [TODO] (cite value learning be a bottleneck paper) Prior work and our matched feedforward controls indicate that simply adding feedforward capacity or depth does not reliably solve this problem. [TODO] (cite and introduce the result of 1000-layer paper)
+Our initial motivation comes from the representational burden placed on an offline goal-conditioned critic. From fixed, goal-agnostic trajectories, it must learn a reachability or compatibility signal spanning long horizons and disconnected trajectory fragments, and that signal must then support behavior-constrained policy extraction. Prior offline CRL results found that conventional feedforward depth scaling did not reliably improve OGBench performance.
 
 We therefore considered a different allocation of computation. Starting from a projected latent \(h^{(0)}\), the architecture repeatedly applies a learned correction:
 
@@ -242,6 +236,6 @@ h^{(k+1)} = h^{(k)} + \alpha_k \Delta_\theta(h^{(k)}, x, e_k),
 
 where \(\Delta_\theta\) is shared across refinement steps, \(e_k\) is a learned step embedding, and \(\alpha_k\) is a LayerScale parameter. This allows the representation to be revised several times before producing the final critic output. We interpret this as learned latent refinement.
 
-Weight sharing serves two purposes. First, it separates recurrent depth from parameter growth: increasing \(K\) applies more computation without introducing an independent transformation at every step. Second, it imposes a reusable-correction inductive bias, while the evolving latent and step embedding still allow different behavior at different steps. Our \(K=1\) comparison tests whether the modern update block alone is sufficient, while the new untied \(K=4,m=1\) control preserves the input/output projections, step embeddings, LayerNorm, LayerScale, and update topology but gives every step independent weights. We are evaluating these controls on AntMaze stitching and Scene manipulation tasks and will report parameter counts and time per update.
+We do not assume that weight sharing is universally better. We chose it because it allows \(K\) to increase sequential computation without adding an independent transformation at every step, and because it represents refinement as repeated application of a learned correction operator. Whether tying itself helps is an empirical question: our \(K=1\) comparison tests whether the modern update block alone is sufficient, while the new untied \(K=4,m=1\) control preserves the input/output projections, step embeddings, LayerNorm, LayerScale, and update topology but gives every step independent weights. This control tests whether the gain comes from tying or simply from sequential depth. We are evaluating these controls on AntMaze stitching and Scene manipulation tasks and will report parameter counts and time per update.
 
 **We appreciate the reviewer's acknowledgement of our contributions. We hope that our answers address all the reviewer's concerns, and we are happy to continue the discussion for any future concerns.**
