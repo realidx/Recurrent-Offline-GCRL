@@ -70,6 +70,28 @@ Code Of Conduct Acknowledgement: Yes
 Responsible Reviewing Acknowledgement: Yes
 
 ## Rebuttal
+> Selection protocol.
+
+The reported rows were not selected based on the observed performance of the recurrent model, and no completed MLP-versus-recurrent evaluation row was excluded from Table 1. We chose the task set to cover the major capabilities represented in OGBench, including standard navigation, trajectory stitching, higher-dimensional humanoid navigation, and manipulation through Cube and Scene. CRL is our primary experimental and diagnostic setting, so we evaluated it on the broadest task set. For HIQL, we used a smaller subset overlapping with CRL to enable cross-algorithm comparison while covering navigation, stitching, Cube, and Scene. For SAW, we followed representative state-based settings in which the original SAW study reported competitive performance, thereby avoiding evaluation against a weak or insufficiently tuned baseline. The smaller HIQL/SAW subsets reflect rebuttal-time and compute constraints rather than filtering based on our method’s outcomes. We agree that this subset is not a statistical sample of the entire OGBench suite and will clarify that the reported average should be interpreted only over the evaluated rows.
+
+> Can the authors provide the same CRL-style diagnostics for HIQL and SAW?
+CRL learns a contrastive state-action-goal score, allowing us to measure matched-versus-mismatched goal separation and compare critic preferences for actor versus dataset actions. HIQL and SAW instead use scalar values indirectly through hierarchical AWR-style and subgoal-weighted actor updates, respectively, so CRL’s score-separation quantities do not have the same interpretation. We therefore selected CRL as the main diagnostic case because it provides the cleanest observable critic-to-actor interface. We agree, however, that the current diagnostics establish the mechanism only for CRL rather than for all three algorithms, and we will make this scope explicit.
+
+> What is the evidence for a single shared mechanism?
+
+We do not claim that CRL, HIQL, and SAW benefit through one identical low-level mechanism, nor that a universal m should work across algorithms. Our shared hypothesis is architectural: repeatedly refining the latent critic/value representation can improve the actor-facing signal while keeping the surrounding algorithm fixed. How that signal is trained and consumed differs substantially across the methods. CRL exposes a contrastive score directly to its actor, whereas HIQL and SAW transform scalar values into hierarchical or subgoal-weighted actor updates. The opposite response to increasing m is therefore evidence of an algorithm–architecture interaction, not evidence that recurrence itself lacks value. We will revise the paper to distinguish the shared architectural effect from algorithm-specific mechanisms.
+
+> Can the authors report paired or matched-seed significance tests for marginal rows?
+
+
+> Do matched-parameter and matched-wall-clock feedforward controls still fail outside CRL AntMaze, for example on HIQL, SAW, Cube, or Scene?
+
+| Model               | Value params | Time/update | Final success | Same-wall-clock success |
+| ------------------- | -----------: | ----------: | ------------: | ----------------------: |
+| Original MLP        |              |             |               |                         |
+| Wider MLP           |              |             |               |                         |
+| Deeper MLP          |              |             |               |                         |
+| Recurrent (K=4,m=2) |              |             |               |                         |
 
 
 
@@ -116,15 +138,19 @@ Code Of Conduct Acknowledgement: Yes
 Responsible Reviewing Acknowledgement: Yes
 
 ## Rebuttal
-We thank the reviewer for the constructive feedback and for highlighting the importance of critic architecture. We agree both that the original submission did not compare against enough modern critic backbones. We are therefore adding a controlled CRL architecture comparison in which every row uses the same local implementation, dataset, contrastive objective, actor, goal sampling, optimizer, number of updates, and evaluation protocol. We want to clarify again that our method is simple and can be apply directly to many of existing algorithm, because we simply replace the critic/value backbone with a iterative one. Our method can be complement to many of others.
+We thank the reviewer for the constructive feedback and for highlighting the importance of critic architecture. We will address all reviewer's concern below:
 
-> Comparison with BroNet and SimBaV2
+> comparison with other recent architecture that aims to improve value/critic learning
 
-For BroNet, we transplant the normalized residual critic backbone into both \(\phi\) and \(\psi\). We intentionally do not add the other components of the full BRO algorithm—such as parameter resets, distributional critics, weight decay, increased replay ratio, or optimistic exploration because these would change the optimization or online-exploration procedure rather than only the critic architecture.
+We add experiments to compare several mentioned recent architecture, which we will discuss as follow.
 
-For SimBa, we use its pre-LayerNorm residual feedforward blocks in both CRL representation networks while leaving CRL’s inputs and optimizer unchanged. We label this row “SimBa backbone.” We do not present it as a full SimBaV2 implementation. Full SimBaV2 combines hyperspherical weight and feature normalization with distributional value prediction and reward scaling. Applying the full SimBaV2 output and value-learning design would therefore change score geometry and objective, rather than constitute only a backbone replacement. We use SimBa as the clean residual architecture control and will state this distinction and limitation explicitly.
+For BroNet [CITE], we intentionally do not add the other components of the full BRO algorithm such as parameter resets, distributional critics, increased replay ratio, or optimistic exploration because these would change the optimization or online exploration procedure rather than only the architecture.
 
-We additionally include IRU-4 from the recent work on computation in RL. IRU is the closest alternative recurrent architecture: it repeatedly applies a shared interpolation recurrent unit. Our adaptation preserves its recurrent normalization, forget-gate initialization, zero initial state, interpolation update, residual connection, and four shared computation steps. [TODO] (need to discuss On the Role of Computation in a deeper way)
+Full SimBaV2 [CITE] combines hyperspherical weight and feature normalization with distributional value prediction and reward scaling, and it is initally designed for SAC. Applying the full SimBaV2 output and value-learning design would therefore change score geometry and objective, rather than constitute only a backbone replacement. We use SimBa [CITE] as the clean residual architecture control and will state this distinction and limitation explicitly.
+
+We thank the AC that mentioning more relevent previous work and we will discuss them in the following. We agree that these papers are important conceptual precedents, but some of them are not directly runnable as controlled baselines in our setting. VIN [CITE] requires an explicit differentiable planning module defined over a structured state space, applying it to continuous vector observations would require designing a discretization or latent planning space and would therefore change the model and planning assumptions. The DRC agent [CITE] is a recurrent ConvLSTM architecture designed around complete spatial observations in Sokoban. Converting it for vector-based continuous control would require replacing its convolutional spatial computation and deciding how to inject state, action, and goal inputs; the resulting method would be a new adaptation rather than a faithful DRC comparison. We will cite these works as conceptual predecessors, but we do not report them as empirical baselines.
+
+In contrast, the IRU [CITE] is a generic vector-network component used for both policies and value functions, including in offline OGBench experiments, so it can replace our critic backbone without introducing an explicit planner or a new state representation. They separate computation from parameter count through a shared recurrent block that can be applied for a variable number of steps. We therefore include IRU-4 to match the four recurrent steps in our full model. Our adaptation preserves its input normalization, zero initial state, forget-gated interpolation, residual connection, and shared recurrent parameters. Unlike IRU, our backbone does not re-inject the input or use an interpolation gate at every step.
 
 | Critic backbone                          | AMS | ALS | Scene | Params | Time/update |
 | ---------------------------------------- | --: | --: | ----: | -----: | ----------: |
@@ -134,15 +160,13 @@ We additionally include IRU-4 from the recent work on computation in RL. IRU is 
 | IRU-4                                    |     |     |       |        |             |
 | Ours (\(K=4,m=1\), tied)                 |     |     |       |        |             |
 
-The architectures have different parameter counts and computational costs, so we report both rather than implying an exact capacity match. Several alternatives have more parameters than our tied model; if the smaller tied model performs better, this is a conservative comparison with respect to parameter count.
-
 > Why were the original baseline numbers taken from prior papers?
 
-Table 1 followed the benchmark convention of using official OGBench/SAW reference results for broad coverage. We agree that architecture comparisons require a same-code anchor, so all newly added backbone comparisons include a locally rerun MLP with matched seeds. We will clearly separate the broad published-reference table from the locally controlled architecture table.
+Table 1 followed the benchmark convention of using official OGBench/SAW reference results for broad coverage, as previous work done the same. We agree that architecture comparisons require a same-code anchor, so all newly added backbone comparisons include a locally rerun MLP with matched seeds. We will clearly separate the broad published reference table from the locally controlled architecture table, and we can rerun all baseline locally if reviewer insist on this.
 
 > Ablations on manipulation tasks
 
-We agree that the original diagnostic and ablation evidence was too concentrated on AntMaze. In addition to including Scene in the architecture table above, we are adding the following CRL ablation on `scene-play-v0`:
+We are adding the following CRL ablation on `scene-play-v0`:
 
 | CRL critic on Scene                       | Purpose                              | Success | Params | Time/update |
 | ----------------------------------------- | ------------------------------------ | ------: | -----: | ----------: |
@@ -155,7 +179,7 @@ Together, these rows test manipulation-domain transfer, the effect of iterative 
 
 > Is this specific to offline GCRL, or applicable to critic learning generally?
 
-Our empirical claim is currently specific to offline GCRL. The module is architecturally generic and could replace value or critic backbones in single-task or online RL, but we have not tested those settings and therefore do not claim broad generality.
+Our empirical claim is currently specific to offline GCRL. The module is architecturally generic and could replace value or critic backbones in single-task or online RL, but we have not fully tested those settings and therefore do not claim broad generality.
 
 **We appreciate the reviewer's acknowledgement of our contributions. We hope that our answers address all the reviewer's concerns, and we are happy to continue the discussion for any future concerns.**
 
@@ -200,42 +224,41 @@ Code Of Conduct Acknowledgement: Yes
 Responsible Reviewing Acknowledgement: Yes
 
 ## Rebuttal
-We thank the reviewer for the constructive feedback and positive assessment. We agree that the relationship to recent OGBench results and several background concepts were not explained clearly enough. We will clarify the scope of our comparisons, define the terminology at first use, and strengthen the motivation and controls for the iterative architecture.
+We thank the reviewer for the constructive feedback and positive assessment. Below, we will clarify the scope of our comparisons, define the terminology at first use, and strengthen the motivation and controls for the iterative architecture.
 
-> Why not compare against the other recent methods?
+> target at doing is hard to understand. Is CRL the same as GCRL? What is GCIVL?
 
-The cited works make important but different changes to the learning or inference pipeline. Our main experiment isolates an architecture question: we replace only the value/critic backbone while holding the offline GCRL algorithm, data, actor, losses, goal sampling, optimizer, and evaluation protocol fixed.
+Our target is the value/critic representation used in offline GCRL: we ask whether replacing a conventional feedforward backbone with iterative refinement improves the learning of goal-reaching signals from fixed data, without changing the underlying algorithm, actor, or training objective. We will make this architectural scope explicit and define the following terms at first use.
 
-TTGS adds graph search at test time; NEaR performs trajectory-level energy optimization; MeanFlowQL and Flow Latent Policy change the policy class and behavior regularization. These methods are relevant to absolute OGBench performance but do not isolate critic-backbone architecture under an otherwise fixed GCRL algorithm. We will cite them as complementary methods and clarify that Table 1 is not a global OGBench leaderboard. To strengthen the architecture claim, we are also locally rerunning the CRL MLP and architecture baselines under the same pipeline.
-
-> Please explain the background and terminology. Is CRL the same as GCRL? What is GCIVL?
-
-We apologize that these distinctions were not introduced clearly enough. We will define these terms, as well as “compatibility score” and “trajectory stitching,” at first use and add an intuitive overview before the formal objectives.
-
-Goal-conditioned reinforcement learning (GCRL) is the problem setting: it learns a policy conditioned on a desired goal. Contrastive RL (CRL) is one particular algorithm for this setting. CRL learns a contrastive state-action-goal compatibility score and trains its policy to select actions with high compatibility. Our method replaces the network producing this learned signal with an iterative-refinement backbone; it does not change CRL’s objective, actor, or data. A compatibility score \(f(s,a,g)\) is CRL’s learned scalar indicating how compatible taking action \(a\) at state \(s\) is with subsequently reaching goal \(g\). It is learned contrastively and is not necessarily a calibrated Q-value.
+Goal-conditioned reinforcement learning (GCRL) is the problem setting: it learns a policy conditioned on a desired goal. Contrastive RL (CRL) is one particular algorithm for this setting. CRL learns a contrastive state-action-goal compatibility score and trains its policy to select actions with high compatibility. Our method replaces the network producing this learned signal with an iterative-refinement backbone; it does not change CRL’s objective, actor, or data. A compatibility score \(f(s,a,g)\) is CRL’s learned scalar indicating how compatible taking action \(a\) at state \(s\) is with subsequently reaching goal \(g\).
 
 GCIVL denotes goal-conditioned implicit value learning. It is an offline GCRL method that learns an action-free goal-conditioned value function and uses value-derived advantages for policy extraction. In our paper, it appears in the background and provides the value-learning foundation used by related methods such as SAW.
 
 Trajectory stitching means combining useful segments from different offline trajectories to reach a goal even when the dataset contains no complete demonstrated trajectory from the initial state to that goal. OGBench includes dedicated stitching datasets to test this ability.
+
+> not comparing against results of better numbers from mentioned successor papers.
+
+The cited works make important but different changes to the learning or inference pipeline. Our main experiment isolates an architecture question: we replace only the value/critic backbone while holding the offline GCRL algorithm, data, actor, losses, goal sampling, optimizer, and evaluation protocol fixed.
+
+TTGS [CITE] adds graph search at test time; NEaR [CITE] performs trajectory-level energy optimization; MeanFlowQL [CITE] and Flow [CITE] Latent Policy change the policy class and behavior regularization. These methods are relevant to absolute OGBench performance but do not isolate critic-backbone architecture under an otherwise fixed GCRL algorithm. That is, our designed backbone replacement can be easily applied to several different GCRL algorithm, and can work as complementary with some of the works mentioned above. For example, we can combine TTGS and ours to facilitate test time search and training time performance.
+
 
 > Why enforce the same weights in all blocks? What was the initial motivation for the iterative method?
 
 | Critic backbone                      | AMS | ALS | Scene | Params | Time/update |
 | ------------------------------------ | --: | --: | ----: | -----: | ----------: |
 | Local MLP                            |     |     |       |        |             |
-| Untied SwiGLU ResNet (\(K=4,m=1\))   |     |     |       |        |             |
+| Untied SwiGLU (4 blocks)             |     |     |       |        |             |
 | Ours (\(K=4,m=1\), tied)             |     |     |       |        |             |
 
-Our initial motivation comes from the representational burden placed on an offline goal-conditioned critic. From fixed, goal-agnostic trajectories, it must learn a reachability or compatibility signal spanning long horizons and disconnected trajectory fragments, and that signal must then support behavior-constrained policy extraction. Prior offline CRL results found that conventional feedforward depth scaling did not reliably improve OGBench performance.
+Our initial motivation comes from the representational burden placed on an offline GCRL value learning. From fixed, goal-agnostic trajectories, it must learn a reachability or compatibility signal spanning long horizons and disconnected trajectory fragments, and that signal must then support policy extraction. Prior offline CRL results found that conventional feedforward depth scaling did not reliably improve performance. [CITE]
 
 We therefore considered a different allocation of computation. Starting from a projected latent \(h^{(0)}\), the architecture repeatedly applies a learned correction:
-
 \[
 h^{(k+1)} = h^{(k)} + \alpha_k \Delta_\theta(h^{(k)}, x, e_k),
 \]
-
 where \(\Delta_\theta\) is shared across refinement steps, \(e_k\) is a learned step embedding, and \(\alpha_k\) is a LayerScale parameter. This allows the representation to be revised several times before producing the final critic output. We interpret this as learned latent refinement.
 
-We do not assume that weight sharing is universally better. We chose it because it allows \(K\) to increase sequential computation without adding an independent transformation at every step, and because it represents refinement as repeated application of a learned correction operator. Whether tying itself helps is an empirical question: our \(K=1\) comparison tests whether the modern update block alone is sufficient, while the new untied \(K=4,m=1\) control preserves the input/output projections, step embeddings, LayerNorm, LayerScale, and update topology but gives every step independent weights. This control tests whether the gain comes from tying or simply from sequential depth. We are evaluating these controls on AntMaze stitching and Scene manipulation tasks and will report parameter counts and time per update.
+We do not assume that weight sharing is universally better. We chose it because it allows \(K\) to increase sequential computation without adding an independent transformation at every step, and because it represents refinement as repeated application of a learned correction operator. Whether tying itself helps is an empirical question: our \(K=1\) comparison tests whether the modern update block alone is sufficient, while the new untied SwiGLU control preserves the input/output projections, step embeddings, LayerNorm, LayerScale but gives every step independent weights. This control tests whether the gain comes from tying or simply from sequential depth. We are evaluating these controls on AntMaze stitching and Scene manipulation tasks and will report parameter counts and time per update.
 
 **We appreciate the reviewer's acknowledgement of our contributions. We hope that our answers address all the reviewer's concerns, and we are happy to continue the discussion for any future concerns.**
