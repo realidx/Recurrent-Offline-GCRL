@@ -88,11 +88,12 @@ We do not claim that CRL, HIQL, and SAW benefit through one identical low-level 
 
 | Model               | Value params | Time/update | Final success | Same-wall-clock success |
 | ------------------- | -----------: | ----------: | ------------: | ----------------------: |
-| Original MLP        |              |             |               |                         |
-| Wider MLP           |              |             |               |                         |
-| Deeper MLP          |              |             |               |                         |
-| Recurrent (K=4,m=2) |              |             |               |                         |
+| Original MLP        |       1.110M | \(1.649\) ms | \(44.1\pm2.7\) |                       — |
+| Wider MLP           |       3.210M | \(3.210\) ms | \(40.8\pm4.9\) |                       — |
+| Deeper MLP          |       3.219M | \(3.162\) ms | \(29.2\pm5.2\) |                       — |
+| Ours |      Pending |     Pending | **\(58.8\pm6.9\)** |                 Pending |
 
+Final success reports mean \(\pm\) standard deviation over three seeds on Scene. The recurrent parameter count, timing, and same-wall-clock evaluations are still pending.
 
 
 # Official Review of Submission13890 by Reviewer wpus
@@ -148,17 +149,19 @@ For BroNet [CITE], we intentionally do not add the other components of the full 
 
 Full SimBaV2 [CITE] combines hyperspherical weight and feature normalization with distributional value prediction and reward scaling, and it is initally designed for SAC. Applying the full SimBaV2 output and value-learning design would therefore change score geometry and objective, rather than constitute only a backbone replacement. We use SimBa [CITE] as the clean residual architecture control and will state this distinction and limitation explicitly.
 
-We thank the AC that mentioning more relevent previous work and we will discuss them in the following. We agree that these papers are important conceptual precedents, but some of them are not directly runnable as controlled baselines in our setting. VIN [CITE] requires an explicit differentiable planning module defined over a structured state space, applying it to continuous vector observations would require designing a discretization or latent planning space and would therefore change the model and planning assumptions. The DRC agent [CITE] is a recurrent ConvLSTM architecture designed around complete spatial observations in Sokoban. Converting it for vector-based continuous control would require replacing its convolutional spatial computation and deciding how to inject state, action, and goal inputs; the resulting method would be a new adaptation rather than a faithful DRC comparison. We will cite these works as conceptual predecessors, but we do not report them as empirical baselines.
+We thank the AC that mentioning more relevent previous work and we will discuss them in the following. We agree that these papers are important conceptual precedents, but some of them are not directly runnable as controlled baselines in our setting. VIN [CITE] requires an explicit differentiable planning module defined over a structured state space, applying it to continuous vector observations would require designing a discretization planning space and would therefore change the model and planning assumptions. The DRC agent [CITE] is a recurrent ConvLSTM architecture designed around complete spatial observations in Sokoban. Converting it for vector-based continuous control would require replacing its convolutional spatial computation and deciding how to inject state, action, and goal inputs. The resulting method would be a new adaptation rather than a faithful DRC comparison. We will cite these works as conceptual predecessors, but we do not report them as empirical baselines.
 
 In contrast, the IRU [CITE] is a generic vector-network component used for both policies and value functions, including in offline OGBench experiments, so it can replace our critic backbone without introducing an explicit planner or a new state representation. They separate computation from parameter count through a shared recurrent block that can be applied for a variable number of steps. We therefore include IRU-4 to match the four recurrent steps in our full model. Our adaptation preserves its input normalization, zero initial state, forget-gated interpolation, residual connection, and shared recurrent parameters. Unlike IRU, our backbone does not re-inject the input or use an interpolation gate at every step.
 
-| Critic backbone                          | AMS | ALS | Scene | Params | Time/update |
-| ---------------------------------------- | --: | --: | ----: | -----: | ----------: |
-| Local MLP                                |     |     |       |        |             |
-| BroNet backbone                          |     |     |       |        |             |
-| SimBa backbone                           |     |     |       |        |             |
-| IRU-4                                    |     |     |       |        |             |
-| Ours (\(K=4,m=1\), tied)                 |     |     |       |        |             |
+| Critic backbone          |          AMS |          ALS |        Scene | Params (M) | Time/update (ms) |
+| ------------------------ | -----------: | -----------: | -----------: | ---------: | ---------------: |
+| Local MLP                | \(49.3\pm7.3\) | \(15.6\pm2.8\) | \(21.5\pm3.0\) | 3.234/3.234/3.253 | 1.181/1.184/1.189 |
+| BroNet backbone          | \(50.0\pm8.8\) | \(24.5\pm7.2\) | \(15.7\pm1.8\) | 5.343/5.343/5.363 | 2.655/1.996/2.367 |
+| SimBa backbone           | \(26.4\pm11.8\) | \(16.9\pm15.9\) | \(13.7\pm3.5\) | 17.930/17.930/17.950 | 2.911/4.170/2.879 |
+| IRU-4                    | \(42.3\pm31.6\) | \(23.9\pm6.8\) | \(10.8\pm8.7\) | 5.331/5.331/5.350 | 6.125/4.205/5.444 |
+| Ours  | **\(95.8\pm0.5\)** | **\(52.9\pm9.9\)** | **\(31.5\pm3.0\)** | Pending | Pending |
+
+Scores are success percentages reported as mean \(\pm\) standard deviation over three seeds; bold marks the best mean in each environment. Parameter and time entries are ordered as AMS/ALS/Scene, and time/update is averaged over the three measurements for each environment. Parameter and timing measurements for our tied model are pending.
 
 > Why were the original baseline numbers taken from prior papers?
 
@@ -166,16 +169,16 @@ Table 1 followed the benchmark convention of using official OGBench/SAW referenc
 
 > Ablations on manipulation tasks
 
-We are adding the following CRL ablation on `scene-play-v0`:
+We are adding the following CRL ablation on *scene-play-v0*:
 
-| CRL critic on Scene                       | Purpose                              | Success | Params | Time/update |
-| ----------------------------------------- | ------------------------------------ | ------: | -----: | ----------: |
-| Local MLP                                 | Local anchor                         |         |        |             |
-| Tied recurrent, \(K=1,m=1\)              | New block without iterative depth    |         |        |             |
-| Untied SwiGLU ResNet, \(K=4,m=1\)        | Sequential depth without sharing     |         |        |             |
-| Tied recurrent, \(K=4,m=1\) (full model) | Iterative refinement with sharing    |         |        |             |
+| CRL critic on Scene                       | Success | Params | Time/update |
+| ----------------------------------------- | ------: | -----: | ----------: |
+| Local MLP                                 | \(21.5\pm3.0\) | 3.253M | \(1.189\) ms |
+| Tied , \(K=1,m=1\)              | \(25.1\pm0.6\) | 4.298M | \(1.271\) ms |
+| Untied , \(K=4,m=1\)               | \(20.1\pm3.2\) | 13.772M | Pending |
+| Ours | **\(31.5\pm3.0\)** | Pending | Pending |
 
-Together, these rows test manipulation-domain transfer, the effect of iterative depth beyond the \(K=1\) block, and the contribution of weight sharing at \(K=4\).
+Success reports mean \(\pm\) standard deviation over three seeds. The higher mean of the tied \(K=4\) model relative to the \(K=1\) block and the untied depth-matched control is consistent with a benefit from iterative depth with weight sharing on Scene. Timing and the tied-model parameter count are pending.
 
 > Is this specific to offline GCRL, or applicable to critic learning generally?
 
@@ -245,13 +248,15 @@ TTGS [CITE] adds graph search at test time; NEaR [CITE] performs trajectory-leve
 
 > Why enforce the same weights in all blocks? What was the initial motivation for the iterative method?
 
-| Critic backbone                      | AMS | ALS | Scene | Params | Time/update |
-| ------------------------------------ | --: | --: | ----: | -----: | ----------: |
-| Local MLP                            |     |     |       |        |             |
-| Untied SwiGLU (4 blocks)             |     |     |       |        |             |
-| Ours (\(K=4,m=1\), tied)             |     |     |       |        |             |
+| Critic backbone          |          AMS |          ALS |        Scene | Params (M; AMS/ALS/Scene) | Time/update (ms; AMS/ALS/Scene) |
+| ------------------------ | -----------: | -----------: | -----------: | -----------------------: | -----------------------------: |
+| Local MLP  | \(49.3\pm7.3\) | \(15.6\pm2.8\) | \(21.5\pm3.0\) | 3.234/3.234/3.253 | 1.181/1.184/1.189 |
+| Untied (4 blocks) | \(82.0\pm9.2\) | \(37.6\pm5.0\) | \(20.1\pm3.2\) | 13.752/13.752/13.772 | Pending |
+| Ours  | **\(95.8\pm0.5\)** | **\(52.9\pm9.9\)** | **\(31.5\pm3.0\)** | Pending | Pending |
 
-Our initial motivation comes from the representational burden placed on an offline GCRL value learning. From fixed, goal-agnostic trajectories, it must learn a reachability or compatibility signal spanning long horizons and disconnected trajectory fragments, and that signal must then support policy extraction. Prior offline CRL results found that conventional feedforward depth scaling did not reliably improve performance. [CITE]
+Scores are success percentages reported as mean \(\pm\) standard deviation over three seeds. Across AMS, ALS, and Scene, the tied model has a higher mean than both the local MLP and the untied depth-matched control. Timing for the untied model and parameter and timing measurements for the tied model are pending.
+
+Our initial motivation comes from the representational burden placed on an offline GCRL value learning. From fixed, goal-agnostic trajectories, it must learn a reachability signal spanning long horizons and disconnected trajectory fragments, and that signal must then support policy extraction. Prior offline CRL results found that conventional feedforward depth scaling did not reliably improve performance. [CITE]
 
 We therefore considered a different allocation of computation. Starting from a projected latent \(h^{(0)}\), the architecture repeatedly applies a learned correction:
 \[
@@ -259,6 +264,6 @@ h^{(k+1)} = h^{(k)} + \alpha_k \Delta_\theta(h^{(k)}, x, e_k),
 \]
 where \(\Delta_\theta\) is shared across refinement steps, \(e_k\) is a learned step embedding, and \(\alpha_k\) is a LayerScale parameter. This allows the representation to be revised several times before producing the final critic output. We interpret this as learned latent refinement.
 
-We do not assume that weight sharing is universally better. We chose it because it allows \(K\) to increase sequential computation without adding an independent transformation at every step, and because it represents refinement as repeated application of a learned correction operator. Whether tying itself helps is an empirical question: our \(K=1\) comparison tests whether the modern update block alone is sufficient, while the new untied SwiGLU control preserves the input/output projections, step embeddings, LayerNorm, LayerScale but gives every step independent weights. This control tests whether the gain comes from tying or simply from sequential depth. We are evaluating these controls on AntMaze stitching and Scene manipulation tasks and will report parameter counts and time per update.
+We do not assume that weight sharing is universally better. We chose it because it allows \(K\) to increase sequential computation without adding an independent transformation at every step, and because it represents refinement as repeated application of a learned correction operator. Whether tying itself helps is an empirical question: our \(K=1\) comparison tests whether the modern update block alone is sufficient, while the new untied SwiGLU control preserves the input/output projections, step embeddings, LayerNorm, LayerScale but gives every step independent weights. This control tests whether the gain comes from iterative structure. We are evaluating these controls on AntMaze and Scene manipulation tasks and will report parameter counts and time per update.
 
 **We appreciate the reviewer's acknowledgement of our contributions. We hope that our answers address all the reviewer's concerns, and we are happy to continue the discussion for any future concerns.**
